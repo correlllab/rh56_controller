@@ -1,0 +1,11 @@
+# Request
+int32[6] target_forces
+int32[6] target_angles
+int32 step_size
+int32 max_iterations
+---
+# Response
+bool success
+int32[6] final_forces
+int32[6] final_angles
+
