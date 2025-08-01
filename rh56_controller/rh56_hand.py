@@ -20,6 +20,8 @@ _ADDR_SPEED_SET = 0x05F2           # 1522
 
 _ADDR_ANGLE_ACT = 0x060A           # 1546
 _ADDR_FORCE_ACT = 0x062E           # 1582
+_ADDR_CURRENT = 0x063A             # 1594
+_ADDR_TEMP = 0x0652                # 1618
 
 
 class RH56Hand:
