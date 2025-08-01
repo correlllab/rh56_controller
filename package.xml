@@ -4,7 +4,7 @@
   <name>rh56_controller</name>
   <version>0.1.0</version>
   <description>ROS 2 driver for the Inspire RH56DFX hand, with advanced force control.</description>
-  <maintainer email="wxie@todo.todo">wxie</maintainer>
+  <maintainer email="wixi6454@colorado.edu">William Xie</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
