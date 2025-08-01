@@ -15,7 +15,10 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>trajectory_msgs</depend>
-  <depend>unitree_msgs</depend>
+
+  <depend>robot_state_publisher</depend>
+  <depend>custom_ros_messages</depend>
+
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

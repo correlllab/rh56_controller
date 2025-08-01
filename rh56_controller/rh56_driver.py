@@ -9,9 +9,10 @@ from std_srvs.srv import Trigger
 # To integrate with the Unitree ecosystem, we assume the existence of a
 # 'unitree_msgs' package with the following message types. If your message
 # package is named differently, you may need to adjust this import.
-from unitree_msgs.msg import MotorCmd, MotorCmds, MotorState, MotorStates
+from custom_ros_messages.msg import MotorCmd, MotorCmds, MotorState, MotorStates
+from custom_ros_messages.action import MotorCmd, MotorCmds
+from custom_ros_messages.srv import AdaptiveForce
 
-from rh56_controller.srv import AdaptiveForce
 from .rh56_hand import RH56Hand
 
 import threading
