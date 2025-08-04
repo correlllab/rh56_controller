@@ -308,7 +308,7 @@ class RH56Driver(Node):
 
         # Clamp and convert
         clamped_angles = [max(0, min(1000, int(a))) for a in request.angles]
-        self.gesture_callback(None, None, clamped_angles, hands, None)  # gesture_name=None
+        self.gesture_callback(request, response, clamped_angles, hands, None)  # gesture_name=None
         response.success = True
         response.message = f"Set joint angles for '{hand_str}'"
         return response
