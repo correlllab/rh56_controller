@@ -72,6 +72,13 @@ class RH56Driver(Node):
         self.create_service(Trigger, 'right/save_parameters', lambda r, s: self.save_callback(r, s, self.righthand))
         self.create_service(Trigger, 'left/save_parameters',  lambda r, s: self.save_callback(r, s, self.lefthand))
 
+        self.create_service(Trigger, 'right/close_hand', lambda r, s: self.close_hand_callback(r, s, self.righthand))
+        self.create_service(Trigger, 'left/close_hand',  lambda r, s: self.close_hand_callback(r, s, self.lefthand))
+
+        self.create_service(Trigger, 'right/open_hand', lambda r, s: self.open_hand_callback(r, s, self.righthand))
+        self.create_service(Trigger, 'left/open_hand',  lambda r, s: self.open_hand_callback(r, s, self.lefthand))
+
+
         self.right_action_server = ActionServer(
             self,
             AdaptiveForce,
@@ -242,6 +249,24 @@ class RH56Driver(Node):
         # If it exits the loop without "done"
         result_msg.success = False
         return result_msg
+
+    def close_hand_callback(self, request, response, hand: RH56Hand):
+        hand_name = "right" if hand.hand_id == 1 else "left"
+        self.get_logger().info(f"Close hand command received for {hand_name}")
+        with self.hand_lock:
+            hand.angle_set([0] * 6)  # Fully closed
+        response.success = True
+        response.message = f"{hand_name} hand closed"
+        return response
+
+    def open_hand_callback(self, request, response, hand: RH56Hand):
+        hand_name = "right" if hand.hand_id == 1 else "left"
+        self.get_logger().info(f"Open hand command received for {hand_name}")
+        with self.hand_lock:
+            hand.angle_set([1000] * 6)  # Fully open
+        response.success = True
+        response.message = f"{hand_name} hand opened"
+        return response
 
 
 def main(args=None):
