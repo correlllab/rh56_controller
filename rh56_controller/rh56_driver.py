@@ -8,7 +8,7 @@ from trajectory_msgs.msg import JointTrajectory
 from std_srvs.srv import Trigger
 
 from custom_ros_messages.msg import MotorCmd, MotorCmds, MotorState, MotorStates
-from custom_ros_messages.action import AdaptiveForce
+from custom_ros_messages.action import HandAdaptiveForce
 from custom_ros_messages.srv import SetHandAngles
 
 from .rh56_hand import RH56Hand
@@ -104,14 +104,14 @@ class RH56Driver(Node):
 
         self.right_action_server = ActionServer(
             self,
-            AdaptiveForce,
+            HandAdaptiveForce,
             'hands/right/adaptive_force_control',
             lambda goal_handle: self.adaptive_force_callback(goal_handle, self.righthand)
         )
 
         self.left_action_server = ActionServer(
             self,
-            AdaptiveForce,
+            HandAdaptiveForce,
             'hands/left/adaptive_force_control',
             lambda goal_handle: self.adaptive_force_callback(goal_handle, self.lefthand)
         )
@@ -242,8 +242,8 @@ class RH56Driver(Node):
         self.get_logger().info(f"Adaptive force control action called for {hand_name} hand.")
 
         goal = goal_handle.request
-        feedback_msg = AdaptiveForce.Feedback()
-        result_msg = AdaptiveForce.Result()
+        feedback_msg = HandAdaptiveForce.Feedback()
+        result_msg = HandAdaptiveForce.Result()
 
         with self.hand_lock:
             for step in hand.adaptive_force_control_iter(
@@ -255,7 +255,7 @@ class RH56Driver(Node):
                 if goal_handle.is_cancel_requested:
                     self.get_logger().info(f"Goal canceled for {hand_name}")
                     goal_handle.canceled()
-                    return AdaptiveForce.Result(success=False)
+                    return HandAdaptiveForce.Result(success=False)
 
                 # Emit feedback if available
                 feedback_msg.forces = step["forces"]
