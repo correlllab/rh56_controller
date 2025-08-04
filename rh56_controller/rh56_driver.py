@@ -158,7 +158,7 @@ class RH56Driver(Node):
                 state.tau = float(all_forces[i])
                 state.tau_lim = float(all_limits[i])
                 state.current = 0.0  # Current is not used by the hand controller, set to 0
-                state.temperature = 0  # Temperature is not used by the hand controller, set to 0
+                # state.temperature = 0  # Temperature is not used by the hand controller, set to 0
                 motor_states_msg.states.append(state)
             self.hand_state_pub.publish(motor_states_msg)
 
