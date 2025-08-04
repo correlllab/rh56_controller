@@ -9,12 +9,15 @@ from std_srvs.srv import Trigger
 
 from custom_ros_messages.msg import MotorCmd, MotorCmds, MotorState, MotorStates
 from custom_ros_messages.action import AdaptiveForce
+from custom_ros_messages.srv import SetHandAngles
 
 from .rh56_hand import RH56Hand
 
 import threading
 import time
 import math
+from typing import List, Optional
+import numpy as np
 
 class RH56Driver(Node):
     """
@@ -53,43 +56,63 @@ class RH56Driver(Node):
 
         # Publishers
         # Publisher for combined state, matching the C++ package
-        self.hand_state_pub = self.create_publisher(MotorStates, 'rt/hands/state', 10)
+        self.hand_state_pub = self.create_publisher(MotorStates, 'hands/state', 10)
         # TODO: Gemini generated, not sure why --- Standard ROS publisher for visualization tools like RViz
         # self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 10)
 
         # Subscriber for combined command, matching the C++ package
         self.hand_cmd_sub = self.create_subscription(
             MotorCmds,
-            'rt/hands/cmd',
+            'hands/cmd',
             self.hand_cmd_callback,
             10
         )
 
         # Services - now namespaced for each hand
-        self.create_service(Trigger, 'right/calibrate_force_sensors', lambda r, s: self.calibrate_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'left/calibrate_force_sensors',  lambda r, s: self.calibrate_callback(r, s, self.lefthand))
+        self.create_service(Trigger, 'hands/right/calibrate_force_sensors', lambda r, s: self.calibrate_callback(r, s, self.righthand))
+        self.create_service(Trigger, 'hands/left/calibrate_force_sensors',  lambda r, s: self.calibrate_callback(r, s, self.lefthand))
 
-        self.create_service(Trigger, 'right/save_parameters', lambda r, s: self.save_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'left/save_parameters',  lambda r, s: self.save_callback(r, s, self.lefthand))
+        self.create_service(Trigger, 'hands/right/save_parameters', lambda r, s: self.save_callback(r, s, self.righthand))
+        self.create_service(Trigger, 'hands/left/save_parameters',  lambda r, s: self.save_callback(r, s, self.lefthand))
 
-        self.create_service(Trigger, 'right/close_hand', lambda r, s: self.close_hand_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'left/close_hand',  lambda r, s: self.close_hand_callback(r, s, self.lefthand))
+        self._gesture_library = {
+            "open":  [1000] * 6,
+            "close": [0] * 6,
+            "pinch": [1000, 1000, 0, 0, 1000, 0],
+            "point": [0, 0, 0, 1000, 1000, 1000],
+        }
 
-        self.create_service(Trigger, 'right/open_hand', lambda r, s: self.open_hand_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'left/open_hand',  lambda r, s: self.open_hand_callback(r, s, self.lefthand))
+        for gesture_name, angles in self._gesture_library.items():
+            self.create_service(
+                Trigger, f'hands/right/{gesture_name}',
+                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.righthand], g)
+            )
+            self.create_service(
+                Trigger, f'hands/left/{gesture_name}',
+                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.lefthand], g)
+            )
+            self.create_service(
+                Trigger, f'hands/{gesture_name}',
+                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.righthand, self.lefthand], g)
+            )
 
+        self.create_service(
+            SetHandAngles,
+            'hands/set_angles',
+            self.set_joint_angles_callback
+        )
 
         self.right_action_server = ActionServer(
             self,
             AdaptiveForce,
-            'right/adaptive_force_control',
+            'hands/right/adaptive_force_control',
             lambda goal_handle: self.adaptive_force_callback(goal_handle, self.righthand)
         )
 
         self.left_action_server = ActionServer(
             self,
             AdaptiveForce,
-            'left/adaptive_force_control',
+            'hands/left/adaptive_force_control',
             lambda goal_handle: self.adaptive_force_callback(goal_handle, self.lefthand)
         )
 
@@ -250,24 +273,46 @@ class RH56Driver(Node):
         result_msg.success = False
         return result_msg
 
-    def close_hand_callback(self, request, response, hand: RH56Hand):
-        hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Close hand command received for {hand_name}")
+    def gesture_callback(self, request, response, angles: List[int], hands: List[RH56Hand], gesture_name: Optional[str] = None):
         with self.hand_lock:
-            hand.angle_set([0] * 6)  # Fully closed
+            for hand in hands:
+                hand_label = "right" if hand.hand_id == 1 else "left"
+                if gesture_name:
+                    self.get_logger().info(f"Setting {hand_label} hand to gesture '{gesture_name}'")
+                else:
+                    self.get_logger().info(f"Setting {hand_label} hand to raw joint values")
+                # Ensure angles are within valid range
+                angles = np.clip(angles, 0, 1000).astype(int).tolist()
+                hand.angle_set(angles)
+        
         response.success = True
-        response.message = f"{hand_name} hand closed"
+        hand_msg = " and ".join(["right" if h.hand_id == 1 else "left" for h in hands])
+        response.message = f"Set gesture '{gesture_name}' on {hand_msg} hand" if gesture_name else f"Set raw joint angles on {hand_msg} hand"
         return response
 
-    def open_hand_callback(self, request, response, hand: RH56Hand):
-        hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Open hand command received for {hand_name}")
-        with self.hand_lock:
-            hand.angle_set([1000] * 6)  # Fully open
-        response.success = True
-        response.message = f"{hand_name} hand opened"
-        return response
+    def set_joint_angles_callback(self, request, response):
+        hand_str = request.hand.lower()
+        hands = []
+        if hand_str in ["left", "both"]:
+            hands.append(self.lefthand)
+        if hand_str in ["right", "both"]:
+            hands.append(self.righthand)
+        if not hands:
+            response.success = False
+            response.message = f"Invalid hand spec: '{request.hand}'"
+            return response
 
+        if len(request.angles) != 6:
+            response.success = False
+            response.message = "Expected exactly 6 joint angles."
+            return response
+
+        # Clamp and convert
+        clamped_angles = [max(0, min(1000, int(a))) for a in request.angles]
+        self.gesture_callback(clamped_angles, hands)  # gesture_name=None
+        response.success = True
+        response.message = f"Set joint angles for '{hand_str}'"
+        return response
 
 def main(args=None):
     rclpy.init(args=args)
