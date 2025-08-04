@@ -144,6 +144,7 @@ class RH56Driver(Node):
             now = self.get_clock().now().to_msg()
             all_angles = right_angles + left_angles
             all_forces = right_forces + left_forces
+            all_limits = self.righthand.force_limits + self.lefthand.force_limits
 
             # --- Populate and publish the MotorStates message ---
             motor_states_msg = MotorStates()
@@ -154,13 +155,10 @@ class RH56Driver(Node):
                 state.q = (all_angles[i] / 1000.0) * math.pi
                 state.dq = 0.0
                 state.ddq = 0.0
-                state.tau_est = float(all_forces[i])
-                state.q_raw = float(all_angles[i])
-                state.dq_raw = 0.0
-                state.ddq_raw = 0.0
-                state.temperature = 0
-                state.lost = 0 # This driver does not track lost packets
-                state.reserve = [0, 0]
+                state.tau = float(all_forces[i])
+                state.tau_lim = float(all_limits[i])
+                state.current = 0.0  # Current is not used by the hand controller, set to 0
+                state.temperature = 0  # Temperature is not used by the hand controller, set to 0
                 motor_states_msg.states.append(state)
             self.hand_state_pub.publish(motor_states_msg)
 
