@@ -1,17 +1,14 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.action import ActionServer
 
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory
 from std_srvs.srv import Trigger
 
-# To integrate with the Unitree ecosystem, we assume the existence of a
-# 'unitree_msgs' package with the following message types. If your message
-# package is named differently, you may need to adjust this import.
 from custom_ros_messages.msg import MotorCmd, MotorCmds, MotorState, MotorStates
-from custom_ros_messages.action import MotorCmd, MotorCmds
-from custom_ros_messages.srv import AdaptiveForce
+from custom_ros_messages.action import AdaptiveForce
 
 from .rh56_hand import RH56Hand
 
@@ -56,14 +53,14 @@ class RH56Driver(Node):
 
         # Publishers
         # Publisher for combined state, matching the C++ package
-        self.hand_state_pub = self.create_publisher(MotorStates, 'rt/inspire/state', 10)
-        # Standard ROS publisher for visualization tools like RViz
-        self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 10)
+        self.hand_state_pub = self.create_publisher(MotorStates, 'rt/hands/state', 10)
+        # TODO: Gemini generated, not sure why --- Standard ROS publisher for visualization tools like RViz
+        # self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 10)
 
         # Subscriber for combined command, matching the C++ package
         self.hand_cmd_sub = self.create_subscription(
             MotorCmds,
-            'rt/inspire/cmd',
+            'rt/hands/cmd',
             self.hand_cmd_callback,
             10
         )
@@ -75,8 +72,19 @@ class RH56Driver(Node):
         self.create_service(Trigger, 'right/save_parameters', lambda r, s: self.save_callback(r, s, self.righthand))
         self.create_service(Trigger, 'left/save_parameters',  lambda r, s: self.save_callback(r, s, self.lefthand))
 
-        self.create_service(AdaptiveForce, 'right/adaptive_force_control', lambda r, s: self.adaptive_force_callback(r, s, self.righthand))
-        self.create_service(AdaptiveForce, 'left/adaptive_force_control',  lambda r, s: self.adaptive_force_callback(r, s, self.lefthand))
+        self.right_action_server = ActionServer(
+            self,
+            AdaptiveForce,
+            'right/adaptive_force_control',
+            lambda goal_handle: self.adaptive_force_callback(goal_handle, self.righthand)
+        )
+
+        self.left_action_server = ActionServer(
+            self,
+            AdaptiveForce,
+            'left/adaptive_force_control',
+            lambda goal_handle: self.adaptive_force_callback(goal_handle, self.lefthand)
+        )
 
         # Threading lock for safe serial communication
         self.hand_lock = threading.Lock()
@@ -176,28 +184,64 @@ class RH56Driver(Node):
         response.message = f"Parameters saved to {hand_name} hand's non-volatile memory."
         return response
 
-    def adaptive_force_callback(self, request: AdaptiveForce.Request, response: AdaptiveForce.Response, hand: RH56Hand):
+    # def adaptive_force_callback(self, request: AdaptiveForce.Request, response: AdaptiveForce.Response, hand: RH56Hand):
+    #     hand_name = "right" if hand.hand_id == 1 else "left"
+    #     self.get_logger().info(f"Adaptive force control service called for {hand_name} hand.")
+
+    #     with self.hand_lock:
+    #         results = hand.adaptive_force_control(
+    #             target_forces=list(request.target_forces),
+    #             target_angles=list(request.target_angles),
+    #             step_size=request.step_size,
+    #             max_iterations=request.max_iterations
+    #         )
+
+    #     if results and results.get('final_forces') is not None:
+    #         response.success = True
+    #         response.final_forces = results['final_forces']
+    #         response.final_angles = results['final_angles']
+    #         self.get_logger().info(f"Adaptive force control for {hand_name} hand finished successfully.")
+    #     else:
+    #         response.success = False
+    #         self.get_logger().error(f"Adaptive force control for {hand_name} hand failed.")
+
+    #     return response
+
+    def adaptive_force_callback(self, goal_handle, hand):
         hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Adaptive force control service called for {hand_name} hand.")
+        self.get_logger().info(f"Adaptive force control action called for {hand_name} hand.")
+
+        goal = goal_handle.request
+        feedback_msg = AdaptiveForce.Feedback()
+        result_msg = AdaptiveForce.Result()
 
         with self.hand_lock:
-            results = hand.adaptive_force_control(
-                target_forces=list(request.target_forces),
-                target_angles=list(request.target_angles),
-                step_size=request.step_size,
-                max_iterations=request.max_iterations
-            )
+            for step in hand.adaptive_force_control_iter(
+                target_forces=list(goal.target_forces),
+                target_angles=list(goal.target_angles),
+                step_size=goal.step_size,
+                max_iterations=goal.max_iterations
+            ):
+                if goal_handle.is_cancel_requested:
+                    self.get_logger().info(f"Goal canceled for {hand_name}")
+                    goal_handle.canceled()
+                    return AdaptiveForce.Result(success=False)
 
-        if results and results.get('final_forces') is not None:
-            response.success = True
-            response.final_forces = results['final_forces']
-            response.final_angles = results['final_angles']
-            self.get_logger().info(f"Adaptive force control for {hand_name} hand finished successfully.")
-        else:
-            response.success = False
-            self.get_logger().error(f"Adaptive force control for {hand_name} hand failed.")
+                # Emit feedback if available
+                feedback_msg.forces = step["forces"]
+                feedback_msg.angles = step["angles"]
+                goal_handle.publish_feedback(feedback_msg)
 
-        return response
+                if step.get("done"):
+                    result_msg.success = True
+                    result_msg.final_forces = step["final_forces"]
+                    result_msg.final_angles = step["final_angles"]
+                    goal_handle.succeed()
+                    return result_msg
+
+        # If it exits the loop without "done"
+        result_msg.success = False
+        return result_msg
 
 
 def main(args=None):
