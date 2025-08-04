@@ -39,6 +39,7 @@ class RH56Hand:
             timeout=1
         )
         self.hand_id = hand_id
+        self.force_limits = [1000] * 6  # Default force limits for each finger
 
     def _calc_checksum(self, data: bytes) -> int:
         return sum(data) & 0xFF
@@ -201,6 +202,8 @@ class RH56Hand:
                 raise ValueError("Threshold value must be between 0 and 1000")
             data += struct.pack('<h', threshold)
         
+        self.force_limits = thresholds  # Update internal limits
+
         # FORCE_SET: 0x05DA (1498), 12 bytes (6 fingers × 2 bytes)
         # 0x0414 (1044) default force set address
         response = self._send_frame(
