@@ -668,6 +668,85 @@ class RH56Hand:
         
         return results
 
+    def adaptive_force_control_iter(
+        self,
+        target_forces: List[int],
+        target_angles: List[int], 
+        step_size: int = 50,
+        max_iterations: int = 20
+    ):
+        if len(target_forces) != 6 or len(target_angles) != 6:
+            raise ValueError("Need 6 values for both forces and angles")
+        
+        original_targets = target_forces.copy()
+        current_targets = target_forces.copy()
+        current_angles = self.angle_read() or [1000] * 6
+
+        for iteration in range(max_iterations):
+            response = self.force_set(current_targets) # set force limit to initial target forces
+            if not response:
+                continue
+
+            # Compute next angles
+            next_angles = []
+            angles_at_target = True
+            import numpy as np
+
+            current_angles = np.array(current_angles)
+            target_angles = np.array(target_angles)
+
+            # Calculate deltas --> clip to step size
+            delta = target_angles - current_angles
+            step = np.clip(delta, -step_size, step_size)
+            next_angles = current_angles + step
+
+            # Check if we're close enough to target for all fingers
+            angles_at_target = np.all(np.abs(delta) <= step_size)
+
+            # Send commands and update state
+            self.angle_set(next_angles.tolist())
+            current_angles = next_angles.copy()
+
+            # now that we yield realtime values, this needs to be close to 0
+            # TODO: changed from 2 --> 0.025 but need to play with reducing further
+            time.sleep(0.025)
+
+            current_forces = self.force_act()
+            if not current_forces:
+                continue
+
+            # Adjust thresholds
+            adjustment_made = False
+            for i in range(6):
+                diff = abs(current_forces[i] - original_targets[i])
+                angle_close = abs(current_angles[i] - target_angles[i]) <= 30
+                if angle_close:
+                    continue
+                # elif 50 < diff <= 100: # TODO: why are we only adjusting force targets in this range?
+                else: # let's try this
+                    if current_targets[i] < 1000:
+                        current_targets[i] = min(1000, current_targets[i] + 50)
+                        adjustment_made = True                    
+
+            yield {
+                "iteration": iteration + 1,
+                "forces": current_forces.copy(),
+                "angles": current_angles.copy()
+            }
+
+            if angles_at_target and not adjustment_made:
+                break
+
+        # Final reading
+        final_forces = self.force_act()
+        final_angles = self.angle_read()
+        yield {
+            "done": True,
+            "final_forces": final_forces,
+            "final_angles": final_angles
+        }
+
+
 def demonstrate_force_calibration(port: str, hand_id: int = 1):
     """
     Demonstrate force sensor calibration process
