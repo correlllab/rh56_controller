@@ -20,7 +20,7 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand. It wr
 To run the driver node, use the provided launch file. You can specify the serial port and hand ID as arguments.
 
 ```bash
-ros2 launch rh56_controller rh56_controller_launch.py serial_port:=/dev/ttyUSB0 hand_id:=1
+ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0 hand_id:=1
 ```
 
 ## ROS API
