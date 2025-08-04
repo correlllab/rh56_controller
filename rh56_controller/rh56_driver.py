@@ -159,7 +159,7 @@ class RH56Driver(Node):
                 state.tau_lim = float(all_limits[i])
                 state.current = 0.0  # Current is not used by the hand controller, set to 0
                 # state.temperature = 0  # Temperature is not used by the hand controller, set to 0
-                motor_states_msg.states.append(state)
+                motor_states_msg.motor_states.append(state)
             self.hand_state_pub.publish(motor_states_msg)
 
             # --- Populate and publish the standard JointState message for RViz ---
@@ -174,17 +174,18 @@ class RH56Driver(Node):
 
     def hand_cmd_callback(self, msg: MotorCmds):
         """Receives MotorCmds and sends them to the respective hands."""
-        if len(msg.cmds) != 12:
-            self.get_logger().warn(f"Received MotorCmds with {len(msg.cmds)} commands, expected 12.")
+        cmds = msg.motor_commands
+        if len(cmds) != 12:
+            self.get_logger().warn(f"Received MotorCmds with {len(cmds)} commands, expected 12.")
             return
 
         # Right hand commands (first 6)
-        right_pos_rad = [cmd.q for cmd in msg.cmds[:6]]
+        right_pos_rad = [cmd.q for cmd in cmds[:6]]
         right_angles_raw = [(p / math.pi) * 1000.0 for p in right_pos_rad]
         right_angles = [max(0, min(1000, int(a))) for a in right_angles_raw]
 
         # Left hand commands (last 6)
-        left_pos_rad = [cmd.q for cmd in msg.cmds[6:]]
+        left_pos_rad = [cmd.q for cmd in cmds[6:]]
         left_angles_raw = [(p / math.pi) * 1000.0 for p in left_pos_rad]
         left_angles = [max(0, min(1000, int(a))) for a in left_angles_raw]
 
