@@ -163,12 +163,12 @@ class RH56Driver(Node):
             self.hand_state_pub.publish(motor_states_msg)
 
             # --- Populate and publish the standard JointState message for RViz ---
-            js_msg = JointState()
-            js_msg.header.stamp = now
-            js_msg.name = self._all_joint_names
-            js_msg.position = [s.q for s in motor_states_msg.states]
-            js_msg.effort = [s.tau_est for s in motor_states_msg.states]
-            self.joint_state_pub.publish(js_msg)
+            # js_msg = JointState()
+            # js_msg.header.stamp = now
+            # js_msg.name = self._all_joint_names
+            # js_msg.position = [s.q for s in motor_states_msg.motor_states]
+            # js_msg.effort = [s.tau_est for s in motor_states_msg.motor_states]
+            # self.joint_state_pub.publish(js_msg)
 
             rate.sleep()
 
