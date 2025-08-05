@@ -6,14 +6,14 @@ from rh56_controller.rh56_hand import RH56Hand
 import threading
 from typing import List, Tuple, Optional
 import concurrent.futures
+import threading
 
-def read_hand_status(self, hand) -> Tuple[Optional[List[int]], Optional[List[int]], Optional[List[int]]]:
+def read_hand_status(hand) -> Tuple[Optional[List[int]], Optional[List[int]], Optional[List[int]]]:
     """Read status for a single hand (no shared lock needed)"""
     angles = hand.angle_read()
     forces = hand.force_act()
     temps = hand.temp_read()
     return angles, forces, temps
-
 # stream read angles over a user-specified period of time, then compute frequency of reading
 
 if __name__ == "__main__":
