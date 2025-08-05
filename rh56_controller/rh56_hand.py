@@ -36,8 +36,8 @@ class RH56Hand:
             bytesize=8,
             stopbits=1,
             parity='N',
-            # timeout=1
-            timeout=0.01
+            timeout=0.5
+            # timeout=0.01
         )
         self.hand_id = hand_id
         self.force_limits = [1000] * 6  # Default force limits for each finger
