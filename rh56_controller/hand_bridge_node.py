@@ -28,10 +28,10 @@ class HandBridgeNode(Node):
         )
 
         # CycloneDDS Publishers and Subscribers
-        self.dds_state_pub = ChannelPublisher('/inspire/state', DDS_MotorStates)
+        self.dds_state_pub = ChannelPublisher('/rt/inspire/state', DDS_MotorStates)
         self.dds_state_pub.Init()
 
-        self.dds_cmd_sub = ChannelSubscriber('/inspire/cmd', DDS_MotorCmds)
+        self.dds_cmd_sub = ChannelSubscriber('/rt/inspire/cmd', DDS_MotorCmds)
         self.dds_cmd_sub.Init(self.dds_cmd_callback, 10)
 
         self.get_logger().info("HandBridgeNode initialized.")
