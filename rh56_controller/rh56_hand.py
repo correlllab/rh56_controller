@@ -143,6 +143,45 @@ class RH56Hand:
                 print("No force response received")
             return None
 
+    def temp_read(self) -> Optional[List[int]]:
+        """
+        Read six temperature values from the hand for each finger actuator.
+        
+        _ADDR_TEMP = 0x0652 (1618)
+        Returns:
+            Optional[List[int]]: List of temperature values for 6 fingers, or None if reading fails
+        """
+        # 6 bytes of temperature data (1 byte per actuator)
+        response = self._send_frame(
+            command=_CMD_READ,
+            address=_ADDR_TEMP,
+            data=bytes([0x06])
+        )
+        if parsed := self._parse_response(response):
+            raw_data = parsed[7:-1]  # Skip header, get payload
+            return list(raw_data[:6])  # Extract first 6 bytes as temperatures
+        return None
+
+    def current_read(self) -> Optional[List[int]]:
+        """
+        Read six current values from the hand for each finger actuator, 12 bytes total.
+        
+        _ADDR_CURRENT = 0x063A (1594)
+        Returns:
+            Optional[List[int]]: List of current values for 6 fingers, or None if reading fails
+        """
+        # 12 bytes of current data (2 bytes per actuator)
+        response = self._send_frame(
+            command=_CMD_READ,
+            address=_ADDR_CURRENT,
+            data=bytes([0x06])
+        )
+        if parsed := self._parse_response(response):
+            raw_data = parsed[7:-1]
+            return [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
+        return None
+
+
     def set_id(self, new_id: int):
         if not (1 <= new_id <= 254):
             raise ValueError("ID range error")

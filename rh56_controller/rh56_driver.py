@@ -133,8 +133,12 @@ class RH56Driver(Node):
             with self.hand_lock:
                 right_angles = self.righthand.angle_read()
                 right_forces = self.righthand.force_act()
+                right_temps = self.righthand.temp_read()
+                right_currents = self.righthand.current_read()      
                 left_angles = self.lefthand.angle_read()
                 left_forces = self.lefthand.force_act()
+                left_temps = self.lefthand.temp_read()
+                left_currents = self.lefthand.current_read()
 
             if not (right_angles and right_forces and left_angles and left_forces):
                 self.get_logger().warn("Incomplete data read from one or both hands.", throttle_duration_sec=5)
@@ -145,6 +149,8 @@ class RH56Driver(Node):
             all_angles = right_angles + left_angles
             all_forces = right_forces + left_forces
             all_limits = self.righthand.force_limits + self.lefthand.force_limits
+            all_temps  = right_temps + left_temps
+            all_currents = right_currents + left_currents
 
             # --- Populate and publish the MotorStates message ---
             motor_states_msg = MotorStates()
@@ -157,8 +163,8 @@ class RH56Driver(Node):
                 state.ddq = 0.0
                 state.tau = float(all_forces[i])
                 state.tau_lim = float(all_limits[i])
-                state.current = 0.0  # Current is not used by the hand controller, set to 0
-                # state.temperature = 0  # Temperature is not used by the hand controller, set to 0
+                state.current = float(all_currents[i])
+                state.temperature = float(all_temps[i])
                 motor_states_msg.motor_states.append(state)
             self.hand_state_pub.publish(motor_states_msg)
 
