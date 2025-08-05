@@ -178,7 +178,7 @@ class RH56Hand:
         )
         if parsed := self._parse_response(response):
             raw_data = parsed[7:-1]
-            return [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
+            return list(raw_data[:6])  # Extract first 6 bytes as temperatures
         return None
 
 
