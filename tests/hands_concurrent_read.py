@@ -4,11 +4,21 @@ import time
 sys.path.append("../")
 from rh56_controller.rh56_hand import RH56Hand
 import threading
+from typing import List, Tuple, Optional
+import concurrent.futures
+
+def read_hand_status(self, hand) -> Tuple[Optional[List[int]], Optional[List[int]], Optional[List[int]]]:
+    """Read status for a single hand (no shared lock needed)"""
+    angles = hand.angle_read()
+    forces = hand.force_act()
+    temps = hand.temp_read()
+    return angles, forces, temps
 
 # stream read angles over a user-specified period of time, then compute frequency of reading
 
 if __name__ == "__main__":
-    hand = RH56Hand(port="/dev/ttyUSB0", hand_id=1)
+    lefthand = RH56Hand(port="/dev/ttyUSB0", hand_id=1)
+    righthand = RH56Hand(port="/dev/ttyUSB0", hand_id=2)
 
     while True:
         user_input = input("Enter an integer n to read for n seconds, or 'exit' to quit: ").strip().lower()
@@ -21,9 +31,16 @@ if __name__ == "__main__":
                 duration = min(int(user_input), 10)  # Ensure at most 10 seconds
                 start = time.time()
                 while time.time() - start < duration:
-                    angle = hand.angle_read()
-                    print(angle)
-                    read_angles.append(angle)
+                    
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                        right_future = executor.submit(read_hand_status, righthand)
+                        left_future = executor.submit(read_hand_status, lefthand)
+                        
+                        right_angles, right_forces, right_temps = right_future.result()
+                        left_angles, left_forces, left_temps = left_future.result()
+                        angles = right_angles + left_angles
+                        read_angles.append(angles)
+
                 frequency = len(read_angles) / duration if duration > 0 else 0
                 print(f"Read {len(read_angles)} angles in {duration} seconds.\nFrequency: {frequency} Hz")
             except ValueError:
