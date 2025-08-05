@@ -3,6 +3,10 @@ import sys
 
 sys.path.append("../")
 from rh56_controller.rh56_hand import RH56Hand
+import threading
+
+def send_angles(hand, angles):
+    hand.angle_set(angles)
 
 # test moving both hands concurrently
 if __name__ == "__main__":
@@ -22,12 +26,20 @@ if __name__ == "__main__":
             print("Exiting...")
             break
         elif user_input in ['c', 'close']:
-            right_hand.angle_set(close)
-            left_hand.angle_set(close)
+            t1 = threading.Thread(target=send_angles, args=(right_hand, close))
+            t2 = threading.Thread(target=send_angles, args=(left_hand, close))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
             print("Hands closed.")
         elif user_input in ['o', 'open']:
-            right_hand.angle_set(open)
-            left_hand.angle_set(open)
+            t1 = threading.Thread(target=send_angles, args=(right_hand, open))
+            t2 = threading.Thread(target=send_angles, args=(left_hand, open))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
             print("Hands opened.")
         else:
             print("Invalid input. Please try again.")
