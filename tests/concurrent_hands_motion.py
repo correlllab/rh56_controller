@@ -18,10 +18,10 @@ if __name__ == "__main__":
     user_input = input("Enter 'c' for close or 'o' for open: ")
 
     if user_input in ['c', 'close']:
-        right_hand.move_to_position(close)
-        left_hand.move_to_position(close)
+        right_hand.angle_set(close)
+        left_hand.angle_set(close)
     elif user_input in ['o', 'open']:
-        right_hand.move_to_position(open)
-        left_hand.move_to_position(open)
+        right_hand.angle_set(open)
+        left_hand.angle_set(open)
     else:
         print("Invalid input. Please enter 'c' or 'o'.")
