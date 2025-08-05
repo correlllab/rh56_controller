@@ -131,6 +131,7 @@ class RH56Driver(Node):
                 right_angles = self.righthand.angle_read()
                 right_forces = self.righthand.force_act()
                 right_temps = self.righthand.temp_read()
+                
                 left_angles = self.lefthand.angle_read()
                 left_forces = self.lefthand.force_act()
                 left_temps = self.lefthand.temp_read()
