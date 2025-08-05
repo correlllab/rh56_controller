@@ -15,13 +15,19 @@ if __name__ == "__main__":
     open = [1000] * 6
 
     # create user input to accept either 'c' or 'close' for close or 'o' for open
-    user_input = input("Enter 'c' for close or 'o' for open: ")
-
-    if user_input in ['c', 'close']:
-        right_hand.angle_set(close)
-        left_hand.angle_set(close)
-    elif user_input in ['o', 'open']:
-        right_hand.angle_set(open)
-        left_hand.angle_set(open)
-    else:
-        print("Invalid input. Please enter 'c' or 'o'.")
+    # only close user input when user enters in exit, quit, q, or Ctrl+C
+    while True:
+        user_input = input("Enter 'c' to close hands, 'o' to open hands, or 'exit' to quit: ").strip().lower()
+        if user_input in ['exit', 'quit', 'q']:
+            print("Exiting...")
+            break
+        elif user_input in ['c', 'close']:
+            right_hand.move(close)
+            left_hand.move(close)
+            print("Hands closed.")
+        elif user_input in ['o', 'open']:
+            right_hand.move(open)
+            left_hand.move(open)
+            print("Hands opened.")
+        else:
+            print("Invalid input. Please try again.")
