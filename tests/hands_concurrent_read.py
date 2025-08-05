@@ -6,6 +6,7 @@ from rh56_controller.rh56_hand import RH56Hand
 import threading
 from typing import List, Tuple, Optional
 import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 def read_hand_status(hand) -> Tuple[Optional[List[int]], Optional[List[int]], Optional[List[int]]]:
@@ -32,12 +33,19 @@ if __name__ == "__main__":
                 start = time.time()
                 while time.time() - start < duration:
                     
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    with ThreadPoolExecutor(max_workers=2) as executor:
                         right_future = executor.submit(read_hand_status, righthand)
                         left_future = executor.submit(read_hand_status, lefthand)
                         
-                        right_angles, right_forces, right_temps = right_future.result()
-                        left_angles, left_forces, left_temps = left_future.result()
+                        try:
+                            right_angles, right_forces, right_temps = right_future.result()
+                        except Exception as e:
+                            print(f"Error reading right hand status: {e}")
+                        try:
+                            left_angles, left_forces, left_temps = left_future.result()
+                        except Exception as e:
+                            print(f"Error reading left hand status: {e}")
+
                         angles = right_angles + left_angles
                         read_angles.append(angles)
 
