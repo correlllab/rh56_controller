@@ -16,7 +16,7 @@ from .rh56_hand import RH56Hand
 import threading
 import time
 import math
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import numpy as np
 
 class RH56Driver(Node):
@@ -198,8 +198,9 @@ class RH56Driver(Node):
         left_angles = [max(0, min(1000, int(a))) for a in left_angles_raw]
 
         with self.hand_lock:
-            self.righthand.angle_set(right_angles)
-            self.lefthand.angle_set(left_angles)
+            # self.righthand.angle_set(right_angles)
+            # self.lefthand.angle_set(left_angles)
+            self.send_angles_concurrent([(self.righthand, right_angles), (self.lefthand, left_angles)])
 
     def calibrate_callback(self, request: Trigger.Request, response: Trigger.Response, hand: RH56Hand):
         hand_name = "right" if hand.hand_id == 1 else "left"
@@ -282,6 +283,7 @@ class RH56Driver(Node):
 
     def gesture_callback(self, request, response, angles: List[int], hands: List[RH56Hand], gesture_name: Optional[str] = None):
         with self.hand_lock:
+            pairs = []
             for hand in hands:
                 hand_label = "right" if hand.hand_id == 1 else "left"
                 if gesture_name:
@@ -290,8 +292,9 @@ class RH56Driver(Node):
                     self.get_logger().info(f"Setting {hand_label} hand to raw joint values")
                 # Ensure angles are within valid range
                 angles = np.clip(angles, 0, 1000).astype(int).tolist()
-                hand.angle_set(angles)
-        
+                pairs.append((hand, angles))
+            self.send_angles_concurrent(pairs)
+
         response.success = True
         hand_msg = " and ".join(["right" if h.hand_id == 1 else "left" for h in hands])
         response.message = f"Set gesture '{gesture_name}' on {hand_msg} hand" if gesture_name else f"Set raw joint angles on {hand_msg} hand"
@@ -320,6 +323,16 @@ class RH56Driver(Node):
         response.success = True
         response.message = f"Set joint angles for '{hand_str}'"
         return response
+    
+    def send_angles_concurrent(self, hand_angle_pairs: List[Tuple[RH56Hand, List[int]]]):
+        threads = []
+        for hand, angles in hand_angle_pairs:
+            t = threading.Thread(target=hand.angle_set, args=(angles,))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
 def main(args=None):
     rclpy.init(args=args)
