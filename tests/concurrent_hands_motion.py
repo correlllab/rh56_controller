@@ -22,12 +22,12 @@ if __name__ == "__main__":
             print("Exiting...")
             break
         elif user_input in ['c', 'close']:
-            right_hand.move(close)
-            left_hand.move(close)
+            right_hand.angle_set(close)
+            left_hand.angle_set(close)
             print("Hands closed.")
         elif user_input in ['o', 'open']:
-            right_hand.move(open)
-            left_hand.move(open)
+            right_hand.angle_set(open)
+            left_hand.angle_set(open)
             print("Hands opened.")
         else:
             print("Invalid input. Please try again.")
