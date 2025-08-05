@@ -13,7 +13,7 @@ data_files=[
 setup(
     name=package_name,
     version='0.0.1',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(include=['rh56_controller', 'rh56_controller.*'], exclude=['test']),
     data_files=data_files,
     install_requires=['setuptools', 'pyserial', 'numpy'],
     zip_safe=True,
