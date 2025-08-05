@@ -1,6 +1,6 @@
 # RH56 Controller (ROS 2)
 
-This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand. It wraps the low-level serial communication in a clean Python library and exposes the hand's functionality through standard ROS topics and services, including advanced adaptive force control.
+This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which wraps the serial interface with a Python API. Force-control (in Newtons) is WIP.
 
 
 ### Building
@@ -17,49 +17,71 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand. It wr
 
 ## Usage
 
-To run the driver node, use the provided launch file. You can specify the serial port and hand ID as arguments.
+*Temporary Usage*: By default, the `inspire_hand.service` connects to the hands' serial bus and publishes/subscribes to the `inspire/state` and `inspire/cmd` topics. Stop this service with: `sudo systemctl stop inspire_hand.service`. 
+
+Then for some reason, `pyserial` is denied access to the hands USB device. As a temporary fix, run `sudo chmod 666 /dev/ttyUSB0`. I will add this to the udev rules imminently if I can't fix this issue.
+
+---
+
+To run the driver node, use the provided launch file. You can specify the serial port, which is `/dev/ttyUSB0` by default if not specified.
 
 ```bash
-ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0 hand_id:=1
+ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0
 ```
+
+
 
 ## ROS API
 
 ### Published Topics
 
-*   **`/joint_states`** (`sensor_msgs/msg/JointState`)
-    *   Publishes the current angle of each finger joint in radians.
-*   **`/force_states`** (`sensor_msgs/msg/JointState`)
-    *   Publishes the current force sensor reading for each finger. The force value (in grams) is stored in the `effort` field.
+*   **`/hands/state`** (`custom_ros_messages/msg/MotorStates`)
+    *   A not-quite-mirror of the original `inspire/state` topic. Publishes the current angle of each finger joint in radians, not the 0-1000 range, in a 12-element array (`[right[6] + left[6]]`). Subject to change if this is annoying.
 
 ### Subscribed Topics
 
-*   **`/joint_trajectory_controller/joint_trajectory`** (`trajectory_msgs/msg/JointTrajectory`)
-    *   Accepts joint trajectory commands. The driver will execute the last point in the trajectory.
+*   **`/hands/cmd`** (`custom_ros_messages/msg/MotorCmds`)
+    *   A not-quite-mirror of the original `inspire/cmd` topic. Subscribes to the 12-element array of commanded angles (`[right[6] + left[6]]`) for each finger joint in radians, not the 0-1000 range. Subject to change if this is annoying.
 
 ### Services
-
-*   **`/calibrate_force_sensors`** (`std_srvs/srv/Trigger`)
+*   **`/hands/set_angles`** (`custom_ros_messages/srv/SetHandAngles`)
+    *   Input: 6-element float array, hand specification ('left', 'right', 'both')
+    * This command opens both hands.
+    * ```bash
+         ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 1000, 1000, 1000], hand: 'both'}"
+*   **`/hands/calibrate_force_sensors`** (`std_srvs/srv/Trigger`)
     *   Initiates the hardware's force sensor calibration routine. This process takes approximately 15 seconds.
-*   **`/save_parameters`** (`std_srvs/srv/Trigger`)
+*   **`/hands/save_parameters`** (`std_srvs/srv/Trigger`)
     *   Saves the current configuration to the hand's non-volatile memory.
-*   **`/adaptive_force_control`** (`rh56_controller/srv/AdaptiveForce`)
-    *   Executes the advanced adaptive force control routine.
+*   **TODO: `/hands/adaptive_force_control`** (`rh56_controller/srv/AdaptiveForce`)
+    *   Executes the advanced adaptive force control routine. **DOES NOT WORK YET**
+* Preliminary feature: named gestures `{name: String: angles: List[Int]}` in the [`rh56_driver.py:self._gesture_library`](https://github.com/correlllab/rh56_controller/blob/dcda3061751199523323d6b24221c99eade7b0a5/rh56_controller/rh56_driver.py#L78) class dictionary will autogenerate `/hands/<gesture>`, `/hands/left/<gesture>`, and `/hands/right/<gesture>` services. Run `ros2 service list | grep '^/hands/'` to see the full list of generated services. These are generic `Trigger` services and can be run with: 
+    * ```bash
+        ros2 service call /hands/<gesture> std_srvs/srv/Trigger
+        ros2 service call /hands/left/<gesture> std_srvs/srv/Trigger
+        ros2 service call /hands/right/<gesture> std_srvs/srv/Trigger
+    * ```bash
+        ros2 service list | grep '^/hands/'
+        /hands/close
+        /hands/left/close
+        /hands/left/open
+        /hands/left/pinch
+        /hands/left/point
+        /hands/open
+        /hands/pinch
+        /hands/point
+        /hands/right/close
+        /hands/right/open
+        /hands/right/pinch
+        /hands/right/point
 
 ## Examples
 
-### Move the Index Finger
-
-Publish a `JointTrajectory` message to set the index finger to 50% closed (approx. 1.57 radians) while keeping others open.
+### Close the Index Finger
+The joints on the hand are ordered as such: `[pinky, ring, middle, index, thumb_bend (pitch), thumb_rotate (yaw)]`. This command closes the index finger while opening the other joints.
 
 ```bash
-ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory '{
-    "joint_names": ["pinky_joint", "ring_joint", "middle_joint", "index_joint", "thumb_bend_joint", "thumb_rotation_joint"],
-    "points": [{
-        "positions": [0.0, 0.0, 0.0, 1.57, 0.0, 0.0],
-        "time_from_start": {"sec": 1, "nanosec": 0}
-    }]
-}'
+ ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 0, 1000, 1000], hand: 'both'}"
 ```
 
 ### Calibrate the Sensors
