@@ -17,9 +17,16 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which
 
 ## Usage
 
-*Temporary Usage*: By default, the `inspire_hand.service` connects to the hands' serial bus and publishes/subscribes to the `inspire/state` and `inspire/cmd` topics. Stop this service with: `sudo systemctl stop inspire_hand.service`. 
+*Temporary Usage*: By default, the `inspire_hand.service` connects to the hands' serial bus and publishes/subscribes to the `inspire/state` and `inspire/cmd` topics. Stop this service with: 
+```bash 
+sudo systemctl stop inspire_hand.service 
+``` 
 
-Then for some reason, `pyserial` is denied access to the hands USB device. As a temporary fix, run `sudo chmod 666 /dev/ttyUSB0`. I will add this to the udev rules imminently if I can't fix this issue.
+Then for some reason, `pyserial` is denied access to the hands USB device. As a temporary fix, run:
+```bash
+sudo chmod 666 /dev/ttyUSB0
+```
+I will add this to the udev rules imminently if I can't fix this issue.
 
 ---
 
@@ -84,13 +91,13 @@ The joints on the hand are ordered as such: `[pinky, ring, middle, index, thumb_
  ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 0, 1000, 1000], hand: 'both'}"
 ```
 
-### Calibrate the Sensors
+### Calibrate the Sensors --- UNTESTED, DOES NOT WORK PROBABLY
 
 ```bash
 ros2 service call /calibrate_force_sensors std_srvs/srv/Trigger
 ```
 
-### Use Adaptive Force Control
+### Use Adaptive Force Control --- UNTESTED, DOES NOT WORK PROBABLY
 
 Call the service to move fingers to specific angles while trying to achieve target forces.
 
