@@ -54,12 +54,9 @@ class RH56Driver(Node):
         self._left_joint_names = [f'left_{j}' for j in ['pinky', 'ring', 'middle', 'index', 'thumb_bend', 'thumb_rotation']]
         self._all_joint_names = self._right_joint_names + self._left_joint_names
 
-        # Publishers
         # Publisher for combined state, matching the C++ package
         self.hand_state_pub = self.create_publisher(MotorStates, 'hands/state', 10)
-        # TODO: Gemini generated, not sure why --- Standard ROS publisher for visualization tools like RViz
-        # self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 10)
-
+        
         # Subscriber for combined command, matching the C++ package
         self.hand_cmd_sub = self.create_subscription(
             MotorCmds,
