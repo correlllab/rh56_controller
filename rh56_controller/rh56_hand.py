@@ -36,7 +36,8 @@ class RH56Hand:
             bytesize=8,
             stopbits=1,
             parity='N',
-            timeout=1
+            # timeout=1
+            timeout=0.01
         )
         self.hand_id = hand_id
         self.force_limits = [1000] * 6  # Default force limits for each finger
@@ -69,6 +70,17 @@ class RH56Hand:
             return None
         return response
 
+    def angle_read(self) -> Optional[List[int]]:
+        # ANGLE_ACT：0x060A（1546），12byte
+        response = self._send_frame(
+            command=_CMD_READ,
+            address=_ADDR_ANGLE_ACT,
+            data=bytes([0x0C])
+        )
+        if parsed := self._parse_response(response):
+            raw_data = parsed[7:-1]
+            return [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
+        return None
 
     def angle_set(self, angles: List[int]):
         if len(angles) != 6:
@@ -87,18 +99,6 @@ class RH56Hand:
             data=data
         )
         return self._parse_response(response)
-
-    def angle_read(self) -> Optional[List[int]]:
-        # ANGLE_ACT：0x060A（1546），12byte
-        response = self._send_frame(
-            command=_CMD_READ,
-            address=_ADDR_ANGLE_ACT,
-            data=bytes([0x0C])
-        )
-        if parsed := self._parse_response(response):
-            raw_data = parsed[7:-1]
-            return [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
-        return None
 
     def force_act(self) -> Optional[List[int]]:
         """
