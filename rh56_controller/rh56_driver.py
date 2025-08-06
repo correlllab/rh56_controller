@@ -160,7 +160,7 @@ class RH56Driver(Node):
                 state.tau_lim = float(all_limits[i])
                 state.temperature = float(all_temps[i])
                 # unused
-                state.q_raw = all_angles[i]
+                state.q_raw = float(all_angles[i])
                 state.dq_raw = 0.0
                 state.tau_raw = float(all_forces[i])
                 state.tau_lim_raw = float(all_limits[i])
