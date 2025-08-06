@@ -102,7 +102,18 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
         /hands/right/open
         /hands/right/pinch
         /hands/right/point
+---
+*Note on Poll Rate*
 
+Currently only the `q, tau` are read from the hands and published to `/hands/state`. This is because the hands are on the same serial device with different slave IDs. While I am able to send separate, async commands to the hands for some reason, async read operations overlap and cause serial bus errors. So, we read and build the `/hands/state` with these four sequential calls:
+```
+right_angles = self.righthand.angle_read()
+right_forces = self.righthand.force_act()
+left_angles = self.lefthand.angle_read()
+left_forces = self.lefthand.force_act()
+```
+
+Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS overhead, the 41.67 Hz poll rate is closer to 40.2 Hz. This should be fast enough but I welcome any efforts to potentially double this by asynchronously reading.
 ## Examples
 
 ### Close the Index Finger
