@@ -22,8 +22,9 @@ if __name__ == "__main__":
                 start = time.time()
                 while time.time() - start < duration:
                     angle = hand.angle_read()
-                    print(angle)
-                    read_angles.append(angle)
+                    if angle is not None:
+                        print(angle)
+                        read_angles.append(angle)
                 frequency = len(read_angles) / duration if duration > 0 else 0
                 print(f"Read {len(read_angles)} angles in {duration} seconds.\nFrequency: {frequency} Hz")
             except ValueError:
