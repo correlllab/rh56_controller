@@ -1,6 +1,6 @@
 # RH56 Controller (ROS 2)
 
-This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which wraps the serial interface with a Python API. Force-control (in Newtons) is WIP.
+This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which wraps the serial interface with a Python API. Force-control (in Newtons) is WIP. States publish at ~40 Hz.
 
 
 ### Building
@@ -22,11 +22,11 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which
 sudo systemctl stop inspire_hand.service 
 ``` 
 
-Then for some reason, `pyserial` is denied access to the hands USB device. As a temporary fix, run:
+If for whatever reason `pyserial` is denied access to the hands USB device, run:
 ```bash
 sudo chmod 666 /dev/ttyUSB0
 ```
-I will add this to the udev rules imminently if I can't fix this issue.
+This is a transient issue and has not cropped up for me after initial testing.
 
 ---
 
@@ -39,6 +39,27 @@ ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0
 
 
 ## ROS API
+
+### MotorState msg
+There are a few differences between these topics and the old `/inspire/state` message.
+
+The new message, in `custom_ros_messages/msg/MotorState`, looks like
+```bash
+int32 mode
+float64 q
+float64 dq
+float64 ddq
+float64 tau
+float64 tau_lim
+float64 current
+float64 temperature
+float64 q_raw
+float64 dq_raw
+float64 tau_raw
+float64 tau_lim_raw
+```
+
+Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_raw` keeps it in the arbitrary 0-1000 units. Currently, `tau, tau_lim, tau_raw, tau_lim_raw` are all in the same 0-1000 units because we do not have reliable force calibration. This is because the Inspire conversion simply takes the raw unit, normalizes by 1000, and divides by gravitational acceleration (9.8 m/s^2). This would mean that the each actuator produces a maximum of **1 N** of force, which is meaningless  since 1) we expect a Nm measurement for motor torque, 2) the fingers have variable lengths and thus different ranges of contact forces, and 3) such a limit does not align with the provided specs, which lists grip forces exceeding >6 N.
 
 ### Published Topics
 
