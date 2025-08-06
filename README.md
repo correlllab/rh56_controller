@@ -22,12 +22,6 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which
 sudo systemctl stop inspire_hand.service 
 ``` 
 
-If for whatever reason `pyserial` is denied access to the hands USB device, run:
-```bash
-sudo chmod 666 /dev/ttyUSB0
-```
-This is a transient issue and has not cropped up for me after initial testing.
-
 ---
 
 To run the driver node, use the provided launch file. You can specify the serial port, which is `/dev/ttyUSB0` by default if not specified.
@@ -35,6 +29,12 @@ To run the driver node, use the provided launch file. You can specify the serial
 ```bash
 ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0
 ```
+
+If for whatever reason `pyserial` is denied access to the hands USB device, run:
+```bash
+sudo chmod 666 /dev/ttyUSB0
+```
+This is a transient issue and has not cropped up for me after initial testing.
 
 
 
@@ -83,7 +83,7 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
     *   Saves the current configuration to the hand's non-volatile memory.
 *   **TODO: `/hands/adaptive_force_control`** (`rh56_controller/srv/AdaptiveForce`)
     *   Executes the advanced adaptive force control routine. **DOES NOT WORK YET**
-* Preliminary feature: named gestures `{name: String: angles: List[Int]}` in the [`rh56_driver.py:self._gesture_library`](https://github.com/correlllab/rh56_controller/blob/dcda3061751199523323d6b24221c99eade7b0a5/rh56_controller/rh56_driver.py#L78) class dictionary will autogenerate `/hands/<gesture>`, `/hands/left/<gesture>`, and `/hands/right/<gesture>` services. Run `ros2 service list | grep '^/hands/'` to see the full list of generated services. These are generic `Trigger` services and can be run with: 
+* Preliminary feature: named gestures `{name: String: angles: List[Int]}` in the [`rh56_driver.py:self._gesture_library`](https://github.com/correlllab/rh56_controller/blob/dcda3061751199523323d6b24221c99eade7b0a5/rh56_controller/rh56_driver.py#L78) class dictionary will autopopulate `/hands/<gesture>`, `/hands/left/<gesture>`, and `/hands/right/<gesture>` services. Run `ros2 service list | grep '^/hands/'` to see the full list of generated services. These are generic `Trigger` services and can be run with: 
     * ```bash
         ros2 service call /hands/<gesture> std_srvs/srv/Trigger
         ros2 service call /hands/left/<gesture> std_srvs/srv/Trigger
@@ -102,18 +102,6 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
         /hands/right/open
         /hands/right/pinch
         /hands/right/point
----
-*Note on Poll Rate*
-
-Currently only the `q, tau` are read from the hands and published to `/hands/state`. This is because the hands are on the same serial device with different slave IDs. While I am able to send separate, async commands to the hands for some reason, async read operations overlap and cause serial bus errors. So, we read and build the `/hands/state` with these four sequential calls:
-```
-right_angles = self.righthand.angle_read()
-right_forces = self.righthand.force_act()
-left_angles = self.lefthand.angle_read()
-left_forces = self.lefthand.force_act()
-```
-
-Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS overhead, the 41.67 Hz poll rate is closer to 40.2 Hz. This should be fast enough but I welcome any efforts to potentially double this by asynchronously reading.
 ## Examples
 
 ### Close the Index Finger
@@ -143,7 +131,19 @@ ros2 service call /adaptive_force_control rh56_controller/srv/AdaptiveForce '{
 ```
 
 ---
+*Note on Poll Rate*
 
+Currently only the `q, tau` are read from the hands and published to `/hands/state`. This is because the hands are on the same serial device with different slave IDs. While I am able to send separate, async commands to the hands for some reason, async read operations overlap and cause serial bus errors. So, we read and build the `/hands/state` with these four sequential calls:
+```
+right_angles = self.righthand.angle_read()
+right_forces = self.righthand.force_act()
+left_angles = self.lefthand.angle_read()
+left_forces = self.lefthand.force_act()
+```
+
+Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS overhead, the 41.67 Hz poll rate is closer to 40.2 Hz. This should be fast enough but I welcome any efforts to potentially double this by asynchronously reading.
+
+---
 <details>
 <summary><b>Legacy Python Script Documentation (Pre-ROS)</b></summary>
 
