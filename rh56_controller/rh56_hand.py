@@ -164,22 +164,46 @@ class RH56Hand:
 
     def current_read(self) -> Optional[List[int]]:
         """
-        Read six current values from the hand for each finger actuator, 12 bytes total.
+        Read current values from each finger actuator.
         
-        _ADDR_CURRENT = 0x063A (1594)
         Returns:
             Optional[List[int]]: List of current values for 6 fingers, or None if reading fails
+            Index mapping:
+            0 - Little finger current (1594-1595)
+            1 - Ring finger current (1596-1597)
+            2 - Middle finger current (1598-1599)
+            3 - Index finger current (1600-1601)
+            4 - Thumb bending current (1602-1603)
+            5 - Thumb rotation current (1604-1605)
+            
+            Current values range from 0-1000 mA
+            Unit: mA (milliamps)
         """
-        # 12 bytes of current data (2 bytes per actuator)
+        # CURRENT: 0x063A (1594), 12 bytes (6 fingers × 2 bytes)
         response = self._send_frame(
             command=_CMD_READ,
             address=_ADDR_CURRENT,
-            data=bytes([0x06])
+            data=bytes([0x0C])  # 12 bytes
         )
         if parsed := self._parse_response(response):
-            raw_data = parsed[7:-1]
-            return list(raw_data[:6])  # Extract first 6 bytes as temperatures
-        return None
+            try:
+                raw_data = parsed[7:-1]  # Skip header, get payload
+                if len(raw_data) < 12:
+                    print(f"Warning: Current data incomplete, received {len(raw_data)} bytes, need 12 bytes")
+                    return None
+                currents = [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
+                return currents
+            except Exception as e:
+                print(f"Error parsing current data: {e}")
+                if parsed:
+                    print(f"Raw data: {[hex(b) for b in parsed]}")
+                return None
+        else:
+            if response:
+                print(f"Unable to parse current response: {[hex(b) for b in response]}")
+            else:
+                print("No current response received")
+            return None
 
 
     def set_id(self, new_id: int):
