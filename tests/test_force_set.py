@@ -14,11 +14,12 @@ def test_force_set_and_close(hand, force_value):
     """
     try:
         # Set the same force threshold for all 6 fingers
-        force_thresholds = [force_value] * 6
-        print(f"Setting force thresholds to {force_value}g for all fingers...")
+        #force_thresholds = [1000,1000,force_value,1000,1000,1000]
+        #print(f"Setting force thresholds to {force_value}g for all fingers...")
         
         # Set force thresholds
-        response = hand.force_set(force_thresholds)
+        #response = hand.force_set(force_thresholds)
+        response = hand.current_limit_set([1000,1000,force_value,1000,1000,1000])
         if response is not None:
             print("Force thresholds set successfully!")
         else:
@@ -28,9 +29,10 @@ def test_force_set_and_close(hand, force_value):
         time.sleep(0.1)  # Brief pause
         
         # Close hand (set all angles to 0)
-        close_angles = [0] * 6
+        close_angles = [1000,1000,0,1000,1000,1000]
+        close_speed = [1000,1000,1000,1000,1000,1000]
         print("Closing hand (setting all angles to 0)...")
-        
+        response = hand.speed_set(close_speed)
         response = hand.angle_set(close_angles)
         if response is not None:
             print("Hand closed successfully!")
@@ -42,10 +44,12 @@ def test_force_set_and_close(hand, force_value):
         # Read force values 10 times, every 0.25 seconds
         print("\nReading force values ...")
         for i in range(10):
-            time.sleep(0.25)
+            time.sleep(0.5)
             actual_forces = hand.force_act()
+            actual_currents = hand.current_read()
             if actual_forces is not None:
                 print(f"Reading {i+1}: {actual_forces}")
+                print(f"Reading {i+1}: {actual_currents}")
             else:
                 print(f"Reading {i+1}: Failed to read force values")
             
@@ -76,7 +80,7 @@ def main():
                 
             elif user_input in ['open', 'o']:
                 # Open hand
-                open_angles = [1000] * 6
+                open_angles = [1000,1000,1000,1000,1000,1000]
                 print("Opening hand...")
                 response = hand.angle_set(open_angles)
                 if response is not None:
