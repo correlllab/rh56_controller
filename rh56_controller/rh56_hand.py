@@ -22,6 +22,7 @@ _ADDR_ANGLE_ACT = 0x060A           # 1546
 _ADDR_FORCE_ACT = 0x062E           # 1582
 _ADDR_CURRENT = 0x063A             # 1594
 _ADDR_TEMP = 0x0652                # 1618
+_ADDR_CURRENT_LIMIT = 0x03FC       # 1020
 
 
 class RH56Hand:
@@ -289,6 +290,48 @@ class RH56Hand:
             data=data
         )
         return self._parse_response(response)
+
+    def current_limit_set(self, limits: List[int]) -> Optional[List[int]]:
+        """
+        Set current protection values for each degree of freedom.
+
+        Args:
+            limits: List of 6 current protection values (0-1500) for each finger.
+                The mapping from index to finger is as follows:
+                CURRENT_LIMIT(0): Little finger current protection - Address 1020-1021
+                CURRENT_LIMIT(1): Ring finger current protection - Address 1022-1023
+                CURRENT_LIMIT(2): Middle finger current protection - Address 1024-1025
+                CURRENT_LIMIT(3): Index finger current protection - Address 1026-1027
+                CURRENT_LIMIT(4): Thumb bending current protection - Address 1028-1029
+                CURRENT_LIMIT(5): Thumb rotation current protection - Address 1030-1031
+            
+            Note: If current exceeds this value during finger movement, the finger will 
+                  stop moving, and it will be indicated in the finger status register 
+                  "STATUS(m)" that the finger stops due to current protection.
+                  These parameters can be saved after power failure.
+                  Unit: mA.
+
+        Returns:
+            Optional[List[int]]: Response data if successful, None otherwise
+        """
+        if len(limits) != 6:
+            raise ValueError("Need 6 current limit values")
+
+        data = b''
+        for limit_val in limits:
+            if not (0 <= limit_val <= 1500):
+                raise ValueError("Current limit value must be between 0 and 1500")
+            data += struct.pack('<h', limit_val)  # short is 'h'
+
+        # Base address for CURRENT_LIMIT(0) is 1020 (0x03FC).
+        # The command writes 12 bytes, covering CURRENT_LIMIT(0) through CURRENT_LIMIT(5).
+        response = self._send_frame(
+            command=_CMD_WRITE,
+            address=_ADDR_CURRENT_LIMIT,
+            data=data
+        )
+        return self._parse_response(response)
+
 
     def gesture_force_clb(self, gesture_id: int):
         """
