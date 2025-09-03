@@ -14,12 +14,11 @@ def test_force_set_and_close(hand, force_value):
     """
     try:
         # Set the same force threshold for all 6 fingers
-        #force_thresholds = [1000,1000,force_value,1000,1000,1000]
-        #print(f"Setting force thresholds to {force_value}g for all fingers...")
+        force_thresholds = [1000,1000,force_value,1000,1000,1000]
+        print(f"Setting force thresholds to {force_value}g for all fingers...")
         
         # Set force thresholds
-        #response = hand.force_set(force_thresholds)
-        response = hand.current_limit_set([1000,1000,force_value,1000,1000,1000])
+        response = hand.force_set(force_thresholds)
         if response is not None:
             print("Force thresholds set successfully!")
         else:
@@ -29,11 +28,15 @@ def test_force_set_and_close(hand, force_value):
         time.sleep(0.1)  # Brief pause
         
         # Close hand (set all angles to 0)
-        close_angles = [1000,1000,0,1000,1000,1000]
+        close_angles = [1000,1000,500,1000,1000,1000]
         close_speed = [1000,1000,1000,1000,1000,1000]
-        print("Closing hand (setting all angles to 0)...")
         response = hand.speed_set(close_speed)
         response = hand.angle_set(close_angles)
+        close_angles = [1000,1000,0,1000,1000,1000]
+        close_speed = [1000,1000,10,1000,1000,1000]
+        response = hand.speed_set(close_speed)
+        response = hand.angle_set(close_angles)
+
         if response is not None:
             print("Hand closed successfully!")
             print("The fingers should stop when they reach the force threshold.")
@@ -46,10 +49,8 @@ def test_force_set_and_close(hand, force_value):
         for i in range(10):
             time.sleep(0.5)
             actual_forces = hand.force_act()
-            actual_currents = hand.current_read()
             if actual_forces is not None:
                 print(f"Reading {i+1}: {actual_forces}")
-                print(f"Reading {i+1}: {actual_currents}")
             else:
                 print(f"Reading {i+1}: Failed to read force values")
             
@@ -91,8 +92,10 @@ def main():
             elif user_input in ['read', 'r']:
                 # Read current force values
                 actual_forces = hand.force_act()
+                actual_angles = hand.angle_read()
                 if actual_forces is not None:
                     print(f"Current force values: {actual_forces}")
+                    print(f"Current angle values: {actual_angles}")
                 else:
                     print("Failed to read force values!")
                     
