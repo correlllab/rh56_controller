@@ -229,12 +229,14 @@ class RH56Hand:
                 print("No status response received")
             return None
 
-    def decode_status(self, status_values: List[int]) -> List[dict]:
+    def decode_status(self, status_values: List[int], invert_over_temp: bool = True) -> List[dict]:
         """
         Decode status values into human-readable format.
         
         Args:
             status_values: List of 6 status byte values from status_read()
+            invert_over_temp: If True, inverts the over-temperature bit logic 
+                            (1=normal, 0=error) due to apparent hardware behavior
         
         Returns:
             List[dict]: List of decoded status information for each finger
@@ -276,19 +278,29 @@ class RH56Hand:
             
             # Check each error bit
             for bit in range(5):  # Bits 0-4
-                if status_byte & (1 << bit):
-                    finger_status['errors'].append(error_bit_meanings[bit])
+                bit_is_set = bool(status_byte & (1 << bit))
+                
+                # Special handling for over-temperature bit (bit 1)
+                if bit == 1 and invert_over_temp:
+                    # Inverted logic: 1 = normal, 0 = error
+                    if not bit_is_set:
+                        finger_status['errors'].append(error_bit_meanings[bit])
+                else:
+                    # Normal logic: 1 = error, 0 = normal
+                    if bit_is_set:
+                        finger_status['errors'].append(error_bit_meanings[bit])
             
             decoded_status.append(finger_status)
         
         return decoded_status
 
-    def print_status(self, status_values: Optional[List[int]] = None):
+    def print_status(self, status_values: Optional[List[int]] = None, invert_over_temp: bool = True):
         """
         Read and print status information in human-readable format.
         
         Args:
             status_values: Optional status values. If None, will read current status.
+            invert_over_temp: If True, inverts over-temperature bit logic
         """
         if status_values is None:
             status_values = self.status_read()
@@ -296,7 +308,7 @@ class RH56Hand:
                 print("Failed to read status information")
                 return
         
-        decoded = self.decode_status(status_values)
+        decoded = self.decode_status(status_values, invert_over_temp=invert_over_temp)
         
         print("=== Hand Status Information ===")
         print("Finger           | Status Code | Status Meaning                               | Errors")
