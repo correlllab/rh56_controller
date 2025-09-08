@@ -9,6 +9,11 @@ def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=16
     """
     Test middle finger force monitoring at specified frequency
     
+    OPTIMIZATION: This version only reads angles when absolutely necessary:
+    - When target force is reached (to stop movement)
+    - Every 50 iterations for status display
+    This reduces serial communication by ~50% compared to reading both force and angle every iteration.
+    
     Args:
         hand: RH56Hand instance
         target_force: Target force for middle finger (0-1000 grams)
@@ -61,17 +66,45 @@ def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=16
             while monitoring:
                 loop_start = time.time()
                 
-                # Read current forces and angles
+                # OPTIMIZATION: Only read forces in main loop, angles only when needed
                 current_forces = hand.force_act()
-                current_angles = hand.angle_read()
-                
-                if current_forces is None or current_angles is None:
-                    print(f"Iteration {iteration_count}: Failed to read data")
-                    time.sleep(sleep_time)
+                if current_forces is None:
+                    print(f"Iteration {iteration_count}: Failed to read forces")
+                    time.sleep(sleep_time * 0.1)
                     continue
                 
                 middle_finger_force = current_forces[2]  # Index 2 is middle finger
-                middle_finger_angle = current_angles[2]
+                
+                # Only read angles when absolutely necessary
+                middle_finger_angle = None
+                read_angles_this_iteration = False
+                
+                # Case 1: Force reached - MUST read angles to stop movement
+                if not force_reached and middle_finger_force >= target_force:
+                    current_angles = hand.angle_read()
+                    if current_angles is None:
+                        print(f"Iteration {iteration_count}: CRITICAL - Failed to read angles when force reached!")
+                        continue
+                    middle_finger_angle = current_angles[2]
+                    read_angles_this_iteration = True
+                
+                # Case 2: Status display every 50 iterations
+                elif iteration_count % 50 == 0:
+                    current_angles = hand.angle_read()
+                    if current_angles is not None:
+                        middle_finger_angle = current_angles[2]
+                        read_angles_this_iteration = True
+                    else:
+                        middle_finger_angle = -1  # Indicate read failure
+                
+                # Case 3: Use last known angle for other cases
+                else:
+                    # Use a reasonable default or last known value
+                    middle_finger_angle = getattr(test_middle_finger_force_monitor, '_last_angle', 500)
+                
+                # Store last known angle for future use
+                if read_angles_this_iteration and middle_finger_angle is not None and middle_finger_angle != -1:
+                    test_middle_finger_force_monitor._last_angle = middle_finger_angle
                 
                 # Check if target force reached
                 if not force_reached and middle_finger_force >= target_force:
@@ -79,6 +112,7 @@ def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=16
                     final_angle = middle_finger_angle
                     
                     # Stop middle finger by setting its angle to current position
+                    # We already have current_angles from the force-reached case above
                     stop_angles = current_angles.copy()
                     stop_angles[2] = middle_finger_angle  # Keep current position
                     
@@ -97,17 +131,31 @@ def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=16
                     elapsed_time = time.time() - start_time
                     actual_freq = iteration_count / elapsed_time if elapsed_time > 0 else 0
                     status = "STOPPED" if force_reached else "MOVING"
+                    
+                    # Format angle display based on whether we read it this iteration
+                    if middle_finger_angle == -1:
+                        angle_str = "ERR"
+                    elif read_angles_this_iteration:
+                        angle_str = f"{middle_finger_angle:4d}"
+                    else:
+                        angle_str = f"{middle_finger_angle:4d}*"  # * indicates estimated/cached value
+                    
                     print(f"Iter {iteration_count:4d} | Time: {elapsed_time:5.2f}s | "
-                          f"Force: {middle_finger_force:3d}g | Angle: {middle_finger_angle:4d} | "
+                          f"Force: {middle_finger_force:3d}g | Angle: {angle_str} | "
                           f"Freq: {actual_freq:5.1f}Hz | Status: {status}")
                 
-                # Check if finger reached target angle (close enough to 0) or force reached
-                if force_reached or abs(middle_finger_angle - 0) <= 10:
-                    if not force_reached:
-                        print(f"\nMiddle finger reached target angle: {middle_finger_angle}")
-                        final_angle = middle_finger_angle
+                # Check if force reached (primary exit condition)
+                # Only check angle-based exit if we actually read angles this iteration
+                if force_reached:
                     monitoring = False
                     break
+                elif read_angles_this_iteration and middle_finger_angle is not None and middle_finger_angle != -1:
+                    # Only check angle-based exit when we have fresh angle data
+                    if abs(middle_finger_angle - 0) <= 10:
+                        print(f"\nMiddle finger reached target angle: {middle_finger_angle}")
+                        final_angle = middle_finger_angle
+                        monitoring = False
+                        break
                 
                 iteration_count += 1
                 
@@ -214,9 +262,11 @@ def main():
                     else:
                         monitoring_freq = 165
                     
-                    print(f"\n--- Middle Finger Force Monitoring Test ---")
+                    print(f"\n--- OPTIMIZED Middle Finger Force Monitoring Test ---")
                     print(f"Target force: {target_force}g")
                     print(f"Monitoring frequency: {monitoring_freq}Hz")
+                    print("OPTIMIZATION: Angles read only when force reached or for status display")
+                    print("Expected performance gain: ~50% reduction in serial communication")
                     
                     success = test_middle_finger_force_monitor(hand, target_force, monitoring_freq)
                     
