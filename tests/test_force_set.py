@@ -4,7 +4,7 @@ import time
 sys.path.append("../")
 from rh56_controller.rh56_hand import RH56Hand
 
-def test_force_set_and_close(hand, force_value):
+def test_force_set_and_close(hand, force_value, speed_value):
     """
     Test force_set functionality by setting force threshold and closing hand
     
@@ -28,12 +28,13 @@ def test_force_set_and_close(hand, force_value):
         time.sleep(0.1)  # Brief pause
         
         # Close hand (set all angles to 0)
-        close_angles = [1000,1000,500,1000,1000,1000]
-        close_speed = [1000,1000,1000,1000,1000,1000]
-        response = hand.speed_set(close_speed)
-        response = hand.angle_set(close_angles)
+        #close_angles = [1000,1000,450,1000,1000,1000]
+        #close_speed = [1000,1000,1000,1000,1000,1000]
+        #response = hand.speed_set(close_speed)
+        #response = hand.angle_set(close_angles)
+        #time.sleep(0.5)  # Wait for a moment before final close
         close_angles = [1000,1000,0,1000,1000,1000]
-        close_speed = [1000,1000,10,1000,1000,1000]
+        close_speed = [1000,1000,speed_value,1000,1000,1000]
         response = hand.speed_set(close_speed)
         response = hand.angle_set(close_angles)
 
@@ -79,10 +80,15 @@ def main():
                 print("Exiting...")
                 break
                 
+            elif user_input in ['status','s']:
+                hand.print_status()
+            elif user_input in ['clear','c']:
+                hand.clear_errors()
             elif user_input in ['open', 'o']:
                 # Open hand
                 open_angles = [1000,1000,1000,1000,1000,1000]
                 print("Opening hand...")
+                response = hand.speed_set([1000,1000,1000,1000,1000,1000])
                 response = hand.angle_set(open_angles)
                 if response is not None:
                     print("Hand opened successfully!")
@@ -103,8 +109,10 @@ def main():
                 force_value = int(user_input)
                 
                 if 0 <= force_value <= 1000:
+                    user_input = input("\nEnter the speed you need: ")
+                    speed_value = int(user_input)
                     print(f"\n--- Testing with force threshold: {force_value}g ---")
-                    success = test_force_set_and_close(hand, force_value)
+                    success = test_force_set_and_close(hand, force_value, speed_value)
                     
                     if success:
                         print(f"✓ Force test completed with threshold {force_value}g")
