@@ -37,7 +37,7 @@ def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=16
         
         time.sleep(0.1)  # Brief pause
         
-        speeds = [1000, 1000, 1000, 1000, 1000, 1000]
+        speeds = [1000, 1000, 10, 1000, 1000, 1000]
         response = hand.speed_set(speeds)
         if response is None:
             print("Failed to set speeds!")

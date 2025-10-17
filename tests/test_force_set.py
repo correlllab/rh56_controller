@@ -28,13 +28,12 @@ def test_force_set_and_close(hand, force_value, speed_value):
         time.sleep(0.1)  # Brief pause
         
         # Close hand (set all angles to 0)
-        #close_angles = [1000,1000,450,1000,1000,1000]
-        #close_speed = [1000,1000,1000,1000,1000,1000]
-        #response = hand.speed_set(close_speed)
-        #response = hand.angle_set(close_angles)
-        #time.sleep(0.5)  # Wait for a moment before final close
+        close_angles = [1000,1000,500,1000,1000,1000]
+        close_speed = [1000,1000,1000,1000,1000,1000]
+        response = hand.speed_set(close_speed)
+        response = hand.angle_set(close_angles)
         close_angles = [1000,1000,0,1000,1000,1000]
-        close_speed = [1000,1000,speed_value,1000,1000,1000]
+        close_speed = [1000,1000,10,1000,1000,1000]
         response = hand.speed_set(close_speed)
         response = hand.angle_set(close_angles)
 
@@ -86,7 +85,7 @@ def main():
                 hand.clear_errors()
             elif user_input in ['open', 'o']:
                 # Open hand
-                open_angles = [1000,1000,1000,1000,1000,1000]
+                open_angles = [1000,1000,1000,1000,1000,0]
                 print("Opening hand...")
                 response = hand.speed_set([1000,1000,1000,1000,1000,1000])
                 response = hand.angle_set(open_angles)
