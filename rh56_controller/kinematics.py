@@ -99,7 +99,15 @@ class TorqueCalculator:
 
 # ================== Kinematic Model and Coordination ==================
 class FingerModel:
-    def __init__(self, l1: float, l2: float, base_offset: Tuple[float, float], is_thumb: bool = False):
+    def __init__(
+        self,
+        l1: float,
+        l2: float,
+        base_offset: Tuple[float, float],
+        is_thumb: bool = False,
+        base_rotation_deg: float = 0.0,
+        flexion_sign: float = 1.0,
+    ):
         """
         A 2D kinematic model for a single finger.
 
@@ -108,30 +116,45 @@ class FingerModel:
             l2: Length of the second phalanx.
             base_offset: (x, y) position of the finger's base in the hand's frame.
             is_thumb: Flag for thumb's reverse kinematics.
+            base_rotation_deg: Fixed rotation offset applied to the local frame (degrees).
+            flexion_sign: +1 for standard fingers, -1 when the finger curls in the opposite local Y direction.
         """
         self.l1 = l1
         self.l2 = l2
-        self.base_offset = np.array(base_offset)
+        self.base_offset = np.array(base_offset, dtype=float)
         self.is_thumb = is_thumb
+        self.base_rotation_rad = np.radians(base_rotation_deg)
+        self.flexion_sign = np.sign(flexion_sign) if flexion_sign != 0 else 1.0
         self.min_reach = abs(self.l1 - self.l2)
         self.max_reach = self.l1 + self.l2
+
+    def _rotation_matrix(self) -> np.ndarray:
+        """Return the rotation matrix from local to world coordinates."""
+        cos_rot = np.cos(self.base_rotation_rad)
+        sin_rot = np.sin(self.base_rotation_rad)
+        return np.array([[cos_rot, -sin_rot], [sin_rot, cos_rot]])
+
+    def world_to_local(self, point_world: np.ndarray) -> np.ndarray:
+        """Transform a world-space point into the finger's local frame."""
+        rot = self._rotation_matrix()
+        return rot.T @ (np.asarray(point_world) - self.base_offset)
 
     def forward_kinematics(self, theta: float) -> Tuple[np.ndarray, np.ndarray]:
         """Calculates joint and end-effector positions from a joint angle."""
         theta_rad = np.radians(theta)
-        if self.is_thumb:
-            x_joint = self.l1 * np.sin(theta_rad)
-            y_joint_local = -self.l1 * np.cos(theta_rad)
-            x_end = x_joint + self.l2 * np.sin(2 * theta_rad)
-            y_end_local = y_joint_local - self.l2 * np.cos(2 * theta_rad)
-        else:
-            x_joint = self.l1 * np.sin(theta_rad)
-            y_joint_local = self.l1 * np.cos(theta_rad)
-            x_end = x_joint + self.l2 * np.sin(2 * theta_rad)
-            y_end_local = y_joint_local + self.l2 * np.cos(2 * theta_rad)
+        x_joint_local = self.l1 * np.sin(theta_rad)
+        y_joint_local = self.flexion_sign * self.l1 * np.cos(theta_rad)
 
-        joint_world = self.base_offset + np.array([x_joint, y_joint_local])
-        end_world = self.base_offset + np.array([x_end, y_end_local])
+        x_end_local = x_joint_local + self.l2 * np.sin(2 * theta_rad)
+        y_end_local = y_joint_local + self.flexion_sign * self.l2 * np.cos(2 * theta_rad)
+
+        local_joint = np.array([x_joint_local, y_joint_local])
+        local_end = np.array([x_end_local, y_end_local])
+
+        rot = self._rotation_matrix()
+        joint_world = self.base_offset + rot @ local_joint
+        end_world = self.base_offset + rot @ local_end
+
         return joint_world, end_world
     
     def is_reachable(self, target_world: np.ndarray) -> bool:
@@ -165,19 +188,38 @@ class HandKinematics:
     """
     Manages the kinematic models for all fingers of the hand.
     """
-    def __init__(self):
+    def __init__(
+        self,
+        thumb_splay_deg: float = 53.6,
+        thumb_base_offset: Optional[Tuple[float, float]] = None,
+    ):
         # These base offsets are estimates and should be configured based on
         # the hand's physical properties and a defined coordinate frame.
         # Units are in meters.
+        self.thumb_splay_deg = thumb_splay_deg
+        thumb_base_rotation = 180.0 - self.thumb_splay_deg
+        # Slightly raise the thumb base so that a fully open thumb (theta=0)
+        # produces a fingertip with positive Y in the world frame.
+        default_thumb_base_offset = (-0.025, -0.075)
+        resolved_thumb_base_offset = thumb_base_offset or default_thumb_base_offset
         finger_params = {
             "pinky":  {'l1': 0.032, 'l2': 0.041, 'base_offset': (0.035, 0), 'is_thumb': False},
             "ring":   {'l1': 0.032, 'l2': 0.046, 'base_offset': (0.012, 0), 'is_thumb': False},
             "middle": {'l1': 0.032, 'l2': 0.051, 'base_offset': (-0.012, 0), 'is_thumb': False},
             "index":  {'l1': 0.032, 'l2': 0.046, 'base_offset': (-0.035, 0), 'is_thumb': False},
-            "thumb_bend": {'l1': 0.050, 'l2': 0.050, 'base_offset': (-0.025, -0.075), 'is_thumb': True},
+            # Thumb at physical location, rotated by calibrated thumb_splay_deg in forward kinematics
+            "thumb_bend": {
+                'l1': 0.050,
+                'l2': 0.050,
+                'base_offset': resolved_thumb_base_offset,
+                'is_thumb': True,
+                'base_rotation_deg': thumb_base_rotation,
+                'flexion_sign': -1.0,
+            },
         }
         self.fingers = {name: FingerModel(**params) for name, params in finger_params.items()}
         self.finger_names = list(self.fingers.keys())
+        self.thumb_base_offset = self.fingers["thumb_bend"].base_offset
 
     def solve_ik_for_finger(self, finger_name: str, target_world: np.ndarray) -> float:
         """
