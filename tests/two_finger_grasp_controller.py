@@ -130,9 +130,9 @@ def configure_hand(hand: RH56Hand, mode: ModeConfig) -> None:
         print("Failed to update force limits (continuing).")
 
 
-def build_angle_command(index_val: int, thumb_val: int, base_open: int = 1000) -> List[int]:
+def build_angle_command(index_val: int, thumb_val: int, base_value: int = 0) -> List[int]:
     """Construct a full 6-DOF angle list using index and thumb values."""
-    angles = [base_open] * 6
+    angles = [base_value] * 6
     angles[INDEX_IDX] = index_val
     angles[THUMB_BEND_IDX] = thumb_val
     return angles
