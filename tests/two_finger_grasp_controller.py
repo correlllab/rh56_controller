@@ -45,8 +45,9 @@ from workspace_lookup import WorkspaceLookup  # noqa: E402
 GRASP_STRATEGY = "simultaneous"
 # Options: "simultaneous", "stepped", "thumb_first", "index_first"
 
-STEP_SIZE = 20          # Used by stepped movements (controller units per step)
+STEP_SIZE = 20          # Default controller step per increment
 STEP_DELAY_SEC = 0.05   # Delay between intermediate updates
+FIXED_THUMB_POSITION = 850  # Default thumb bend position for the fixed-thumb mode
 
 HAND_PORT = "/dev/ttyUSB0"
 HAND_ID = 1
@@ -65,6 +66,12 @@ class ModeConfig:
     speeds: List[int]
     force_limits: List[int]
     description: str
+    use_synced_steps: bool = False
+    step_size: int = STEP_SIZE
+    step_delay: float = STEP_DELAY_SEC
+    fixed_thumb_position: Optional[int] = None
+    lock_thumb: bool = False
+    force_index_close: bool = False
 
 
 def prompt_int(prompt: str, minimum: int, maximum: int, default: Optional[int] = None) -> int:
@@ -82,17 +89,31 @@ def prompt_int(prompt: str, minimum: int, maximum: int, default: Optional[int] =
 
 def select_mode() -> ModeConfig:
     """Prompt once for mode selection and return the corresponding configuration."""
-    print("\nMode selection (enter 1, 2, or 3):")
+    print("\nMode selection (enter 1, 2, 3, or 4):")
     print("  1. High-speed grasp (speed=1000, force limit=1000)")
     print("  2. Slow speed (speed=1) with custom force limit")
     print("  3. Custom speed and force limit")
+    print(f"  4. Fixed-thumb pinch (thumb bend fixed at {FIXED_THUMB_POSITION}, index closes to 0)")
 
     while True:
         choice = input("Select mode: ").strip()
         if choice == "1":
             speeds = [1000] * 6
             forces = [1000] * 6
-            return ModeConfig(speeds, forces, "Mode 1: high-speed, no force limit")
+            step_size = prompt_int(
+                f"Enter synchronized step size (1-1000, default {STEP_SIZE}): ",
+                1,
+                1000,
+                default=STEP_SIZE,
+            )
+            return ModeConfig(
+                speeds,
+                forces,
+                f"Mode 1: high-speed with synchronized stepping (step size {step_size})",
+                use_synced_steps=True,
+                step_size=step_size,
+                step_delay=STEP_DELAY_SEC,
+            )
         if choice == "2":
             custom_force = prompt_int("Enter force limit for thumb/index (0-1000): ", 0, 1000)
             speeds = [1] * 6
@@ -114,7 +135,18 @@ def select_mode() -> ModeConfig:
                 forces,
                 f"Mode 3: custom speed={custom_speed}, force limit={custom_force}",
             )
-        print("Invalid mode. Please enter 1, 2, or 3.")
+        if choice == "4":
+            speeds = [1000] * 6
+            forces = [1000] * 6
+            return ModeConfig(
+                speeds,
+                forces,
+                f"Mode 4: fixed thumb at {FIXED_THUMB_POSITION}, index closes to 0",
+                fixed_thumb_position=FIXED_THUMB_POSITION,
+                lock_thumb=True,
+                force_index_close=True,
+            )
+        print("Invalid mode. Please enter 1, 2, 3, or 4.")
 
 
 def configure_hand(hand: RH56Hand, mode: ModeConfig) -> None:
@@ -159,10 +191,44 @@ def move_with_strategy(
     strategy: str,
     step_size: int,
     step_delay: float,
+    sync_steps: bool = False,
+    sync_step_size: int = STEP_SIZE,
+    sync_step_delay: float = STEP_DELAY_SEC,
 ) -> None:
     """Dispatch movement according to the configured strategy."""
     strategy = strategy.lower()
     current_angles = hand.angle_read() or [1000] * 6
+
+    if sync_steps:
+        move_indices = [INDEX_IDX, THUMB_BEND_IDX]
+        start_angles = current_angles[:]
+        max_delta = max(
+            abs(target_angles[idx] - start_angles[idx]) for idx in move_indices
+        )
+        if max_delta == 0:
+            apply_angles(hand, target_angles)
+            return
+
+        steps = max(1, math.ceil(max_delta / max(1, sync_step_size)))
+        print(f"Synchronized stepping ({steps} steps, step size {sync_step_size}).")
+
+        for step in range(1, steps + 1):
+            next_angles = start_angles[:]
+            for idx in range(6):
+                if idx in move_indices:
+                    start_val = start_angles[idx]
+                    end_val = target_angles[idx]
+                    next_angles[idx] = int(
+                        round(start_val + (end_val - start_val) * (step / steps))
+                    )
+                else:
+                    next_angles[idx] = target_angles[idx]
+            apply_angles(hand, next_angles)
+            time.sleep(sync_step_delay)
+
+        # Ensure final command matches target precisely.
+        apply_angles(hand, target_angles)
+        return
 
     if strategy == "simultaneous":
         apply_angles(hand, target_angles)
@@ -283,22 +349,57 @@ def main() -> None:
             print("Invalid input. Enter a distance in centimeters, 'o', or 'q'.")
             continue
 
-        result = lookup.get_positions_for_distance_cm(target_distance, return_details=True)
-        index_pos = result["index_position"]
-        thumb_pos = result["thumb_position"]
-        index_coords = result["index_coords"]
-        thumb_coords = result["thumb_coords"]
+        if mode.force_index_close:
+            index_pos = 0
+            thumb_pos = mode.fixed_thumb_position if mode.fixed_thumb_position is not None else 0
+            print("\nFixed-thumb mode: ignoring distance input and applying preset positions.")
 
-        print("\nLookup result:")
-        print(f"  Target distance: {target_distance:.2f} cm")
-        print(f"  Achieved distance: {result['actual_distance'] * 100:.3f} cm")
-        print(f"  Index position: {index_pos} (theta={result['index_theta']:.2f}°)")
-        print(f"  Thumb position: {thumb_pos} (theta={result['thumb_theta']:.2f}°)")
-        print(f"  Index world coords: ({index_coords[0]:.4f}, {index_coords[1]:.4f}) m")
-        print(f"  Thumb world coords: ({thumb_coords[0]:.4f}, {thumb_coords[1]:.4f}) m")
+            try:
+                actual_distance_m = lookup.get_distance_for_positions(index_pos, thumb_pos)
+            except Exception:
+                actual_distance_m = float("nan")
+
+            def coords_for(finger: str, position: int) -> tuple[float, float]:
+                table = lookup.tables[finger]
+                row = table[table['position'] == position]
+                if len(row) == 0:
+                    return (float("nan"), float("nan"))
+                return (float(row['x_world'].iloc[0]), float(row['y_world'].iloc[0]))
+
+            index_coords = coords_for('index', index_pos)
+            thumb_coords = coords_for('thumb_bend', thumb_pos)
+            print(f"  Index position: {index_pos}")
+            print(f"  Thumb position: {thumb_pos}")
+            if not math.isnan(actual_distance_m):
+                print(f"  Achieved distance (cm): {actual_distance_m * 100:.3f}")
+            print(f"  Index world coords: ({index_coords[0]:.4f}, {index_coords[1]:.4f}) m")
+            print(f"  Thumb world coords: ({thumb_coords[0]:.4f}, {thumb_coords[1]:.4f}) m")
+        else:
+            result = lookup.get_positions_for_distance_cm(target_distance, return_details=True)
+            index_pos = result["index_position"]
+            thumb_pos = result["thumb_position"]
+            index_coords = result["index_coords"]
+            thumb_coords = result["thumb_coords"]
+
+            print("\nLookup result:")
+            print(f"  Target distance: {target_distance:.2f} cm")
+            print(f"  Achieved distance: {result['actual_distance'] * 100:.3f} cm")
+            print(f"  Index position: {index_pos} (theta={result['index_theta']:.2f}°)")
+            print(f"  Thumb position: {thumb_pos} (theta={result['thumb_theta']:.2f}°)")
+            print(f"  Index world coords: ({index_coords[0]:.4f}, {index_coords[1]:.4f}) m")
+            print(f"  Thumb world coords: ({thumb_coords[0]:.4f}, {thumb_coords[1]:.4f}) m")
 
         target_angles = build_angle_command(index_pos, thumb_pos)
-        move_with_strategy(hand, target_angles, GRASP_STRATEGY, STEP_SIZE, STEP_DELAY_SEC)
+        move_with_strategy(
+            hand,
+            target_angles,
+            GRASP_STRATEGY,
+            STEP_SIZE,
+            STEP_DELAY_SEC,
+            sync_steps=mode.use_synced_steps,
+            sync_step_size=mode.step_size,
+            sync_step_delay=mode.step_delay,
+        )
 
         monitor_hand(hand, interval=0.5)
 
