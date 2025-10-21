@@ -107,6 +107,20 @@ def select_mode() -> ModeConfig:
         print("Invalid selection. Please enter '1' or '2'.")
 
 
+def prompt_speed_limit(default: int = 1000) -> int:
+    """Prompt for a global speed limit (0-1000)."""
+    prompt = f"Enter speed limit (0-1000, press Enter for {default}): "
+    while True:
+        raw = input(prompt).strip()
+        if not raw:
+            return default
+        if raw.isdigit():
+            value = int(raw)
+            if 0 <= value <= 1000:
+                return value
+        print("Please enter a number between 0 and 1000 (or press Enter for default).")
+
+
 def main() -> None:
     try:
         hand = RH56Hand(port=HAND_PORT, hand_id=HAND_ID)
@@ -117,6 +131,13 @@ def main() -> None:
 
     mode = select_mode()
     print(f"\n{mode.description}")
+
+    speed_limit = prompt_speed_limit()
+    speed_values = [speed_limit] * 6
+    if hand.speed_set(speed_values) is not None:
+        print(f"Speed limit applied: {speed_limit} for all fingers.")
+    else:
+        print("Failed to apply speed limit (continuing with previous settings).")
 
     # Apply initial posture for the selected mode
     apply_angles(hand, mode.initial_angles, "Initial posture")
