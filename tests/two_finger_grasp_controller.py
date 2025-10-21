@@ -47,7 +47,7 @@ GRASP_STRATEGY = "simultaneous"
 
 STEP_SIZE = 20          # Default controller step per increment
 STEP_DELAY_SEC = 0.05   # Delay between intermediate updates
-FIXED_THUMB_POSITION = 850  # Default thumb bend position for the fixed-thumb mode
+FIXED_THUMB_POSITION = 550  # Default thumb bend position for the fixed-thumb mode
 
 HAND_PORT = "/dev/ttyUSB0"
 HAND_ID = 1
@@ -338,7 +338,7 @@ def main() -> None:
         if user_input == "g":
             grasp_prep = [0] * 6
             grasp_prep[INDEX_IDX] = 1000
-            grasp_prep[THUMB_BEND_IDX] = 1000
+            grasp_prep[THUMB_BEND_IDX] = 550  # 550 is a good prep position for grabbing small objects
             print("Preparing for grasp: setting index/thumb bend to 1000, others to 0.")
             apply_angles(hand, grasp_prep)
             continue
