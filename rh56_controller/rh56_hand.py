@@ -14,7 +14,7 @@ _ADDR_GESTURE_FORCE_CLB = 0x03F1  # 1009
 _ADDR_FORCE_SET = 0x05DA           # 1498
 _ADDR_ANGLE_SET = 0x05CE           # 1486
 _ADDR_HAND_ID = 0x05E8             # 1000
-_ADDR_CLEAR_ERROR = 0x05EC         # 1004
+_ADDR_CLEAR_ERROR = 0x03EC         # 1004
 _ADDR_SAVE = 0x05ED               # 1005
 _ADDR_SPEED_SET = 0x05F2           # 1522
 
@@ -22,6 +22,8 @@ _ADDR_ANGLE_ACT = 0x060A           # 1546
 _ADDR_FORCE_ACT = 0x062E           # 1582
 _ADDR_CURRENT = 0x063A             # 1594
 _ADDR_TEMP = 0x0652                # 1618
+_ADDR_STATUS = 0x064C              # 1612
+_ADDR_CURRENT_LIMIT = 0x03FC       # 1020
 
 
 class RH56Hand:
@@ -161,24 +163,209 @@ class RH56Hand:
             return list(raw_data[:6])  # Extract first 6 bytes as temperatures
         return None
 
+    def status_read(self) -> Optional[List[int]]:
+        """
+        Read status information for each degree of freedom (DOF).
+        
+        This register group consists of six registers corresponding to the status information 
+        of the dexterous hand for 6 DOF.
+        
+        Address mapping:
+            1612 (0x064C) - STATUS(0): Little finger status
+            1613 (0x064D) - STATUS(1): Ring finger status  
+            1614 (0x064E) - STATUS(2): Middle finger status
+            1615 (0x064F) - STATUS(3): Index finger status
+            1616 (0x0650) - STATUS(4): Thumb bending status
+            1617 (0x0651) - STATUS(5): Thumb rotation status
+        
+        Status bit meanings:
+            Bit0: Locked-rotor error
+            Bit1: Over temperature error
+            Bit2: Over-current error
+            Bit3: Abnormal operation of the motor
+            Bit4: Communication error
+        
+        Status code meanings:
+            0: Unclenching
+            1: Grasping
+            2: Stop after reaching the target position
+            3: Stop after reaching the defined force control value
+            5: Stop due to current protection
+            6: Stop due to locked-rotor of the actuator
+            7: Stop due to actuator fault
+        
+        Returns:
+            Optional[List[int]]: List of status values for 6 fingers, or None if reading fails
+            Index mapping:
+            0 - Little finger status
+            1 - Ring finger status
+            2 - Middle finger status
+            3 - Index finger status
+            4 - Thumb bending status
+            5 - Thumb rotation status
+        """
+        # STATUS: 0x064C (1612), 6 bytes (1 byte per finger)
+        response = self._send_frame(
+            command=_CMD_READ,
+            address=_ADDR_STATUS,
+            data=bytes([0x06])  # 6 bytes
+        )
+        if parsed := self._parse_response(response):
+            try:
+                raw_data = parsed[7:-1]  # Skip header, get payload
+                if len(raw_data) < 6:
+                    print(f"Warning: Status data incomplete, received {len(raw_data)} bytes, need 6 bytes")
+                    return None
+                return list(raw_data[:6])  # Extract first 6 bytes as status values
+            except Exception as e:
+                print(f"Error parsing status data: {e}")
+                if parsed:
+                    print(f"Raw data: {[hex(b) for b in parsed]}")
+                return None
+        else:
+            if response:
+                print(f"Unable to parse status response: {[hex(b) for b in response]}")
+            else:
+                print("No status response received")
+            return None
+
+    def decode_status(self, status_values: List[int], invert_over_temp: bool = True) -> List[dict]:
+        """
+        Decode status values into human-readable format.
+        
+        Args:
+            status_values: List of 6 status byte values from status_read()
+            invert_over_temp: If True, inverts the over-temperature bit logic 
+                            (1=normal, 0=error) due to apparent hardware behavior
+        
+        Returns:
+            List[dict]: List of decoded status information for each finger
+        """
+        if len(status_values) != 6:
+            raise ValueError("Need 6 status values")
+        
+        finger_names = ["Little finger", "Ring finger", "Middle finger", 
+                       "Index finger", "Thumb bending", "Thumb rotation"]
+        
+        status_code_meanings = {
+            0: "Unclenching",
+            1: "Grasping", 
+            2: "Stop after reaching the target position",
+            3: "Stop after reaching the defined force control value",
+            5: "Stop due to current protection",
+            6: "Stop due to locked-rotor of the actuator",
+            7: "Stop due to actuator fault"
+        }
+        
+        error_bit_meanings = {
+            0: "Locked-rotor error",
+            1: "Over temperature error", 
+            2: "Over-current error",
+            3: "Abnormal operation of the motor",
+            4: "Communication error"
+        }
+        
+        decoded_status = []
+        
+        for i, status_byte in enumerate(status_values):
+            finger_status = {
+                'finger': finger_names[i],
+                'raw_value': status_byte,
+                'status_code': status_byte & 0x0F,  # Lower 4 bits
+                'status_meaning': status_code_meanings.get(status_byte & 0x0F, f"Unknown status code: {status_byte & 0x0F}"),
+                'errors': []
+            }
+            
+            # Check each error bit
+            for bit in range(5):  # Bits 0-4
+                bit_is_set = bool(status_byte & (1 << bit))
+                
+                # Special handling for over-temperature bit (bit 1)
+                if bit == 1 and invert_over_temp:
+                    # Inverted logic: 1 = normal, 0 = error
+                    if not bit_is_set:
+                        finger_status['errors'].append(error_bit_meanings[bit])
+                else:
+                    # Normal logic: 1 = error, 0 = normal
+                    if bit_is_set:
+                        finger_status['errors'].append(error_bit_meanings[bit])
+            
+            decoded_status.append(finger_status)
+        
+        return decoded_status
+
+    def print_status(self, status_values: Optional[List[int]] = None, invert_over_temp: bool = True):
+        """
+        Read and print status information in human-readable format.
+        
+        Args:
+            status_values: Optional status values. If None, will read current status.
+            invert_over_temp: If True, inverts over-temperature bit logic
+        """
+        if status_values is None:
+            status_values = self.status_read()
+            if status_values is None:
+                print("Failed to read status information")
+                return
+        
+        decoded = self.decode_status(status_values, invert_over_temp=invert_over_temp)
+        
+        print("=== Hand Status Information ===")
+        print("Finger           | Status Code | Status Meaning                               | Errors")
+        print("-" * 95)
+        
+        for finger_status in decoded:
+            finger = finger_status['finger']
+            code = finger_status['status_code']
+            meaning = finger_status['status_meaning']
+            errors = ", ".join(finger_status['errors']) if finger_status['errors'] else "None"
+            
+            print(f"{finger:16} | {code:11d} | {meaning:44} | {errors}")
+        
+        print("-" * 95)
+
     def current_read(self) -> Optional[List[int]]:
         """
-        Read six current values from the hand for each finger actuator, 12 bytes total.
+        Read current values from each finger actuator.
         
-        _ADDR_CURRENT = 0x063A (1594)
         Returns:
             Optional[List[int]]: List of current values for 6 fingers, or None if reading fails
+            Index mapping:
+            0 - Little finger current (1594-1595)
+            1 - Ring finger current (1596-1597)
+            2 - Middle finger current (1598-1599)
+            3 - Index finger current (1600-1601)
+            4 - Thumb bending current (1602-1603)
+            5 - Thumb rotation current (1604-1605)
+            
+            Current values range from 0-1000 mA
+            Unit: mA (milliamps)
         """
-        # 12 bytes of current data (2 bytes per actuator)
+        # CURRENT: 0x063A (1594), 12 bytes (6 fingers × 2 bytes)
         response = self._send_frame(
             command=_CMD_READ,
             address=_ADDR_CURRENT,
-            data=bytes([0x06])
+            data=bytes([0x0C])  # 12 bytes
         )
         if parsed := self._parse_response(response):
-            raw_data = parsed[7:-1]
-            return list(raw_data[:6])  # Extract first 6 bytes as temperatures
-        return None
+            try:
+                raw_data = parsed[7:-1]  # Skip header, get payload
+                if len(raw_data) < 12:
+                    print(f"Warning: Current data incomplete, received {len(raw_data)} bytes, need 12 bytes")
+                    return None
+                currents = [struct.unpack('<h', raw_data[i:i+2])[0] for i in range(0, 12, 2)]
+                return currents
+            except Exception as e:
+                print(f"Error parsing current data: {e}")
+                if parsed:
+                    print(f"Raw data: {[hex(b) for b in parsed]}")
+                return None
+        else:
+            if response:
+                print(f"Unable to parse current response: {[hex(b) for b in response]}")
+            else:
+                print("No current response received")
+            return None
 
 
     def set_id(self, new_id: int):
@@ -193,13 +380,79 @@ class RH56Hand:
         if self._parse_response(response):
             self.hand_id = new_id
 
-    def clear_errors(self):
-        # CLEAR_ERROR: 0x05EC (1004)
-        self._send_frame(
+    def clear_errors(self) -> Optional[List[int]]:
+        """
+        Clear all clearable errors in the dexterous hand.
+        
+        This function clears actuator errors such as:
+        - Locked-rotor errors
+        - Over-current errors  
+        - Abnormal operation errors
+        - Communication errors
+        
+        Address: 1004 (0x03EC)
+        Default value: 0
+        Range: 0-1
+        Note: This parameter cannot be saved (non-persistent)
+        
+        Returns:
+            Optional[List[int]]: Response data if successful, None otherwise
+        """
+        # CLEAR_ERROR: 0x03EC (1004)
+        response = self._send_frame(
             command=_CMD_WRITE,
             address=_ADDR_CLEAR_ERROR,
             data=bytes([1])
         )
+        return self._parse_response(response)
+
+    def clear_errors_and_check_status(self) -> dict:
+        """
+        Clear errors and then read status to verify clearance.
+        
+        Returns:
+            dict: Contains before/after status and clear operation result
+        """
+        result = {
+            'status_before': None,
+            'clear_response': None,
+            'status_after': None,
+            'errors_cleared': False,
+            'remaining_errors': []
+        }
+        
+        # Read status before clearing
+        result['status_before'] = self.status_read()
+        
+        # Clear errors
+        result['clear_response'] = self.clear_errors()
+        
+        # Wait a moment for the clear to take effect
+        import time
+        time.sleep(0.1)
+        
+        # Read status after clearing
+        result['status_after'] = self.status_read()
+        
+        # Check if errors were actually cleared
+        if result['status_before'] and result['status_after']:
+            before_decoded = self.decode_status(result['status_before'])
+            after_decoded = self.decode_status(result['status_after'])
+            
+            # Count total errors before and after
+            errors_before = sum(len(finger['errors']) for finger in before_decoded)
+            errors_after = sum(len(finger['errors']) for finger in after_decoded)
+            
+            result['errors_cleared'] = errors_after < errors_before
+            
+            # List remaining errors
+            for finger in after_decoded:
+                if finger['errors']:
+                    result['remaining_errors'].extend([
+                        f"{finger['finger']}: {error}" for error in finger['errors']
+                    ])
+        
+        return result
 
     def save_parameters(self):
         # SAVE: 0x05ED (1005)
@@ -289,6 +542,48 @@ class RH56Hand:
             data=data
         )
         return self._parse_response(response)
+
+    def current_limit_set(self, limits: List[int]) -> Optional[List[int]]:
+        """
+        Set current protection values for each degree of freedom.
+
+        Args:
+            limits: List of 6 current protection values (0-1500) for each finger.
+                The mapping from index to finger is as follows:
+                CURRENT_LIMIT(0): Little finger current protection - Address 1020-1021
+                CURRENT_LIMIT(1): Ring finger current protection - Address 1022-1023
+                CURRENT_LIMIT(2): Middle finger current protection - Address 1024-1025
+                CURRENT_LIMIT(3): Index finger current protection - Address 1026-1027
+                CURRENT_LIMIT(4): Thumb bending current protection - Address 1028-1029
+                CURRENT_LIMIT(5): Thumb rotation current protection - Address 1030-1031
+            
+            Note: If current exceeds this value during finger movement, the finger will 
+                  stop moving, and it will be indicated in the finger status register 
+                  "STATUS(m)" that the finger stops due to current protection.
+                  These parameters can be saved after power failure.
+                  Unit: mA.
+
+        Returns:
+            Optional[List[int]]: Response data if successful, None otherwise
+        """
+        if len(limits) != 6:
+            raise ValueError("Need 6 current limit values")
+
+        data = b''
+        for limit_val in limits:
+            if not (0 <= limit_val <= 1500):
+                raise ValueError("Current limit value must be between 0 and 1500")
+            data += struct.pack('<h', limit_val)  # short is 'h'
+
+        # Base address for CURRENT_LIMIT(0) is 1020 (0x03FC).
+        # The command writes 12 bytes, covering CURRENT_LIMIT(0) through CURRENT_LIMIT(5).
+        response = self._send_frame(
+            command=_CMD_WRITE,
+            address=_ADDR_CURRENT_LIMIT,
+            data=data
+        )
+        return self._parse_response(response)
+
 
     def gesture_force_clb(self, gesture_id: int):
         """
