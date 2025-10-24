@@ -2,15 +2,15 @@
 """
 Fixed-thumb grasp controller with two grasp presets.
 
-Mode 1 (large object):
-    - Thumb bend starts at 1000, thumb rotation at 0.
-    - All other fingers start at 1000.
-    - Command '1' closes every finger (including thumb rotation) to 0.
+Mode 1 (precision grasp):
+    - Prompts for object length in centimeters.
+    - Prepares hand as [1000, 1000, 1000, 1000, x, y] based on length:
+        * length < 5 cm  -> x=650, y=150, closes index finger to 0.
+        * length >= 5 cm -> x=1000, y=0, closes index & middle fingers to 0.
+    - Grasp motion runs at speed 500 (all fingers) and afterwards restores speeds to 1000.
 
-Mode 2 (small object pinch):
-    - Thumb bend fixed at 550, thumb rotation at 0.
-    - Index finger starts at 1000, remaining fingers at 0.
-    - Command '1' closes only the index finger to 0 (thumb stays fixed).
+Mode 2 (full-hand grasp):
+    - Matches the previous Mode 1 hand behavior (all fingers close from 1000 to 0).
 
 Common utilities:
     - 'g' : prepare-to-grab posture (index/thumb bend 1000, others 0)
@@ -26,7 +26,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 
 # Ensure project root is on sys.path for imports
@@ -52,23 +52,20 @@ HAND_PORT = "/dev/ttyUSB0"
 HAND_ID = 1
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModeConfig:
     description: str
     initial_angles: List[int]
     close_angles: List[int]
+    speed_override: Optional[List[int]] = None
+    speed_restore: Optional[List[int]] = None
 
 
 MODE_PRESETS = {
-    "1": ModeConfig(
-        description="Mode 1 (large object): thumb bend 1000, all fingers start at 1000. '1' closes all to 0.",
+    "2": ModeConfig(
+        description="Mode 2 (full-hand grasp): thumb bend 1000, all fingers start at 1000. '1' closes all to 0.",
         initial_angles=[1000, 1000, 1000, 1000, 1000, 0],
         close_angles=[0, 0, 0, 0, 0, 0],
-    ),
-    "2": ModeConfig(
-        description="Mode 2 (small object pinch): thumb bend 550, others 0 except index 1000. '1' closes index to 0.",
-        initial_angles=[0, 0, 0, 1000, 550, 0],
-        close_angles=[0, 0, 0, 0, 550, 0],
     ),
 }
 
@@ -89,22 +86,66 @@ def prepare_to_grab(hand: RH56Hand) -> None:
 
 
 def fully_open(hand: RH56Hand) -> None:
-    """Open all joints to 1000."""
-    posture = [1000] * 6
-    apply_angles(hand, posture, "Fully open posture")
+    """Clear errors and open all joints to 1000 without logging."""
+    hand.clear_errors()
+    hand.angle_set([1000] * 6)
 
 
-def select_mode() -> ModeConfig:
-    """Prompt user until a valid mode is selected."""
+def select_mode() -> str:
+    """Prompt user until a valid mode choice (1 or 2) is selected."""
     print("\nAvailable modes:")
-    for mode_id, cfg in MODE_PRESETS.items():
-        print(f"  {mode_id}. {cfg.description}")
+    print("  1. Mode 1 (precision grasp with fixed thumb)")
+    print("  2. Mode 2 (full-hand grasp)")
 
     while True:
         choice = input("Select mode (1/2): ").strip()
-        if choice in MODE_PRESETS:
-            return MODE_PRESETS[choice]
+        if choice in {"1", "2"}:
+            return choice
         print("Invalid selection. Please enter '1' or '2'.")
+
+
+def prompt_object_length() -> float:
+    """Ask the user for object length in centimeters."""
+    while True:
+        raw = input("Enter object length (cm): ").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            print("Please enter a valid number (e.g., 4.5).")
+            continue
+        if value <= 0:
+            print("Length must be positive.")
+            continue
+        return value
+
+
+def configure_precision_mode(length_cm: float) -> ModeConfig:
+    """Construct precision grasp configuration based on object length."""
+    if length_cm < 5.0:
+        thumb_bend = 650
+        thumb_rotation = 150
+        description = (
+            "Mode 1 (precision grasp): length < 5 cm -> thumb bend 650, thumb rotation 150, "
+            "close index finger to 0 at speed 500."
+        )
+        initial = [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation]
+        close = initial.copy()
+        close[INDEX_IDX] = 0
+    else:
+        thumb_bend = 1000
+        thumb_rotation = 0
+        description = (
+            "Mode 1 (precision grasp): length >= 5 cm -> thumb bend 1000, thumb rotation 0, "
+            "close index and middle fingers to 0 at speed 500."
+        )
+        initial = [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation]
+        close = initial.copy()
+        close[INDEX_IDX] = 0
+        close[MIDDLE_IDX] = 0
+
+    speed_override = [500] * 6
+    speed_restore = [1000] * 6
+    return ModeConfig(description, initial, close, speed_override, speed_restore)
 
 
 def prompt_speed_limit(default: int = 1000) -> int:
@@ -129,8 +170,16 @@ def main() -> None:
         print(f"Failed to initialize RH56 hand: {exc}")
         return
 
-    mode = select_mode()
-    print(f"\n{mode.description}")
+    mode_choice = select_mode()
+
+    if mode_choice == "1":
+        length_cm = prompt_object_length()
+        mode = configure_precision_mode(length_cm)
+        print(f"\nSelected Mode 1 with object length {length_cm:.2f} cm")
+        print(mode.description)
+    else:
+        mode = MODE_PRESETS[mode_choice]
+        print(f"\n{mode.description}")
 
     speed_limit = prompt_speed_limit()
     speed_values = [speed_limit] * 6
@@ -145,7 +194,7 @@ def main() -> None:
     print("\nCommands:")
     print("  1 - execute grasp action for current mode")
     print("  g - prepare-to-grab posture (index/thumb bend 1000, others 0)")
-    print("  o - fully open hand (all joints 1000)")
+    print("  o - clear errors then fully open hand (silent)")
     print("  c - clear errors")
     print("  s - print status")
     print("  q - quit\n")
@@ -158,7 +207,19 @@ def main() -> None:
             break
 
         if cmd == "1":
+            if mode.speed_override:
+                if hand.speed_set(mode.speed_override) is not None:
+                    print(f"Applied temporary speed override: {mode.speed_override[0]}")
+                else:
+                    print("Failed to apply temporary speed override.")
+
             apply_angles(hand, mode.close_angles, "Grasp command")
+
+            if mode.speed_restore:
+                if hand.speed_set(mode.speed_restore) is not None:
+                    print("Speeds restored to 1000.")
+                else:
+                    print("Failed to restore speeds to 1000.")
             continue
 
         if cmd == "g":
