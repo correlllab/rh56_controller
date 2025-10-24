@@ -511,12 +511,12 @@ class RH56Hand:
         Args:
             speeds: List of 6 speed values (0-1000) for each finger.
                 The mapping from index to finger is as follows:
-                SPEED_SET(0): 小拇指速度设置值 (Pinky finger speed) - Address 1522-1523
-                SPEED_SET(1): 无名指速度设置值 (Ring finger speed) - Address 1524-1525
-                SPEED_SET(2): 中指速度设置值 (Middle finger speed) - Address 1526-1527
-                SPEED_SET(3): 食指速度设置值 (Index finger speed) - Address 1528-1529
-                SPEED_SET(4): 大拇指弯曲速度设置值 (Thumb bend speed) - Address 1530-1531
-                SPEED_SET(5): 大拇指旋转速度设置值 (Thumb rotation speed) - Address 1532-1533
+                SPEED_SET(0): Pinky finger speed - Address 1522-1523
+                SPEED_SET(1): Ring finger speed - Address 1524-1525
+                SPEED_SET(2): Middle finger speed - Address 1526-1527
+                SPEED_SET(3): Index finger speed - Address 1528-1529
+                SPEED_SET(4): Thumb bend speed - Address 1530-1531
+                SPEED_SET(5): Thumb rotation speed - Address 1532-1533
             
             Note: A speed value of 1000 indicates that it takes approximately 800ms 
                   for the finger to move from its maximum to minimum angle under no load. 
