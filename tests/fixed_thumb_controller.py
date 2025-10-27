@@ -3,11 +3,17 @@
 Fixed-thumb grasp controller with two grasp presets.
 
 Mode 1 (precision grasp):
-    - Prompts for object length in centimeters.
-    - Prepares hand as [1000, 1000, 1000, 1000, x, y] based on length:
-        * length < 5 cm  -> x=650, y=150, closes index finger to 0.
-        * length >= 5 cm -> x=1000, y=0, closes index & middle fingers to 0.
-    - Grasp motion runs at speed 500 (all fingers) and afterwards restores speeds to 1000.
+    - Prompts for object length and width in centimeters.
+    - Determines number of fingers:
+        * length < 5 cm  -> use index + thumb (two-finger strategy, thumb rotation = 150)
+        * 5 cm ≤ length ≤ 10 cm -> use index + middle + thumb (three fingers, thumb rotation = 0)
+        * length > 10 cm -> use index + middle + ring + thumb (four fingers, thumb rotation = 0)
+    - Thumb bend preset from width:
+        * width < 3 cm  -> 650
+        * 3 cm ≤ width < 5 cm -> 800
+        * width ≥ 5 cm -> 1000
+    - Prepares hand as [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation] and
+      closes the selected fingers at speed 500 before restoring speeds to 1000.
 
 Mode 2 (full-hand grasp):
     - Matches the previous Mode 1 hand behavior (all fingers close from 1000 to 0).
@@ -59,6 +65,7 @@ class ModeConfig:
     close_angles: List[int]
     speed_override: Optional[List[int]] = None
     speed_restore: Optional[List[int]] = None
+    prepare_angles: Optional[List[int]] = None
 
 
 MODE_PRESETS = {
@@ -66,6 +73,7 @@ MODE_PRESETS = {
         description="Mode 2 (full-hand grasp): thumb bend 1000, all fingers start at 1000. '1' closes all to 0.",
         initial_angles=[1000, 1000, 1000, 1000, 1000, 0],
         close_angles=[0, 0, 0, 0, 0, 0],
+        prepare_angles=[1000, 1000, 1000, 1000, 1000, 0],
     ),
 }
 
@@ -79,9 +87,9 @@ def apply_angles(hand: RH56Hand, angles: Sequence[int], label: str) -> None:
         print(f"Failed to apply angles for {label}.")
 
 
-def prepare_to_grab(hand: RH56Hand) -> None:
-    """Set index/thumb bend to 1000, others to 0."""
-    posture = [0, 0, 0, 1000, 1000, 0]
+def prepare_to_grab(hand: RH56Hand, mode: ModeConfig) -> None:
+    """Apply the mode-specific pre-grasp posture."""
+    posture = mode.prepare_angles or mode.initial_angles
     apply_angles(hand, posture, "Prepare-to-grab posture")
 
 
@@ -119,33 +127,57 @@ def prompt_object_length() -> float:
         return value
 
 
-def configure_precision_mode(length_cm: float) -> ModeConfig:
-    """Construct precision grasp configuration based on object length."""
+def prompt_object_width() -> float:
+    """Ask the user for object width in centimeters."""
+    while True:
+        raw = input("Enter object width (cm): ").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            print("Please enter a valid number (e.g., 2.8).")
+            continue
+        if value <= 0:
+            print("Width must be positive.")
+            continue
+        return value
+
+
+def configure_precision_mode(length_cm: float, width_cm: float) -> ModeConfig:
+    """Construct precision grasp configuration based on object dimensions."""
     if length_cm < 5.0:
-        thumb_bend = 650
+        fingers = 2
         thumb_rotation = 150
-        description = (
-            "Mode 1 (precision grasp): length < 5 cm -> thumb bend 650, thumb rotation 150, "
-            "close index finger to 0 at speed 500."
-        )
-        initial = [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation]
-        close = initial.copy()
-        close[INDEX_IDX] = 0
+    elif length_cm <= 10.0:
+        fingers = 3
+        thumb_rotation = 0
+    else:
+        fingers = 4
+        thumb_rotation = 0
+
+    if width_cm < 3.0:
+        thumb_bend = 650
+    elif width_cm < 5.0:
+        thumb_bend = 800
     else:
         thumb_bend = 1000
-        thumb_rotation = 0
-        description = (
-            "Mode 1 (precision grasp): length >= 5 cm -> thumb bend 1000, thumb rotation 0, "
-            "close index and middle fingers to 0 at speed 500."
-        )
-        initial = [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation]
-        close = initial.copy()
+
+    description = (
+        f"Mode 1 (precision grasp): length={length_cm:.2f} cm, width={width_cm:.2f} cm -> "
+        f"{fingers}-finger strategy, thumb bend {thumb_bend}, thumb rotation {thumb_rotation}."
+    )
+
+    initial = [1000, 1000, 1000, 1000, thumb_bend, thumb_rotation]
+    close = initial.copy()
+    if fingers >= 2:
         close[INDEX_IDX] = 0
+    if fingers >= 3:
         close[MIDDLE_IDX] = 0
+    if fingers >= 4:
+        close[RING_IDX] = 0
 
     speed_override = [500] * 6
     speed_restore = [1000] * 6
-    return ModeConfig(description, initial, close, speed_override, speed_restore)
+    return ModeConfig(description, initial, close, speed_override, speed_restore, prepare_angles=initial.copy())
 
 
 def prompt_speed_limit(default: int = 1000) -> int:
@@ -174,8 +206,9 @@ def main() -> None:
 
     if mode_choice == "1":
         length_cm = prompt_object_length()
-        mode = configure_precision_mode(length_cm)
-        print(f"\nSelected Mode 1 with object length {length_cm:.2f} cm")
+        width_cm = prompt_object_width()
+        mode = configure_precision_mode(length_cm, width_cm)
+        print(f"\nSelected Mode 1 with object length {length_cm:.2f} cm, width {width_cm:.2f} cm")
         print(mode.description)
     else:
         mode = MODE_PRESETS[mode_choice]
@@ -193,7 +226,7 @@ def main() -> None:
 
     print("\nCommands:")
     print("  1 - execute grasp action for current mode")
-    print("  g - prepare-to-grab posture (index/thumb bend 1000, others 0)")
+    print("  g - prepare-to-grab posture (mode-specific)")
     print("  o - clear errors then fully open hand (silent)")
     print("  c - clear errors")
     print("  s - print status")
@@ -223,7 +256,7 @@ def main() -> None:
             continue
 
         if cmd == "g":
-            prepare_to_grab(hand)
+            prepare_to_grab(hand, mode)
             continue
 
         if cmd == "o":
