@@ -111,24 +111,90 @@ The joints on the hand are ordered as such: `[pinky, ring, middle, index, thumb_
  ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 0, 1000, 1000], hand: 'both'}"
 ```
 
-### Calibrate the Sensors --- UNTESTED, DOES NOT WORK PROBABLY
+### Calibrate the Sensors
 
 ```bash
 ros2 service call /calibrate_force_sensors std_srvs/srv/Trigger
 ```
+## Grasp Overview
 
-### Use Adaptive Force Control --- UNTESTED, DOES NOT WORK PROBABLY
+The **Grasp** module provides a structured framework for evaluating and demonstrating various grasping strategies with the Inspire RH56 dexterous hand.  
+Its current implementation focuses on **simple, rule-based heuristics** that allow the hand to adapt its grasp configuration based on object geometry without external perception or planning.
 
-Call the service to move fingers to specific angles while trying to achieve target forces.
+### Design Philosophy
 
-```bash
-ros2 service call /adaptive_force_control rh56_controller/srv/AdaptiveForce '{
-    "target_forces": [100, 100, 100, 500, 100, 100],
-    "target_angles": [1000, 1000, 1000, 0, 1000, 1000],
-    "step_size": 50,
-    "max_iterations": 20
-}'
-```
+Rather than using vision or high-level planning, this module relies on **measurable object dimensions**—primarily width and length—to parameterize the grasp.  
+By keeping the thumb rotation fixed and varying only the **thumb bend angle** and **number of active fingers**, the controller achieves a range of grasp types from precision to power grasps with minimal complexity.
+
+### Grasp Logic
+
+1. **Thumb Configuration (Width-Based):**  
+   - The object width determines the thumb bend angle (`thumb_bend`).  
+   - Two different configurations are used now for different width object.  
+   - This allows the thumb to form a stable initial pinch against the index or middle finger.
+
+2. **Finger Selection (Length-Based):**  
+   - The object length determines how many fingers are involved in the grasp.  
+   - Short objects trigger a two-finger (thumb–index) pinch.  
+   - Medium objects use a three-finger (thumb–index–middle) tripod grasp.  
+   - Long or wide objects engage four fingers (thumb-index–middle–ring) for a full power grasp.
+   - Pinky isn't really useful due to its length
+
+3. **Force Regulation:**  
+   - Each finger closes until its force reading reaches a target threshold, converted to Newtons using the linear *force mapping* calibration.  
+   - This enables consistent contact pressure across objects of different stiffness and size.
+
+
+### Current Capabilities
+
+- Successfully grasps small metallic nuts, medium-sized items (e.g., Rubik’s cubes), and large objects up to 10 cm wide.  
+- Demonstrates both **precision** and **power** grasp behaviors using the same heuristic policy.  
+- Compatible with both stand-alone scripts and the ROS 2 driver through topic-level command injection.
+
+### Future Directions
+
+- Integrate visual sensing for dynamic object dimension estimation.  
+- Extend the heuristics into a learning-based grasp selection policy.  
+- Quantify grasp stability through external load and slippage tests.
+
+---
+
+> This module aims to balance **simplicity, reproducibility, and real-world performance**, serving as a baseline for more advanced manipulation strategies.
+
+## Force Mapping to Newtons (WIP)
+
+> This repository currently exposes finger forces in **raw 0–1000 units**.  
+> External experiments show a **linear** relationship between the raw reading `r` and force in Newtons `F` for each finger:
+>
+> \[
+> F_i\,[\mathrm{N}] = a_i \cdot r_i + b_i
+> \]
+>
+> Where \(i \in \{\text{pinky, ring, middle, index, thumb_bend, thumb_rotate}\}\).
+
+**Status.** We will publish the initial coefficients for **thumb_bend**, **index**, and **middle** here, together with the validation range and R² (others TBD).
+
+**Example config (to be added at `config/force_map.yaml`):**
+```yaml
+# Order matches the driver: [pinky, ring, middle, index, thumb_bend, thumb_rotate]
+force_map:
+  pinky:        {a: <fill_me>, b: <fill_me>}
+  ring:         {a: <fill_me>, b: <fill_me>}
+  middle:       {a: <fill_me>, b: <fill_me>}
+  index:        {a: <fill_me>, b: <fill_me>}
+  thumb_bend:   {a: <fill_me>, b: <fill_me>}
+  thumb_rotate: {a: <fill_me>, b: <fill_me>}
+valid_range: {min_raw: <fill_me>, max_raw: <fill_me>}
+metadata:
+  rig: "<force gauge / load cell model>"
+  fit: "linear least squares"
+  r2:
+    pinky: <fill_me>
+    ring: <fill_me>
+    middle: <fill_me>
+    index: <fill_me>
+    thumb_bend: <fill_me>
+    thumb_rotate: <fill_me>
 
 ---
 *Note on Poll Rate*
