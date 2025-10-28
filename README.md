@@ -1,11 +1,11 @@
 ### Precision Grasp
-<video src="resource/nut1.mov" controls width="400"></video>
-<video src="resource/nut2.mov" controls width="400"></video>
-<video src="resource/cube.mov" controls width="400"></video>
+<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/nut1.mov" controls width="400"></video>
+<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/nut2.mov" controls width="400"></video>
+<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/cube.mov" controls width="400"></video>
 
 ### Comparison of picking up long objects using 2 fingers vs 4 fingers
-<video src="resource/2finger_pinch_long_obj.mov" controls width="400"></video>
-<video src="resource/4finger_grab_long_obj.mov" controls width="400"></video>
+<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/2finger_pinch_long_obj.mov" controls width="400"></video>
+<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/4finger_grab_long_obj.mov" controls width="400"></video>
 
 # RH56 Controller (ROS 2)
 
