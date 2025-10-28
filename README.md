@@ -1,3 +1,12 @@
+### Precision Grasp
+<video src="resource/nut1.mov" controls width="400"></video>
+<video src="resource/nut2.mov" controls width="400"></video>
+<video src="resource/cube.mov" controls width="400"></video>
+
+### Comparison of picking up long objects using 2 fingers vs 4 fingers
+<video src="resource/2finger_pinch_long_obj.mov" controls width="400"></video>
+<video src="resource/4finger_grab_long_obj.mov" controls width="400"></video>
+
 # RH56 Controller (ROS 2)
 
 This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which wraps the serial interface with a Python API. Force-control (in Newtons) is WIP. States publish at ~40 Hz.
