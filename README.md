@@ -174,29 +174,7 @@ By keeping the thumb rotation fixed and varying only the **thumb bend angle** an
 
 **Status.** We will publish the initial coefficients for **thumb_bend**, **index**, and **middle** here, together with the validation range and R² (others TBD).
 
-**Example config (to be added at `config/force_map.yaml`):**
-```yaml
-# Order matches the driver: [pinky, ring, middle, index, thumb_bend, thumb_rotate]
-force_map:
-  pinky:        {a: <fill_me>, b: <fill_me>}
-  ring:         {a: <fill_me>, b: <fill_me>}
-  middle:       {a: <fill_me>, b: <fill_me>}
-  index:        {a: <fill_me>, b: <fill_me>}
-  thumb_bend:   {a: <fill_me>, b: <fill_me>}
-  thumb_rotate: {a: <fill_me>, b: <fill_me>}
-valid_range: {min_raw: <fill_me>, max_raw: <fill_me>}
-metadata:
-  rig: "<force gauge / load cell model>"
-  fit: "linear least squares"
-  r2:
-    pinky: <fill_me>
-    ring: <fill_me>
-    middle: <fill_me>
-    index: <fill_me>
-    thumb_bend: <fill_me>
-    thumb_rotate: <fill_me>
 
----
 *Note on Poll Rate*
 
 Currently only the `q, tau` are read from the hands and published to `/hands/state`. This is because the hands are on the same serial device with different slave IDs. While I am able to send separate, async commands to the hands for some reason, async read operations overlap and cause serial bus errors. So, we read and build the `/hands/state` with these four sequential calls:
