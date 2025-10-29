@@ -5,15 +5,16 @@
 ### Precision Grasp
 | Preview | Video |
 |:--|:--|
-| [![Nut grasp #1](resource/nut1.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4) |
-| [![Nut grasp #2](resource/nut2.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4) |
-| [![Cube tripod](resource/cube.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4"><img src="resource/nut1.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4"><img src="resource/nut2.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4"><img src="resource/cube.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4) |
 
 ### Comparison: Long Object (2-finger pinch vs 4-finger power)
 | Preview | Video |
 |:--|:--|
-| [![2-finger pinch (long object)](resource/2finger_pinch_long_obj.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4) |
-| [![4-finger grasp (long object)](resource/4finger_grab_long_obj.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4"><img src="resource/2finger_pinch_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4"><img src="resource/4finger_grab_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4) |
+
 
 
 # RH56 Controller (ROS 2)
