@@ -1,11 +1,20 @@
-### Precision Grasp
-<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/nut1.mov" controls width="400"></video>
-<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/nut2.mov" controls width="400"></video>
-<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/cube.mov" controls width="400"></video>
+## 🎥 Grasp Demos
 
-### Comparison of picking up long objects using 2 fingers vs 4 fingers
-<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/2finger_pinch_long_obj.mov" controls width="400"></video>
-<video src="https://raw.githubusercontent.com/correlllab/rh56_controller/main/resource/4finger_grab_long_obj.mov" controls width="400"></video>
+> Click a preview to open the full MP4.
+
+### Precision Grasp
+| Preview | Video |
+|:--|:--|
+| [![Nut grasp #1](resource/nut1.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut1.mp4) |
+| [![Nut grasp #2](resource/nut2.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/nut2.mp4) |
+| [![Cube tripod](resource/cube.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/cube.mp4) |
+
+### Comparison: Long Object (2-finger pinch vs 4-finger power)
+| Preview | Video |
+|:--|:--|
+| [![2-finger pinch (long object)](resource/2finger_pinch_long_obj.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/2finger_pinch_long_obj.mp4) |
+| [![4-finger grasp (long object)](resource/4finger_grab_long_obj.gif)](https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4) | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/4finger_grab_long_obj.mp4) |
+
 
 # RH56 Controller (ROS 2)
 
