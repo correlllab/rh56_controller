@@ -202,7 +202,7 @@ To evaluate grasp behavior without perception or planning, we fix the **thumb ro
 
 > **Summary:** In these open-loop tests, grasp outcome is governed primarily by **pose accuracy** rather than control strategy. Improving perception and pre-grasp alignment will yield the largest real-world gains.
 
-## Force Mapping to Newtons (WIP)
+## Force Mapping to Newtons
 
 > This repository currently exposes finger forces in **raw 0–1000 units**.  
 > External experiments show a **linear** relationship between the raw reading `r` and force in Newtons `F` for each finger:
@@ -290,6 +290,33 @@ The test applied a fixed force limit (raw units) and measured the peak force at 
 | 10.000 | 500.000 | 478.000 | -22.000 | -4.400 |
 
 **Observation.** Overshoot is strongly speed‑dependent. For precision grasps, consider lowering `speed` during the final approach and using a two‑stage closing policy.
+
+### Attempted Alternatives for High-Speed Force Limiting
+
+Several approaches were tested to mitigate the overshoot observed when using the vendor-provided `force_limit` register at high motor speeds. 
+Because the internal register does not reliably stop motion in time when `speed ≥ 25`, we attempted to implement custom software-level safeguards:
+
+1. **Real-time force monitoring:** continuously reading the finger’s force sensor and sending an immediate new target angle to halt motion when the threshold was reached.
+2. **Dynamic angle stepping:** issuing small incremental angle commands (small step size) to effectively lower motion speed while retaining manual force supervision.
+3. **Hybrid scheme:** combining 1 and 2 to emulate a closed-loop stop.
+
+However, comparative tests against the native register control showed **no measurable improvement** in either peak force or overshoot timing.  
+This suggests that the observed overshoot originates in the **firmware-side latency** of command execution rather than host-side timing, and cannot be fully compensated without direct low-level access to the actuator’s embedded controller.
+
+> **Conclusion:** for speeds above 25, the hardware register remains the limiting factor; software-side interception offers no significant benefit under the current communication interface.
+
+### Discussion and Future Directions
+
+Empirically, the hardware-level `force_limit` register becomes ineffective at **speeds above ≈25**, where the actuator continues to move significantly past the intended stop threshold.  
+The lack of responsiveness suggests that the limit enforcement occurs only after a buffered command cycle, rather than in real-time on the motor controller.
+
+A possible next step is to explore a **predictive host-side cutoff**, in which the system:
+1. Continuously samples the real-time force readings;
+2. Estimates the short-term rate of force increase (force growth trend); and
+3. Issues an early stop command based on the **measured command–actuation latency** (≈60–70 ms).
+
+This would allow the software to preemptively compensate for communication and processing delays.  
+However, this concept has **not yet been experimentally validated**, and remains a candidate for future investigation once low-latency force streaming and synchronization are implemented.
 
 ---
 
