@@ -95,7 +95,7 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
     *   Input: 6-element float array, hand specification ('left', 'right', 'both')
     * This command opens both hands.
     * ```bash
-         ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 1000, 1000, 1000], hand: 'both'}"
+         ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{{angles: [1000, 1000, 1000, 1000, 1000, 1000], hand: 'both'}}"
 *   **`/hands/calibrate_force_sensors`** (`std_srvs/srv/Trigger`)
     *   Initiates the hardware's force sensor calibration routine. This process takes approximately 15 seconds.
 *   **`/hands/save_parameters`** (`std_srvs/srv/Trigger`)
@@ -127,7 +127,7 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
 The joints on the hand are ordered as such: `[pinky, ring, middle, index, thumb_bend (pitch), thumb_rotate (yaw)]`. This command closes the index finger while opening the other joints.
 
 ```bash
- ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{angles: [1000, 1000, 1000, 0, 1000, 1000], hand: 'both'}"
+ ros2 service call /hands/set_angles custom_ros_messages/srv/SetHandAngles "{{angles: [1000, 1000, 1000, 0, 1000, 1000], hand: 'both'}}"
 ```
 
 ### Calibrate the Sensors
@@ -180,19 +180,71 @@ By keeping the thumb rotation fixed and varying only the **thumb bend angle** an
 
 > This module aims to balance **simplicity, reproducibility, and real-world performance**, serving as a baseline for more advanced manipulation strategies.
 
+## Grasp Experiments — Protocol & Notes on Success Rates
+
+**Protocol (two-finger baseline).**  
+To evaluate grasp behavior without perception or planning, we fix the **thumb rotation** and set the **thumb bend** to a contact-seeking angle, lightly “preloading” the object. We then close the **index** (two-finger pinch). Unless otherwise noted, all entries in the grasp table refer to the **thumb–index** configuration. For larger or elongated objects we optionally add more fingers (thumb–index–middle / thumb–index–middle–ring).
+
+**What this measures (and what it doesn’t).**  
+- The experiment probes **local contact mechanics** (pinch vs. power grasp) under a fixed-pose assumption.  
+- The **absolute success rate** is **not** a reliable metric for the grasp policy itself, because performance depends mainly on **pre-contact alignment**—that is, the relative pose between the hand, object, and table.  
+- When pre-alignment is accurate, small items (e.g., nuts) can be grasped almost perfectly; when alignment drifts, failures increase sharply for small parts but are less critical for larger objects.
+
+**Interpretation.**  
+- The current rule-based closing logic performs consistently once contact is properly established.  
+- Experiment outcomes therefore reflect the **precision of object presentation and hand pre-pose**, not the **control policy**.  
+- In future closed-loop systems (with visual or force feedback), these trials will serve as baseline open-loop performance data.
+
+**Recommendations.**  
+- Report success rate alongside **placement error** (e.g., translational / angular deviation) rather than as an isolated figure.  
+- Use a **two-stage close** (high-speed → low-speed near contact) to mitigate over-sensitivity in small objects.  
+- For long or heavy objects, extend to **tripod or power** grasps once stable pinch contact is detected.  
+
+> **Summary:** In these open-loop tests, grasp outcome is governed primarily by **pose accuracy** rather than control strategy. Improving perception and pre-grasp alignment will yield the largest real-world gains.
+
 ## Force Mapping to Newtons (WIP)
 
 > This repository currently exposes finger forces in **raw 0–1000 units**.  
 > External experiments show a **linear** relationship between the raw reading `r` and force in Newtons `F` for each finger:
 >
-> \[
+> $$
 > F_i\,[\mathrm{N}] = a_i \cdot r_i + b_i
-> \]
+> $$
 >
-> Where \(i \in \{\text{pinky, ring, middle, index, thumb_bend, thumb_rotate}\}\).
+> Where \(i \in \{\text{pinky, ring, middle, index, thumb\_bend, thumb\_rotate}\}\).
 
 **Status.** We will publish the initial coefficients for **thumb_bend**, **index**, and **middle** here, together with the validation range and R² (others TBD).
 
+### Force Mapping — Initial Coefficients (published on 2025‑11‑04)
+
+We fitted a linear model for **index**, **middle**, and **thumb_bend** using ground‑truth measurements from a handheld force meter:
+
+$$
+F_i\,[\mathrm{N}] = a_i\, r_i + b_i
+$$
+
+| Finger | a (N/unit) | b (N) | R² | Valid raw range | N |
+|:--|--:|--:|--:|:--|--:|
+| index | 0.007478 | -0.414 | 0.987 | 102–980 | 10 |
+| middle | 0.006452 | 0.018 | 0.986 | 112–990 | 10 |
+| thumb bend | 0.012547 | 0.384 | 0.993 | 91–1000 | 9 |
+
+**Usage (example):**
+```python
+# raw -> Newtons
+COEFFS = {
+    "index":       ( 0.007478, -0.414 ),
+    "middle":      ( 0.006452, 0.018 ),
+    "thumb_bend":  ( 0.012547, 0.384 ),
+}
+def raw_to_newtons(raw, finger="index"):
+    a, b = COEFFS[finger]
+    return a * float(raw) + b
+```
+
+> **Notes.**
+> * The fits are valid within the listed raw ranges; outside this interval you will be extrapolating.
+> * Measured maximal forces at `r=1000` are approximately: index ≈ 7.06 N, middle ≈ 6.47 N, thumb_bend ≈ 12.93 N.
 
 *Note on Poll Rate*
 
@@ -205,6 +257,276 @@ left_forces = self.lefthand.force_act()
 ```
 
 Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS overhead, the 41.67 Hz poll rate is closer to 40.2 Hz. This should be fast enough but I welcome any efforts to potentially double this by asynchronously reading.
+
+---
+
+## 📊 2025‑11‑04 — Calibration & Benchmarks
+
+This section aggregates the results from today's experiments and can be moved into a new `experiments/2025-11-04/` folder in the repo if desired. The raw data files are listed at the end of this section.
+
+### Step‑Response Characterization (position control)
+
+**Setup.** Each finger was commanded a unit step from its baseline to `target_angle = 500` (raw units) at several speeds. We report rise/settling times, overshoot and steady‑state error as computed by the post‑processing scripts.
+
+Finger indexing follows your convention: `[pinky(0), ring(1), middle(2), index(3), thumb_bend(4), thumb_rotate(5)]`.
+
+<details>
+<summary><b>Index (finger=3)</b></summary>
+
+| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
+| --: | --: | --: | --: | --: | --: | --: |
+| 1000 | 0.181 | settling_time    0.279924
+settling_time      to_end
+Name: 0, dtype: object | settling_time    0.279924
+settling_time      to_end
+Name: 0, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error    5.0
+Name: 0, dtype: object | steady_state_error    0.0
+steady_state_error    5.0
+Name: 0, dtype: object |
+| 750 | 0.216 | settling_time    0.343244
+settling_time      to_end
+Name: 1, dtype: object | settling_time    0.343244
+settling_time      to_end
+Name: 1, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error   -2.0
+Name: 1, dtype: object | steady_state_error    0.0
+steady_state_error   -2.0
+Name: 1, dtype: object |
+| 500 | 0.278 | settling_time    0.401085
+settling_time      to_end
+Name: 2, dtype: object | settling_time    0.401085
+settling_time      to_end
+Name: 2, dtype: object | 0.390 | steady_state_error    0.384617
+steady_state_error   -0.075949
+Name: 2, dtype: object | steady_state_error    0.384617
+steady_state_error   -0.075949
+Name: 2, dtype: object |
+| 250 | 0.558 | settling_time    0.756272
+settling_time      to_end
+Name: 3, dtype: object | settling_time    0.756272
+settling_time      to_end
+Name: 3, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error    0.0
+Name: 3, dtype: object | steady_state_error    0.0
+steady_state_error    0.0
+Name: 3, dtype: object |
+| 100 | 1.422 | settling_time    1.825603
+settling_time      to_end
+Name: 4, dtype: object | settling_time    1.825603
+settling_time      to_end
+Name: 4, dtype: object | 0.190 | steady_state_error    0.998756
+steady_state_error   -1.063291
+Name: 4, dtype: object | steady_state_error    0.998756
+steady_state_error   -1.063291
+Name: 4, dtype: object |
+
+</details>
+
+<details>
+<summary><b>Middle (finger=2)</b></summary>
+
+| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
+| --: | --: | --: | --: | --: | --: | --: |
+| 1000 | 0.178 | settling_time    0.267958
+settling_time      to_end
+Name: 0, dtype: object | settling_time    0.267958
+settling_time      to_end
+Name: 0, dtype: object | 0.090 | steady_state_error    0.495906
+steady_state_error    5.441558
+Name: 0, dtype: object | steady_state_error    0.495906
+steady_state_error    5.441558
+Name: 0, dtype: object |
+| 750 | 0.203 | settling_time    0.329638
+settling_time      to_end
+Name: 1, dtype: object | settling_time    0.329638
+settling_time      to_end
+Name: 1, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error   -2.0
+Name: 1, dtype: object | steady_state_error    0.0
+steady_state_error   -2.0
+Name: 1, dtype: object |
+| 500 | 0.267 | settling_time    0.411618
+settling_time      to_end
+Name: 2, dtype: object | settling_time    0.411618
+settling_time      to_end
+Name: 2, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error    0.0
+Name: 2, dtype: object | steady_state_error    0.0
+steady_state_error    0.0
+Name: 2, dtype: object |
+| 250 | 0.543 | settling_time    0.74842
+settling_time     to_end
+Name: 3, dtype: object | settling_time    0.74842
+settling_time     to_end
+Name: 3, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error    0.0
+Name: 3, dtype: object | steady_state_error    0.0
+steady_state_error    0.0
+Name: 3, dtype: object |
+| 100 | 1.398 | settling_time    1.787183
+settling_time      to_end
+Name: 4, dtype: object | settling_time    1.787183
+settling_time      to_end
+Name: 4, dtype: object | 0.000 | steady_state_error    0.0
+steady_state_error    1.0
+Name: 4, dtype: object | steady_state_error    0.0
+steady_state_error    1.0
+Name: 4, dtype: object |
+
+</details>
+
+<details>
+<summary><b>Thumb Bend (finger=4)</b></summary>
+
+| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
+| --: | --: | --: | --: | --: | --: | --: |
+| 1000 | 0.298 | settling_time    0.430698
+settling_time      to_end
+Name: 0, dtype: object | settling_time    0.430698
+settling_time      to_end
+Name: 0, dtype: object | 0.175 | steady_state_error    0.991809
+steady_state_error    1.860759
+Name: 0, dtype: object | steady_state_error    0.991809
+steady_state_error    1.860759
+Name: 0, dtype: object |
+| 750 | 0.302 | settling_time    0.432251
+settling_time      to_end
+Name: 1, dtype: object | settling_time    0.432251
+settling_time      to_end
+Name: 1, dtype: object | 0.149 | steady_state_error    0.436651
+steady_state_error    -8.25641
+Name: 1, dtype: object | steady_state_error    0.436651
+steady_state_error    -8.25641
+Name: 1, dtype: object |
+| 500 | 0.383 | settling_time    0.570613
+settling_time      to_end
+Name: 2, dtype: object | settling_time    0.570613
+settling_time      to_end
+Name: 2, dtype: object | 2.841 | steady_state_error    0.220573
+steady_state_error    0.949367
+Name: 2, dtype: object | steady_state_error    0.220573
+steady_state_error    0.949367
+Name: 2, dtype: object |
+| 250 | 0.804 | settling_time    1.028986
+settling_time      to_end
+Name: 3, dtype: object | settling_time    1.028986
+settling_time      to_end
+Name: 3, dtype: object | 0.178 | steady_state_error    0.816195
+steady_state_error   -5.115385
+Name: 3, dtype: object | steady_state_error    0.816195
+steady_state_error   -5.115385
+Name: 3, dtype: object |
+| 100 | 2.002 | settling_time    2.5071
+settling_time    to_end
+Name: 4, dtype: object | settling_time    2.5071
+settling_time    to_end
+Name: 4, dtype: object | 0.397 | steady_state_error     0.70159
+steady_state_error   -2.037975
+Name: 4, dtype: object | steady_state_error     0.70159
+steady_state_error   -2.037975
+Name: 4, dtype: object |
+
+</details>
+
+<details>
+<summary><b>Thumb Rotate (finger=5)</b></summary>
+
+| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
+| --: | --: | --: | --: | --: | --: | --: |
+| 1000 | 0.236 | settling_time    0.340166
+settling_time      to_end
+Name: 0, dtype: object | settling_time    0.340166
+settling_time      to_end
+Name: 0, dtype: object | 0.180 | steady_state_error    0.316312
+steady_state_error   -7.121212
+Name: 0, dtype: object | steady_state_error    0.316312
+steady_state_error   -7.121212
+Name: 0, dtype: object |
+| 750 | 0.245 | settling_time    0.364549
+settling_time      to_end
+Name: 1, dtype: object | settling_time    0.364549
+settling_time      to_end
+Name: 1, dtype: object | 0.199 | steady_state_error     0.353281
+steady_state_error   -16.014286
+Name: 1, dtype: object | steady_state_error     0.353281
+steady_state_error   -16.014286
+Name: 1, dtype: object |
+| 500 | 0.277 | settling_time    0.503991
+settling_time      to_end
+Name: 2, dtype: object | settling_time    0.503991
+settling_time      to_end
+Name: 2, dtype: object | 2.665 | steady_state_error     0.553844
+steady_state_error   -15.787879
+Name: 2, dtype: object | steady_state_error     0.553844
+steady_state_error   -15.787879
+Name: 2, dtype: object |
+| 250 | 0.618 | settling_time    0.778313
+settling_time      to_end
+Name: 3, dtype: object | settling_time    0.778313
+settling_time      to_end
+Name: 3, dtype: object | 0.152 | steady_state_error     0.430915
+steady_state_error   -16.242857
+Name: 3, dtype: object | steady_state_error     0.430915
+steady_state_error   -16.242857
+Name: 3, dtype: object |
+| 100 | 1.523 | settling_time    1.931761
+settling_time      to_end
+Name: 4, dtype: object | settling_time    1.931761
+settling_time      to_end
+Name: 4, dtype: object | 0.200 | steady_state_error     0.405459
+steady_state_error   -14.012658
+Name: 4, dtype: object | steady_state_error     0.405459
+steady_state_error   -14.012658
+Name: 4, dtype: object |
+
+</details>
+
+**Takeaways.**
+- At `speed=1000`, rise times are ~0.18–0.30 s and settling times ~0.27–0.43 s for index/middle/thumb joints with minimal overshoot (where observed).  
+- Thumb‑rotate often undershoots the target (negative steady‑state error); consider offset compensation in the driver.
+
+---
+
+### Force‑Limit Overshoot vs. Speed (force stop)
+
+The test applied a fixed force limit (raw units) and measured the peak force at different speeds on **middle (finger=2)**:
+
+| speed | force_limit | force_peak | overshoot | peak_limit_pct |
+| --: | --: | --: | --: | --: |
+| 1000.000 | 500.000 | 1556.000 | 1056.000 | 211.200 |
+| 500.000 | 500.000 | 1246.000 | 746.000 | 149.200 |
+| 250.000 | 500.000 | 1073.000 | 573.000 | 114.600 |
+| 100.000 | 500.000 | 996.000 | 496.000 | 99.200 |
+| 50.000 | 500.000 | 825.000 | 325.000 | 65.000 |
+| 25.000 | 500.000 | 524.000 | 24.000 | 4.800 |
+| 10.000 | 500.000 | 478.000 | -22.000 | -4.400 |
+
+**Observation.** Overshoot is strongly speed‑dependent. For precision grasps, consider lowering `speed` during the final approach and using a two‑stage closing policy.
+
+---
+
+### Command‑to‑Motion Latency
+
+We measured latency from the **command publish** timestamp to the first detected **motion**:
+
+- **p50**: 0.1 ms
+- **p90**: 0.1 ms
+- **p95**: 0.1 ms
+- **p99**: 0.1 ms
+
+**Harness parameters (representative):** `baseline≈1000`, `cmd_angle≈700`, `|Δ|≈300`, `speed≈1000`, `movement_eps≈10`.
+
+---
+
+### Reproducibility — Data files
+
+Commit these into e.g. `resource/experiments/2025-11-04/`:
+
+- `force mapping.xlsx` (Index/Mid/Thumb_bend sheets; columns: “Hand reading”, “force meter reading / N”).  
+- `summary_index.csv`, `summary_mid.csv`, `summary_thumb_bend.csv`, `summary_thumb_rotate.csv` (step‑response summaries).  
+- `force_stop_summary.csv` (force‑limit overshoot).  
+- `latency_log.csv`, `latency_summary.json` (latency micro‑benchmark).
 
 ---
 <details>
