@@ -1,0 +1,19 @@
+{
+  "trials": 10,
+  "valid_count": 10,
+  "invalid_count": 0,
+  "invalid_rate": 0.0,
+  "latency_mean_s": 0.06302824589365627,
+  "p50": 0.06628454149176832,
+  "p90": 0.06918955440924038,
+  "p95": 0.0698032976986724,
+  "p99": 0.07029429233021801,
+  "finger": 2,
+  "baseline": 1000,
+  "cmd_angle": 700,
+  "delta": -300,
+  "speed": 1000,
+  "movement_eps": 10,
+  "max_wait": 1.0,
+  "reset_each_trial": true
+}
