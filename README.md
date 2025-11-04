@@ -183,7 +183,7 @@ By keeping the thumb rotation fixed and varying only the **thumb bend angle** an
 ## Grasp Experiments — Protocol & Notes on Success Rates
 
 **Protocol (two-finger baseline).**  
-To evaluate grasp behavior without perception or planning, we fix the **thumb rotation** and set the **thumb bend** to a contact-seeking angle, lightly “preloading” the object. We then close the **index** (two-finger pinch). Unless otherwise noted, all entries in the grasp table refer to the **thumb–index** configuration. For larger or elongated objects we optionally add more fingers (thumb–index–middle / thumb–index–middle–ring).
+To evaluate grasp behavior without perception or planning, we fix the **thumb rotation** and set the **thumb bend** to a contact-seeking angle, lightly “preloading” the object. We then close the **index** (two-finger pinch). For larger or elongated objects we optionally add more fingers (thumb–index–middle / thumb–index–middle–ring).
 
 **What this measures (and what it doesn’t).**  
 - The experiment probes **local contact mechanics** (pinch vs. power grasp) under a fixed-pose assumption.  
@@ -217,7 +217,7 @@ To evaluate grasp behavior without perception or planning, we fix the **thumb ro
 
 ### Force Mapping — Initial Coefficients (published on 2025‑11‑04)
 
-We fitted a linear model for **index**, **middle**, and **thumb_bend** using ground‑truth measurements from a handheld force meter:
+We fitted a linear model for **index**, **middle**, and **thumb_bend** using ground‑truth measurements from a force meter:
 
 $$
 F_i\,[\mathrm{N}] = a_i\, r_i + b_i
@@ -243,6 +243,7 @@ def raw_to_newtons(raw, finger="index"):
 ```
 
 > **Notes.**
+> * Our hand is damaged so the results might not be accurate.
 > * The fits are valid within the listed raw ranges; outside this interval you will be extrapolating.
 > * Measured maximal forces at `r=1000` are approximately: index ≈ 7.06 N, middle ≈ 6.47 N, thumb_bend ≈ 12.93 N.
 
@@ -267,220 +268,6 @@ This section aggregates the results from today's experiments and can be moved in
 ### Step‑Response Characterization (position control)
 
 **Setup.** Each finger was commanded a unit step from its baseline to `target_angle = 500` (raw units) at several speeds. We report rise/settling times, overshoot and steady‑state error as computed by the post‑processing scripts.
-
-Finger indexing follows your convention: `[pinky(0), ring(1), middle(2), index(3), thumb_bend(4), thumb_rotate(5)]`.
-
-<details>
-<summary><b>Index (finger=3)</b></summary>
-
-| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
-| --: | --: | --: | --: | --: | --: | --: |
-| 1000 | 0.181 | settling_time    0.279924
-settling_time      to_end
-Name: 0, dtype: object | settling_time    0.279924
-settling_time      to_end
-Name: 0, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error    5.0
-Name: 0, dtype: object | steady_state_error    0.0
-steady_state_error    5.0
-Name: 0, dtype: object |
-| 750 | 0.216 | settling_time    0.343244
-settling_time      to_end
-Name: 1, dtype: object | settling_time    0.343244
-settling_time      to_end
-Name: 1, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error   -2.0
-Name: 1, dtype: object | steady_state_error    0.0
-steady_state_error   -2.0
-Name: 1, dtype: object |
-| 500 | 0.278 | settling_time    0.401085
-settling_time      to_end
-Name: 2, dtype: object | settling_time    0.401085
-settling_time      to_end
-Name: 2, dtype: object | 0.390 | steady_state_error    0.384617
-steady_state_error   -0.075949
-Name: 2, dtype: object | steady_state_error    0.384617
-steady_state_error   -0.075949
-Name: 2, dtype: object |
-| 250 | 0.558 | settling_time    0.756272
-settling_time      to_end
-Name: 3, dtype: object | settling_time    0.756272
-settling_time      to_end
-Name: 3, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error    0.0
-Name: 3, dtype: object | steady_state_error    0.0
-steady_state_error    0.0
-Name: 3, dtype: object |
-| 100 | 1.422 | settling_time    1.825603
-settling_time      to_end
-Name: 4, dtype: object | settling_time    1.825603
-settling_time      to_end
-Name: 4, dtype: object | 0.190 | steady_state_error    0.998756
-steady_state_error   -1.063291
-Name: 4, dtype: object | steady_state_error    0.998756
-steady_state_error   -1.063291
-Name: 4, dtype: object |
-
-</details>
-
-<details>
-<summary><b>Middle (finger=2)</b></summary>
-
-| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
-| --: | --: | --: | --: | --: | --: | --: |
-| 1000 | 0.178 | settling_time    0.267958
-settling_time      to_end
-Name: 0, dtype: object | settling_time    0.267958
-settling_time      to_end
-Name: 0, dtype: object | 0.090 | steady_state_error    0.495906
-steady_state_error    5.441558
-Name: 0, dtype: object | steady_state_error    0.495906
-steady_state_error    5.441558
-Name: 0, dtype: object |
-| 750 | 0.203 | settling_time    0.329638
-settling_time      to_end
-Name: 1, dtype: object | settling_time    0.329638
-settling_time      to_end
-Name: 1, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error   -2.0
-Name: 1, dtype: object | steady_state_error    0.0
-steady_state_error   -2.0
-Name: 1, dtype: object |
-| 500 | 0.267 | settling_time    0.411618
-settling_time      to_end
-Name: 2, dtype: object | settling_time    0.411618
-settling_time      to_end
-Name: 2, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error    0.0
-Name: 2, dtype: object | steady_state_error    0.0
-steady_state_error    0.0
-Name: 2, dtype: object |
-| 250 | 0.543 | settling_time    0.74842
-settling_time     to_end
-Name: 3, dtype: object | settling_time    0.74842
-settling_time     to_end
-Name: 3, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error    0.0
-Name: 3, dtype: object | steady_state_error    0.0
-steady_state_error    0.0
-Name: 3, dtype: object |
-| 100 | 1.398 | settling_time    1.787183
-settling_time      to_end
-Name: 4, dtype: object | settling_time    1.787183
-settling_time      to_end
-Name: 4, dtype: object | 0.000 | steady_state_error    0.0
-steady_state_error    1.0
-Name: 4, dtype: object | steady_state_error    0.0
-steady_state_error    1.0
-Name: 4, dtype: object |
-
-</details>
-
-<details>
-<summary><b>Thumb Bend (finger=4)</b></summary>
-
-| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
-| --: | --: | --: | --: | --: | --: | --: |
-| 1000 | 0.298 | settling_time    0.430698
-settling_time      to_end
-Name: 0, dtype: object | settling_time    0.430698
-settling_time      to_end
-Name: 0, dtype: object | 0.175 | steady_state_error    0.991809
-steady_state_error    1.860759
-Name: 0, dtype: object | steady_state_error    0.991809
-steady_state_error    1.860759
-Name: 0, dtype: object |
-| 750 | 0.302 | settling_time    0.432251
-settling_time      to_end
-Name: 1, dtype: object | settling_time    0.432251
-settling_time      to_end
-Name: 1, dtype: object | 0.149 | steady_state_error    0.436651
-steady_state_error    -8.25641
-Name: 1, dtype: object | steady_state_error    0.436651
-steady_state_error    -8.25641
-Name: 1, dtype: object |
-| 500 | 0.383 | settling_time    0.570613
-settling_time      to_end
-Name: 2, dtype: object | settling_time    0.570613
-settling_time      to_end
-Name: 2, dtype: object | 2.841 | steady_state_error    0.220573
-steady_state_error    0.949367
-Name: 2, dtype: object | steady_state_error    0.220573
-steady_state_error    0.949367
-Name: 2, dtype: object |
-| 250 | 0.804 | settling_time    1.028986
-settling_time      to_end
-Name: 3, dtype: object | settling_time    1.028986
-settling_time      to_end
-Name: 3, dtype: object | 0.178 | steady_state_error    0.816195
-steady_state_error   -5.115385
-Name: 3, dtype: object | steady_state_error    0.816195
-steady_state_error   -5.115385
-Name: 3, dtype: object |
-| 100 | 2.002 | settling_time    2.5071
-settling_time    to_end
-Name: 4, dtype: object | settling_time    2.5071
-settling_time    to_end
-Name: 4, dtype: object | 0.397 | steady_state_error     0.70159
-steady_state_error   -2.037975
-Name: 4, dtype: object | steady_state_error     0.70159
-steady_state_error   -2.037975
-Name: 4, dtype: object |
-
-</details>
-
-<details>
-<summary><b>Thumb Rotate (finger=5)</b></summary>
-
-| speed | rise_time | settling_time | settling_time | overshoot_pct | steady_state_error | steady_state_error |
-| --: | --: | --: | --: | --: | --: | --: |
-| 1000 | 0.236 | settling_time    0.340166
-settling_time      to_end
-Name: 0, dtype: object | settling_time    0.340166
-settling_time      to_end
-Name: 0, dtype: object | 0.180 | steady_state_error    0.316312
-steady_state_error   -7.121212
-Name: 0, dtype: object | steady_state_error    0.316312
-steady_state_error   -7.121212
-Name: 0, dtype: object |
-| 750 | 0.245 | settling_time    0.364549
-settling_time      to_end
-Name: 1, dtype: object | settling_time    0.364549
-settling_time      to_end
-Name: 1, dtype: object | 0.199 | steady_state_error     0.353281
-steady_state_error   -16.014286
-Name: 1, dtype: object | steady_state_error     0.353281
-steady_state_error   -16.014286
-Name: 1, dtype: object |
-| 500 | 0.277 | settling_time    0.503991
-settling_time      to_end
-Name: 2, dtype: object | settling_time    0.503991
-settling_time      to_end
-Name: 2, dtype: object | 2.665 | steady_state_error     0.553844
-steady_state_error   -15.787879
-Name: 2, dtype: object | steady_state_error     0.553844
-steady_state_error   -15.787879
-Name: 2, dtype: object |
-| 250 | 0.618 | settling_time    0.778313
-settling_time      to_end
-Name: 3, dtype: object | settling_time    0.778313
-settling_time      to_end
-Name: 3, dtype: object | 0.152 | steady_state_error     0.430915
-steady_state_error   -16.242857
-Name: 3, dtype: object | steady_state_error     0.430915
-steady_state_error   -16.242857
-Name: 3, dtype: object |
-| 100 | 1.523 | settling_time    1.931761
-settling_time      to_end
-Name: 4, dtype: object | settling_time    1.931761
-settling_time      to_end
-Name: 4, dtype: object | 0.200 | steady_state_error     0.405459
-steady_state_error   -14.012658
-Name: 4, dtype: object | steady_state_error     0.405459
-steady_state_error   -14.012658
-Name: 4, dtype: object |
-
-</details>
 
 **Takeaways.**
 - At `speed=1000`, rise times are ~0.18–0.30 s and settling times ~0.27–0.43 s for index/middle/thumb joints with minimal overshoot (where observed).  
@@ -510,10 +297,10 @@ The test applied a fixed force limit (raw units) and measured the peak force at 
 
 We measured latency from the **command publish** timestamp to the first detected **motion**:
 
-- **p50**: 0.1 ms
-- **p90**: 0.1 ms
-- **p95**: 0.1 ms
-- **p99**: 0.1 ms
+- **p50**: 0.066 s
+- **p90**: 0.069 s
+- **p95**: 0.070 ms
+- **p99**: 0.070 ms
 
 **Harness parameters (representative):** `baseline≈1000`, `cmd_angle≈700`, `|Δ|≈300`, `speed≈1000`, `movement_eps≈10`.
 
