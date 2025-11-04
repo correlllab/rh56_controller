@@ -3,6 +3,22 @@
 This repository provides both the **control stack** and the **quantitative experimental benchmarks** for the Inspire RH56DFX dexterous hand. 
 It includes calibrated force mapping, dynamic step-response characterization, high-speed force-limiting analysis, and command-to-motion latency, establishing a reproducible baseline for contact-rich manipulation research while supporting ROS 2 integration for deployment.
 
+## 🎥 Grasp Demos
+
+> Click a preview to open the full MP4.
+
+### Precision Grasp
+| Preview | Video |
+|:--|:--|
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut1.mp4"><img src="resource/video/nut1.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut1.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut2.mp4"><img src="resource/video/nut2.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut2.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/cube.mp4"><img src="resource/video/cube.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/cube.mp4) |
+
+### Comparison: Long Object (2-finger pinch vs 4-finger power)
+| Preview | Video |
+|:--|:--|
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4"><img src="resource/video/2finger_pinch_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4) |
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4"><img src="resource/video/4finger_grab_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4) |
 ---
 ## Force Mapping to Newtons
 
@@ -334,26 +350,6 @@ The joints on the hand are ordered as such: `[pinky, ring, middle, index, thumb_
 ```bash
 ros2 service call /calibrate_force_sensors std_srvs/srv/Trigger
 ```
-
-## 🎥 Grasp Demos
-
-> Click a preview to open the full MP4.
-
-### Precision Grasp
-| Preview | Video |
-|:--|:--|
-| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut1.mp4"><img src="resource/video/nut1.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut1.mp4) |
-| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut2.mp4"><img src="resource/video/nut2.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/nut2.mp4) |
-| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/cube.mp4"><img src="resource/video/cube.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/cube.mp4) |
-
-### Comparison: Long Object (2-finger pinch vs 4-finger power)
-| Preview | Video |
-|:--|:--|
-| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4"><img src="resource/video/2finger_pinch_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4) |
-| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4"><img src="resource/video/4finger_grab_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4) |
-
-
-
 
 <details>
 <summary><b>Legacy Python Script Documentation (Pre-ROS)</b></summary>
