@@ -299,8 +299,8 @@ We measured latency from the **command publish** timestamp to the first detected
 
 - **p50**: 0.066 s
 - **p90**: 0.069 s
-- **p95**: 0.070 ms
-- **p99**: 0.070 ms
+- **p95**: 0.070 s
+- **p99**: 0.070 s
 
 **Harness parameters (representative):** `baseline≈1000`, `cmd_angle≈700`, `|Δ|≈300`, `speed≈1000`, `movement_eps≈10`.
 
