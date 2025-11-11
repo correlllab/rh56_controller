@@ -208,6 +208,7 @@ Commit these into e.g. `resource/experiments/2025-11-04/`:
 - `latency_log.csv`, `latency_summary.json` (latency micro‑benchmark).
 
 ---
+<img src="resource/video/2d_kinematice_space.jpeg" alt="2d kinematice space" width="420">
 
 ## Grasp Experiments — Protocol & Notes on Success Rates
 
