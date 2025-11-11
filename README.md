@@ -6,6 +6,10 @@ It includes calibrated force mapping, dynamic step-response characterization, hi
 ## 🎥 Grasp Demos
 
 > Click a preview to open the full MP4.
+### Force control demo
+| Preview | Video |
+|:--|:--|
+| <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/force_control.mp4"><img src="resource/video/force_control_gif_source.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/force_control.mp4) |
 
 ### Precision Grasp
 | Preview | Video |
