@@ -82,7 +82,35 @@ left_forces = self.lefthand.force_act()
 Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS overhead, the 41.67 Hz poll rate is closer to 40.2 Hz. This should be fast enough but I welcome any efforts to potentially double this by asynchronously reading.
 
 ---
+## X‑mode: Force‑Reactive Pinch for Peg‑in‑Hole
 
+**What it does.**  
+X‑mode is a lightweight, event‑driven controller for the RH56 hand that
+- **auto‑closes** on contact to pick the part, and
+- **auto‑opens** after a **short horizontal verification** confirms that the peg is constrained by the hole (index finger spike),
+enabling fully automated pick–insert–release cycles.
+
+**Signals & units.**  
+All force/pressure readings are **raw, unitless counts** (e.g., 0–1000). Thresholds below are specified in these raw units.
+
+### Event logic
+
+1. **Pre‑grasp & limits.** Move to a precision‑pinch pre‑grasp and set per‑finger force limits (index, thumb).
+2. **Auto‑close on contact (thumb).** Monitor the thumb channel; when a **positive jump** ΔF_th ≥ `CONTACT_SPIKE` occurs, **close** to grasp.  
+   *Timeout:* if **no contact** is detected for `TIMEOUT` (≈20 s), **open** and reset to `WAIT`.
+3. **Stabilize grasp (index).** After closing, monitor the **index** moving‑average; once it exceeds `LOAD_ARM`, the grasp is considered established.
+4. **Horizontal verification.** If the **index** force reading shows a **spike** ΔF_idx ≥ `LATERAL_SPIKE`, interpret this as **peg constrained by the hole** (i.e., insertion achieved).
+5. **Auto‑open to release.** On successful horizontal verification, **open** (with an error‑clear + second open for robustness) and return to `WAIT`.  
+   *Timeout:* if no lateral spike is observed for `TIMEOUT`, **open** and reset.
+
+### Default parameters (tune per task; all in raw, unitless counts)
+
+- `FORCE_LIMIT` (per finger): **~800**  
+- `CONTACT_SPIKE` (thumb Δ): **+75**  
+- `LOAD_ARM` (index moving‑avg): **≥ 500**  
+- `LATERAL_SPIKE` (index Δ during sweep): **+75**  
+- Moving‑average window: **~0.5 s**  
+- `TIMEOUT`: **~20 s**
 
 ## 📊 2025‑11‑04 — Calibration & Benchmarks
 
