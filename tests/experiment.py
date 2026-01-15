@@ -359,7 +359,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=str,
-        default="/dev/tty.usbserial-2140",
+        default="/dev/ttyUSB0",
         help="Serial device for the RH56 hand (default matches macOS USB adapter).",
     )
     parser.add_argument(
