@@ -73,12 +73,12 @@ def build_presets() -> Dict[str, GraspPreset]:
             key="1",
             name="Precision pinch",
             description=(
-                "Index + thumb pinch. Thumb bend preset 750, thumb rotation 150. "
+                "Index + thumb pinch. Thumb bend preset 650, thumb rotation 150. "
                 "Index closes to 0; thumb bend curls for contact."
             ),
-            prepare_angles=[1000, 1000, 1000, 1000, 750, 150],
-            close_angles=[1000, 1000, 1000, 0, 750, 150],
-            close_speed=50,
+            prepare_angles=[1000, 1000, 1000, 1000, 650, 150],
+            close_angles=[1000, 1000, 1000, 0, 650, 150],
+            close_speed=500,
         ),
         "2": GraspPreset(
             key="2",
@@ -152,7 +152,7 @@ def run_preset_mode(hand: RH56Hand, preset: GraspPreset) -> bool:
         return False
     if action == "back":
         return True
-
+    hand.force_set([1000] * 6)  # reset forces before closing
     apply_speed(hand, preset.close_speed, "closing")
     apply_angles(hand, preset.close_angles, "Closing fingers")
 
