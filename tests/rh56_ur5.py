@@ -49,37 +49,44 @@ from experiment import build_presets, apply_angles, apply_speed, clear_and_open,
 # =========================
 
 pose_precision_prep = np.array([
-    [-0.988, -0.142,  0.061, -0.328],
-    [-0.11,   0.37,  -0.923, -0.381],
-    [ 0.109, -0.918, -0.381,  0.157],
+    [-0.999,  0.005,  -0.034, -0.431],
+    [ 0.033,  0.346,  -0.938, -0.390],
+    [ 0.007, -0.938,  -0.346,  0.183],
     [ 0.,     0. ,    0. ,    1.   ]
 ], dtype=float)
 
 pose_precision_end = np.array([
-    [-0.988, -0.142,  0.061, -0.328],
-    [-0.11,   0.37,  -0.923, -0.381],
-    [ 0.109, -0.918, -0.381,  0.300],
+    [-0.999,  0.005,  -0.034, -0.431],
+    [ 0.033,  0.346,  -0.938, -0.390],
+    [ 0.007, -0.938,  -0.346,  0.300],
+    [ 0.,     0. ,    0. ,    1.   ]
+], dtype=float)
+
+pose_precision_shake = np.array([
+    [-0.999,  0.005,  -0.034, -0.431],
+    [ 0.033,  0.346,  -0.938, -0.390],
+    [ 0.007, -0.938,  -0.346,  0.320],
     [ 0.,     0. ,    0. ,    1.   ]
 ], dtype=float)
 
 pose_tripod_prep = np.array([
-    [-0.991, -0.099,  0.091, -0.331],
-    [-0.13,   0.538, -0.833, -0.404],
-    [ 0.034, -0.837, -0.546,  0.194],
+    [-0.993,  0.091, -0.071, -0.373],
+    [ 0.112,  0.621, -0.776, -0.366],
+    [-0.026, -0.779, -0.627,  0.275],#close to table 0.246, now higher
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
 pose_tripod_end = np.array([
-    [-0.991, -0.099,  0.091, -0.331],
-    [-0.13,   0.538, -0.833, -0.404],
-    [ 0.034, -0.837, -0.546,  0.300],
+    [-0.993,  0.091, -0.071, -0.373],
+    [ 0.112,  0.621, -0.776, -0.366],
+    [-0.026, -0.779, -0.627,  0.400],
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
 pose_tripod_shake = np.array([
-    [-0.991, -0.099,  0.091, -0.331],
-    [-0.13,   0.538, -0.833, -0.404],
-    [ 0.034, -0.837, -0.546,  0.350],
+    [-0.993,  0.091, -0.071, -0.373],
+    [ 0.112,  0.621, -0.776, -0.366],
+    [-0.026, -0.779, -0.627,  0.420],
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
@@ -89,7 +96,7 @@ TRIALS: Dict[str, Dict[str, Optional[np.ndarray]]] = {
     "precision": {
         "prep": pose_precision_prep,
         "end": pose_precision_end,
-        "shake": None,  # no shake pose provided; can add later if you want
+        "shake": pose_precision_shake,  # no shake pose provided; can add later if you want
     },
     "tripod": {
         "prep": pose_tripod_prep,
@@ -174,25 +181,30 @@ def run_trial(
     robot.moveL(prep, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
 
     # 4) close hand
-    time.sleep(5)
-    _log("HAND", f"Close (speed={preset.close_speed})")
-    apply_speed(hand, preset.close_speed, "closing speed")
-    apply_angles(hand, preset.close_angles, "closing angles")
+    hand.force_set([100] * 6)  # ensure forces are set
     time.sleep(2)
+    _log("HAND", f"Close (speed={preset.close_speed})")
+    # apply_speed(hand, preset.close_speed, "closing speed")
+    apply_speed(hand, 50, "closing speed")
+    apply_angles(hand, preset.close_angles, "closing angles")
+    time.sleep(5)
 
     # 5) lift
     _log("ARM", f"MoveL -> {trial_name}.end (lift)")
     robot.moveL(end, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
+    time.sleep(5)
 
     # 6) optional shake
     if shake_cycles > 0:
         if shake_pose is None:
             _log("SHAKE", "No shake pose provided for this trial; skipping")
+            # time.sleep(5)
         else:
             # shake between end and shake_pose
             shake_between(robot, end, shake_pose, shake_cycles, linSpeed, linAccel)
             # return to end after shake
-            robot.moveL(end, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
+            time.sleep(5)
+            robot.moveL(end, linSpeed=0.5, linAccel=3.0, asynch=False)
 
     # 7) return
     if return_to_start and start_pose is not None:
@@ -203,14 +215,14 @@ def run_trial(
         robot.moveL(prep, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
 
     # 8) open hand
-    time.sleep(1)
+    time.sleep(2)
     _log("HAND", f"Open (speed={preset.restore_speed})")
     apply_speed(hand, preset.restore_speed, "opening speed")
     apply_angles(hand, DEFAULT_OPEN, "opening angles")
-    time.sleep(0.5)
+    time.sleep(1)
 
     # 9) lift arm higher to clear
-    robot.moveL(pose_precision_end, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
+    robot.moveL(end, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
     clear_and_open(hand)
     time.sleep(0.5)
     clear_and_open(hand)
