@@ -63,16 +63,16 @@ pose_precision_end = np.array([
 ], dtype=float)
 
 pose_precision_shake = np.array([
-    [-0.999,  0.005,  -0.034, -0.431],
-    [ 0.033,  0.346,  -0.938, -0.390],
-    [ 0.007, -0.938,  -0.346,  0.320],
+    [-0.333,  0.943, -0.029, -0.431],
+    [ 0.342,  0.091, -0.935, -0.390],
+    [ -0.879, -0.321, -0.353,  0.300],
     [ 0.,     0. ,    0. ,    1.   ]
 ], dtype=float)
 
 pose_tripod_prep = np.array([
     [-0.993,  0.091, -0.071, -0.373],
     [ 0.112,  0.621, -0.776, -0.366],
-    [-0.026, -0.779, -0.627,  0.275],#close to table 0.246, now higher
+    [-0.026, -0.779, -0.627,  0.245],#close to table 0.246, now higher
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
@@ -84,9 +84,9 @@ pose_tripod_end = np.array([
 ], dtype=float)
 
 pose_tripod_shake = np.array([
-    [-0.993,  0.091, -0.071, -0.373],
-    [ 0.112,  0.621, -0.776, -0.366],
-    [-0.026, -0.779, -0.627,  0.420],
+    [-0.286,  0.956, -0.065, -0.373],
+    [ 0.62,  0.133, -0.773, -0.366],
+    [-0.73, -0.262, -0.631,  0.400],
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
@@ -133,6 +133,37 @@ def shake_between(robot, A: np.ndarray, B: np.ndarray, cycles: int, linSpeed: fl
         robot.moveL(A, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
         robot.moveL(B, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
 
+def sample_for(duration_s: float, period_s: float, hand: RH56Hand, robot):
+    end_t = time.monotonic() + duration_s
+    next_t = time.monotonic()
+    count = 0
+    first_count = 0
+    reclosing_count = 0
+    x = 1
+    current_angle = []
+    while time.monotonic() < end_t:
+        data = hand.force_act()
+        if first_count == 0:
+            first = data
+        diff_2 = abs(data[2] - first[2])
+        diff_3 = abs(data[3] - first[3])
+        diff = max(diff_2, diff_3)
+        # print(f"Diff: {diff}, Reclosing count: {reclosing_count}")
+        if (diff >(20.0)) and (reclosing_count == 0):
+            apply_angles(hand, [1000, 1000, 0, 0, 850, 0], "re-closing during sample")
+            x = x + 1
+            # reclosing_count += 1
+        # print(data)
+        count = count + 1
+        first_count += 1
+        next_t += period_s
+        sleep_s = next_t - time.monotonic()
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+    print("First sample:", first)
+    print("Last sample:", data)
+    rate = count / duration_s
+    print(f"Sampled {count} data points over {duration_s:.2f}s ({rate:.1f} Hz)")
 
 def run_trial(
     robot,
@@ -187,12 +218,24 @@ def run_trial(
     # apply_speed(hand, preset.close_speed, "closing speed")
     apply_speed(hand, 50, "closing speed")
     apply_angles(hand, preset.close_angles, "closing angles")
+    force = hand.force_act()
     time.sleep(5)
+    while force [3] < 100 and force [2] < 100:
+        apply_angles(hand, preset.close_angles, "closing angles")
+        time.sleep(1)
+        force = hand.force_act()
+    # hand.force_set([200] * 6)
+    # apply_speed(hand, 1000, "re-closing during sample")
 
     # 5) lift
     _log("ARM", f"MoveL -> {trial_name}.end (lift)")
-    robot.moveL(end, linSpeed=linSpeed, linAccel=linAccel, asynch=False)
-    time.sleep(5)
+    robot.moveL(end, linSpeed=0.5, linAccel=0.35, asynch=False)
+    robot.moveL(pose_tripod_shake, linSpeed=0.5, linAccel=1.5, asynch=True)
+    # time.sleep(5)
+    sample_for(duration_s=500.0, period_s=0.006, hand=hand, robot=robot)
+
+    while True:
+        time.sleep(1)
 
     # 6) optional shake
     if shake_cycles > 0:
