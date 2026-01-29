@@ -90,6 +90,13 @@ pose_tripod_shake = np.array([
     [ 0.,     0.,     0.,     1.   ]
 ], dtype=float)
 
+# Poses for peg-in-hole task
+pose_peg_0 = np.array([
+    [-0.998,  0.009,  -0.064, -0.488],
+    [ 0.056,  0.615,  -0.787, -0.318],
+    [ 0.032, -0.789,  -0.614,  0.269],
+    [ 0.,     0. ,    0. ,    1.   ]
+], dtype=float)
 
 TRIALS: Dict[str, Dict[str, Optional[np.ndarray]]] = {
     # "precision" == pinch-style in your naming; we’ll map it to preset key "1"
@@ -164,6 +171,235 @@ def sample_for(duration_s: float, period_s: float, hand: RH56Hand, robot):
     print("Last sample:", data)
     rate = count / duration_s
     print(f"Sampled {count} data points over {duration_s:.2f}s ({rate:.1f} Hz)")
+
+import matplotlib.pyplot as plt
+
+# 引入 experiment.py 中的控制函数 (确保 experiment.py 在同级目录)
+try:
+    from experiment import DEFAULT_OPEN, apply_angles, apply_speed
+except ImportError:
+    # 防止报错的简单定义
+    DEFAULT_OPEN = [1000, 1000, 1000, 1000, 1000, 0]
+    def apply_angles(hand, angles, label): hand.angle_set(list(angles))
+    def apply_speed(hand, speed, label): hand.speed_set([speed]*6)
+
+# === 用户定义的参数 (保留不变) ===
+IDX_FINGER_A = 3    # Index finger (用于监测插孔逻辑)
+IDX_FINGER_B = 4    # Thumb finger (用于初始触发)
+
+# === 逻辑阈值 (Raw 0-1000) ===
+THUMB_SPIKE_THRESH = 50      # 拇指激增阈值
+INDEX_STABLE_THRESH = 300    # 食指稳定力值
+INDEX_STABLE_TIME = 2.0      # 稳定持续时间 (秒)
+MODE_X_SPIKE = 75            # 插孔突增
+MODE_X_DROP = 25             # 插孔骤降 (入位)
+MODE_X_WINDOW = 0.5          # 滑动窗口时间
+
+def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
+    """
+    执行 X 模式逻辑，同时保留原有的数据采集和绘图功能。
+    """
+    print(f"[{time.strftime('%H:%M:%S')}] START PEG-IN-HOLE TASK (X Mode)...")
+    
+    # 1. 初始化数据容器 (保留原有结构)
+    times = []
+    forces_finger_a = [] # Index (Mapped N)
+    forces_finger_b = [] # Thumb (Mapped N)
+    forces_wrist = []    # UR5 Wrist (N)
+    phases = []          # 记录当前阶段方便画图分析
+    
+    # 2. 状态机变量
+    current_phase = 0    # 0:检测拇指, 1:检测食指稳定, 2:检测插孔Drop, 3:完成
+    start_t = time.monotonic()
+    
+    # Phase 0 变量
+    thumb_baseline = None
+    
+    # Phase 1 变量
+    stable_start_t = None
+    
+    # Phase 2 变量 (Mode X Windowing)
+    window_samples = []
+    window_start_t = time.monotonic()
+    prev_avg = None
+    spike_detected = False
+    
+    task_running = True
+    
+    try:
+        while task_running:
+            loop_start = time.monotonic()
+            current_t = loop_start - start_t
+            
+            # =========================================================
+            # part A: 数据读取 (完全保留你的逻辑)
+            # =========================================================
+            # 1. 读取 RH56
+            hand_data = hand.force_act()
+            
+            # 2. 读取 UR5
+            if hasattr(robot, 'get_tcp_force'):
+                wrist_wrench = robot.get_tcp_force()
+            elif hasattr(robot, 'get_force'):
+                wrist_wrench = robot.get_force()
+            else:
+                wrist_wrench = [0.0] * 6 
+            
+            # 3. 数据处理与映射 (完全保留你的公式)
+            # Index
+            raw_index = hand_data[IDX_FINGER_A]
+            f_a_newton = (raw_index * 0.007478) - 0.414
+            
+            # Thumb
+            raw_thumb = hand_data[IDX_FINGER_B]
+            f_b_newton = (raw_thumb * 0.012547) + 0.384
+            
+            # UR5 Wrist
+            f_wrist_newton = np.linalg.norm(wrist_wrench[:3])
+
+            # 4. 存储数据
+            times.append(current_t)
+            forces_finger_a.append(f_a_newton)
+            forces_finger_b.append(f_b_newton)
+            forces_wrist.append(f_wrist_newton)
+            phases.append(current_phase)
+            
+            # =========================================================
+            # part B: 核心控制逻辑 (X Mode State Machine)
+            # =========================================================
+            
+            # --- 阶段 0: 外部推动 -> 检测大拇指激增 -> 闭合手指 ---
+            robot.moveL(pose_peg_0, linSpeed=0.2, linAccel=0.5, asynch=False)  # no contact pose
+            if current_phase == 0:
+                robot.moveL(pose_peg_1, linSpeed=0.2, linAccel=0.5, asynch=True)  # move to contact pose
+                if thumb_baseline is None: thumb_baseline = raw_thumb
+                
+                # 简单的基准线跟随 (适应缓慢漂移)
+                if raw_thumb < thumb_baseline: thumb_baseline = raw_thumb
+                else: thumb_baseline += (raw_thumb - thumb_baseline) * 0.05
+                
+                # 判断激增
+                if (raw_thumb - thumb_baseline) > THUMB_SPIKE_THRESH:
+                    print(f">>> [PHASE 0] Thumb Spike! Closing Hand.")
+                    apply_speed(hand, 50, "slow close")
+                    apply_angles(hand, close_angles, "Close Grip")
+                    current_phase = 1
+                    stable_start_t = None # 重置下一阶段计时器
+
+            # --- 阶段 1: 抬起前检测 -> 食指 > 300 持续 2秒 -> 机械臂抬起 ---
+            elif current_phase == 1:
+                # 检查食指力度
+                if raw_index > INDEX_STABLE_THRESH:
+                    if stable_start_t is None:
+                        stable_start_t = time.monotonic()
+                    
+                    # 检查持续时间
+                    duration = time.monotonic() - stable_start_t
+                    if duration >= INDEX_STABLE_TIME:
+                        print(f">>> [PHASE 1] Stable > 300 for {duration:.1f}s. Moving Arm UP (Blocking).")
+                        
+                        # 动作：抬起 (阻塞/同步)，确保动作完成才继续
+                        robot.moveL(pose_peg_lift, linSpeed=0.5, linAccel=0.5, asynch=False)
+                        print(">>> Arm Lift Done. Preparing Return.")
+                        
+                        # 动作：开始回退 (异步)，进入下一阶段边动边测
+                        # 这里稍微停顿一下确保状态切换
+                        time.sleep(0.5) 
+                        robot.moveL(pose_peg_insert, linSpeed=0.2, linAccel=0.5, asynch=False)
+                        print(">>> Arm Returning (Async)... Monitoring Drop.")
+                        
+                        # 初始化 Phase 2 的窗口参数
+                        current_phase = 2
+                        window_samples = []
+                        window_start_t = time.monotonic()
+                        prev_avg = None
+                        spike_detected = False
+                else:
+                    # 如果中途掉下来，计时器重置
+                    stable_start_t = None
+
+            # --- 阶段 2: 回退中 -> 检测 Spike + Drop -> 松手 ---
+            elif current_phase == 2:
+                # Mode X 滑动窗口逻辑
+                window_samples.append(raw_index)
+                
+                if (time.monotonic() - window_start_t) >= MODE_X_WINDOW:
+                    robot.moveL(pose_peg_2, linSpeed=0.2, linAccel=0.5, asynch=True)  # lateral move
+                    if len(window_samples) > 0:
+                        avg_force = sum(window_samples) / len(window_samples)
+                        
+                        if prev_avg is not None:
+                            delta = avg_force - prev_avg
+                            
+                            if not spike_detected:
+                                # 寻找激增 (接触)
+                                if delta >= MODE_X_SPIKE:
+                                    spike_detected = True
+                                    print(f">>> [PHASE 2] Contact Spike (+{delta:.1f}). Waiting for Drop.")
+                                    robot.moveL(pose_peg_3, linSpeed=0.2, linAccel=0.5, asynch=True)  # continue return
+                            else:
+                                # 寻找骤降 (入位)
+                                drop = -delta
+                                if drop >= MODE_X_DROP:
+                                    print(f">>> [SUCCESS] Drop detected (-{drop:.1f}). Peg Inserted!")
+                                    
+                                    # 动作：松手
+                                    # robot.stopL() # 立即停止机械臂
+                                    apply_speed(hand, 1000, "fast open")
+                                    apply_angles(hand, DEFAULT_OPEN, "Open Hand")
+                                    
+                                    task_running = False # 结束循环
+                                    current_phase = 3
+                        
+                        prev_avg = avg_force
+                        window_samples = []
+                        window_start_t = time.monotonic()
+
+            # 简单的频率控制 (约100Hz)
+            time.sleep(0.01)
+
+    except KeyboardInterrupt:
+        print("Interrupted by user.")
+        robot.stopL()
+    
+    print(f"Task Finished. Collected {len(times)} data points.")
+    
+    # =========================
+    #  绘图 (保留你的 Matplotlib 逻辑)
+    # =========================
+    plt.figure(figsize=(12, 8))
+    
+    # 上图：UR5 力度
+    plt.subplot(2, 1, 1)
+    plt.plot(times, forces_wrist, label='UR5 Wrist (N)', color='black')
+    plt.title(f"Arm Force - Phase: {current_phase}")
+    plt.grid(True)
+    plt.legend()
+    
+    # 下图：手指力度 (你的映射数据)
+    plt.subplot(2, 1, 2)
+    # 用不同背景色标记阶段
+    p_arr = np.array(phases)
+    t_arr = np.array(times)
+    if len(t_arr) > 0:
+        plt.fill_between(t_arr, 0, max(forces_finger_b)*1.1, where=(p_arr==0), color='gray', alpha=0.2, label='Wait Thumb')
+        plt.fill_between(t_arr, 0, max(forces_finger_b)*1.1, where=(p_arr==1), color='orange', alpha=0.2, label='Wait Stability')
+        plt.fill_between(t_arr, 0, max(forces_finger_b)*1.1, where=(p_arr==2), color='green', alpha=0.2, label='Insertion')
+
+    plt.plot(times, forces_finger_a, label=f'Index (Idx{IDX_FINGER_A}) Mapped', color='blue')
+    plt.plot(times, forces_finger_b, label=f'Thumb (Idx{IDX_FINGER_B}) Mapped', color='red')
+    
+    plt.axhline(y=(300*0.007478 - 0.414), color='blue', linestyle=':', label='Stability Thresh (approx)')
+    
+    plt.xlabel("Time (s)")
+    plt.ylabel("Force (N)")
+    plt.legend()
+    plt.grid(True)
+    
+    save_path = "peginhole_x_mode_plot.png"
+    plt.savefig(save_path)
+    print(f"Plot saved to {save_path}")
+    # plt.show()
 
 def run_trial(
     robot,
