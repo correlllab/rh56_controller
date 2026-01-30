@@ -91,12 +91,40 @@ pose_tripod_shake = np.array([
 ], dtype=float)
 
 # Poses for peg-in-hole task
-pose_peg_0 = np.array([
-    [-0.998,  0.009,  -0.064, -0.488],
-    [ 0.056,  0.615,  -0.787, -0.318],
-    [ 0.032, -0.789,  -0.614,  0.269],
-    [ 0.,     0. ,    0. ,    1.   ]
-], dtype=float)
+pose_peg_prep = np.array([
+    [-0.999, -0.019, -0.041, -0.448],
+    [ 0.026,  0.499, -0.866, -0.473],
+    [ 0.037, -0.867, -0.498,  0.243],
+    [ 0.    , 0.    , 0.    , 1.   ]
+ ], dtype=float)
+
+pose_peg_go = np.array([
+    [-0.999, -0.019, -0.041, -0.448],
+    [ 0.026,  0.499, -0.866, -0.493],
+    [ 0.037, -0.867, -0.498,  0.243],
+    [ 0.    , 0.    , 0.    , 1.   ]
+ ], dtype=float)
+
+pose_peg_n = np.array([
+    [-0.999, -0.019, -0.041, -0.448],
+    [ 0.026,  0.499, -0.866, -0.486],
+    [ 0.037, -0.867, -0.498,  0.243],
+    [ 0.    , 0.    , 0.    , 1.   ]
+ ], dtype=float)
+
+pose_peg_lift = np.array([
+    [-0.999, -0.019, -0.041, -0.448],
+    [ 0.026,  0.499, -0.866, -0.486],
+    [ 0.037, -0.867, -0.498,  0.303],
+    [ 0.    , 0.    , 0.    , 1.   ]
+ ], dtype=float)
+
+pose_peg_put = np.array([
+    [-0.999, -0.019, -0.041, -0.448],
+    [ 0.026,  0.499, -0.866, -0.486],
+    [ 0.037, -0.867, -0.498,  0.243],
+    [ 0.    , 0.    , 0.    , 1.   ]
+ ], dtype=float)
 
 TRIALS: Dict[str, Dict[str, Optional[np.ndarray]]] = {
     # "precision" == pinch-style in your naming; we’ll map it to preset key "1"
@@ -212,6 +240,7 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
     current_phase = 0    # 0:检测拇指, 1:检测食指稳定, 2:检测插孔Drop, 3:完成
     start_t = time.monotonic()
     
+    skip = 0
     # Phase 0 变量
     thumb_baseline = None
     
@@ -238,10 +267,8 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
             hand_data = hand.force_act()
             
             # 2. 读取 UR5
-            if hasattr(robot, 'get_tcp_force'):
-                wrist_wrench = robot.get_tcp_force()
-            elif hasattr(robot, 'get_force'):
-                wrist_wrench = robot.get_force()
+            if hasattr(robot, 'get_ft_data'):
+                wrist_wrench = robot.get_ft_data()
             else:
                 wrist_wrench = [0.0] * 6 
             
@@ -269,9 +296,13 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
             # =========================================================
             
             # --- 阶段 0: 外部推动 -> 检测大拇指激增 -> 闭合手指 ---
-            robot.moveL(pose_peg_0, linSpeed=0.2, linAccel=0.5, asynch=False)  # no contact pose
+            if skip == 0:
+                apply_angles(hand,[1000, 1000, 1000, 1000, 500, 150], "Prepare for peg-in-hole")
+                robot.moveL(pose_peg_prep, linSpeed=0.2, linAccel=0.5, asynch=False)  # no contact pose
+                skip = 1
             if current_phase == 0:
-                robot.moveL(pose_peg_1, linSpeed=0.2, linAccel=0.5, asynch=True)  # move to contact pose
+                
+                robot.moveL(pose_peg_go, linSpeed=0.2, linAccel=0.5, asynch=True)  # move to contact pose
                 if thumb_baseline is None: thumb_baseline = raw_thumb
                 
                 # 简单的基准线跟随 (适应缓慢漂移)
@@ -305,7 +336,7 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
                         # 动作：开始回退 (异步)，进入下一阶段边动边测
                         # 这里稍微停顿一下确保状态切换
                         time.sleep(0.5) 
-                        robot.moveL(pose_peg_insert, linSpeed=0.2, linAccel=0.5, asynch=False)
+                        robot.moveL(pose_peg_put, linSpeed=0.2, linAccel=0.5, asynch=False)
                         print(">>> Arm Returning (Async)... Monitoring Drop.")
                         
                         # 初始化 Phase 2 的窗口参数
@@ -324,7 +355,7 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
                 window_samples.append(raw_index)
                 
                 if (time.monotonic() - window_start_t) >= MODE_X_WINDOW:
-                    robot.moveL(pose_peg_2, linSpeed=0.2, linAccel=0.5, asynch=True)  # lateral move
+                    robot.moveL(pose_peg_prep, linSpeed=0.2, linAccel=0.5, asynch=True)  # lateral move
                     if len(window_samples) > 0:
                         avg_force = sum(window_samples) / len(window_samples)
                         
@@ -336,7 +367,7 @@ def run_peginhole_task(hand, robot, pose_lift, pose_return, close_angles):
                                 if delta >= MODE_X_SPIKE:
                                     spike_detected = True
                                     print(f">>> [PHASE 2] Contact Spike (+{delta:.1f}). Waiting for Drop.")
-                                    robot.moveL(pose_peg_3, linSpeed=0.2, linAccel=0.5, asynch=True)  # continue return
+                                    robot.moveL(pose_peg_n, linSpeed=0.2, linAccel=0.5, asynch=True)  # continue return
                             else:
                                 # 寻找骤降 (入位)
                                 drop = -delta
@@ -535,19 +566,22 @@ def main():
     _log("CONNECT", "UR5")
     robot = ur5.UR5_Interface()
     robot.start()
+    robot.start_ft_sensor(ip_address="192.168.0.5", poll_rate=100)
 
-    try:
-        run_trial(
-            robot=robot,
-            hand=hand,
-            trial_name=args.trial,
-            linSpeed=args.linSpeed,
-            linAccel=args.linAccel,
-            settle_s=args.settle_s,
-            close_wait_s=args.close_wait_s,
-            shake_cycles=args.shake,
-            return_to_start=args.return_to_start,
-        )
+    # try:
+    #     run_trial(
+    #         robot=robot,
+    #         hand=hand,
+    #         trial_name=args.trial,
+    #         linSpeed=args.linSpeed,
+    #         linAccel=args.linAccel,
+    #         settle_s=args.settle_s,
+    #         close_wait_s=args.close_wait_s,
+    #         shake_cycles=args.shake,
+    #         return_to_start=args.return_to_start,
+    #     )
+    try: 
+        run_peginhole_task(hand, robot, pose_peg_lift, pose_peg_put, close_angles=[1000, 1000, 1000, 0, 500, 150])
     finally:
         # Always leave the hand open
         try:
