@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-RH56 Peg-in-Hole - Hand Control + Passive UR5 Sensing
+RH56 Peg-in-Hole - Hand Control Only (UR5 Removed)
 功能:
   1. 连接 RH56: 执行 "抓取反射" 逻辑。
-  2. 连接 UR5: 被动读取 F/T 传感器。
-  3. 数据保存: 自动保存为 CSV。
-  4. 绘图: 符合 IROS 格式 (Font 14)。
+  2. 移除 UR5: 防止与 Jupyter Notebook 冲突。
+  3. 数据保存: 保存 Unix Epoch 时间戳 (time.time()) 以便与其他数据对齐。
+  4. 绘图: 仅绘制手部数据。
 
 使用方法:
-  python3 rh56_peginhole_passive_ur5.py --port /dev/ttyUSB0
+  python3 rh56_peginhole.py --port /dev/ttyUSB0
 """
 
 import sys
@@ -19,16 +19,20 @@ import argparse
 import csv
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 
-try:
-    from rh56_controller.rh56_hand import RH56Hand
-    from magpie_control import ur5
-except ImportError as e:
-    print(f"错误: 缺少必要的驱动模块 ({e})。")
-    sys.exit(1)
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+for path in (PROJECT_ROOT, SCRIPT_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+# --- RH56 Only (UR5 Removed) ---
+from rh56_controller.rh56_hand import RH56Hand
 
 DEFAULT_OPEN = [1000, 1000, 1000, 1000, 1000, 0]
-CLOSE_ANGLES = [1000, 1000, 1000, 0, 500, 150] 
+CLOSE_ANGLES = [1000, 1000, 1000, 0, 700, 150] 
 
 IDX_FINGER_A = 3    # Index finger
 IDX_FINGER_B = 4    # Thumb finger
@@ -47,38 +51,39 @@ def apply_angles(hand, angles, label=""):
 def apply_speed(hand, speed, label=""):
     hand.speed_set([speed] * 6)
 
-def run_passive_sensing_task(hand, robot):
-    print(f"[{time.strftime('%H:%M:%S')}] START TASK (Hand Control + UR5 Passive Read)...")
+def run_hand_control_task(hand):
+    print(f"[{time.strftime('%H:%M:%S')}] START TASK (Hand Control Only)...")
     
-    times = []
+    # Data Lists
+    timestamps = [] # Will store time.time()
     forces_finger_a = [] 
     forces_finger_b = [] 
-    forces_wrist = []    
     phases = []
     
     current_phase = 0
-    start_t = time.monotonic()
     
+    # Helper variables for logic
     thumb_baseline = None
     stable_start_t = None
     
     window_samples = []
-    window_start_t = time.monotonic()
+    window_start_t = time.time()
     prev_avg = None
     spike_detected = False
     
-    apply_speed(hand, 200, "init")
-    apply_angles(hand, [1000, 1000, 1000, 1000, 500, 150], "Prepare")
+    # Initialize Hand
+    apply_speed(hand, 500, "init")
+    apply_angles(hand, [1000, 1000, 1000, 1000, 700, 150], "Prepare")
     time.sleep(1.0)
     
     task_running = True
     
     try:
         while task_running:
-            loop_start = time.monotonic()
-            current_t = loop_start - start_t
+            # --- 1. Capture Time (Unix Epoch) ---
+            current_epoch = time.time() 
             
-            # --- 读取数据 ---
+            # --- 2. Read Hand Data ---
             hand_data = hand.force_act()
             raw_index = hand_data[IDX_FINGER_A]
             raw_thumb = hand_data[IDX_FINGER_B]
@@ -86,19 +91,16 @@ def run_passive_sensing_task(hand, robot):
             f_a_newton = (raw_index * 0.007478) - 0.414
             f_b_newton = (raw_thumb * 0.012547) + 0.384
             
-            wrist_wrench = robot.get_ft_data()
-            if wrist_wrench and len(wrist_wrench) >= 3:
-                f_wrist_newton = np.linalg.norm(wrist_wrench[:3])
-            else:
-                f_wrist_newton = 0.0
-
-            times.append(current_t)
+            # --- 3. Store Data ---
+            timestamps.append(current_epoch)
             forces_finger_a.append(f_a_newton)
             forces_finger_b.append(f_b_newton)
-            forces_wrist.append(f_wrist_newton)
             phases.append(current_phase)
             
-            # --- 逻辑控制 ---
+            # --- 4. Logic Control ---
+            # Note: Logic timers still use monotonic/relative logic for stability, 
+            # but we save Epoch time for data sync.
+            
             if current_phase == 0:
                 if thumb_baseline is None: thumb_baseline = raw_thumb
                 if raw_thumb < thumb_baseline: thumb_baseline = raw_thumb
@@ -113,20 +115,20 @@ def run_passive_sensing_task(hand, robot):
 
             elif current_phase == 1:
                 if raw_index > INDEX_STABLE_THRESH:
-                    if stable_start_t is None: stable_start_t = time.monotonic()
-                    if (time.monotonic() - stable_start_t) >= INDEX_STABLE_TIME:
+                    if stable_start_t is None: stable_start_t = time.time()
+                    if (time.time() - stable_start_t) >= INDEX_STABLE_TIME:
                         print(f">>> [Phase 1->2] Grip Stable. Ready for insertion.")
                         current_phase = 2
                         window_samples = []
-                        window_start_t = time.monotonic()
+                        window_start_t = time.time()
                         prev_avg = None
                         spike_detected = False
                 else:
                     stable_start_t = None
 
             elif current_phase == 2:
-                window_samples.append(raw_index)
-                if (time.monotonic() - window_start_t) >= MODE_X_WINDOW:
+                window_samples.append(raw_thumb)
+                if (time.time() - window_start_t) >= MODE_X_WINDOW:
                     if len(window_samples) > 0:
                         avg_force = sum(window_samples) / len(window_samples)
                         if prev_avg is not None:
@@ -145,37 +147,37 @@ def run_passive_sensing_task(hand, robot):
                                     current_phase = 3
                         prev_avg = avg_force
                         window_samples = []
-                        window_start_t = time.monotonic()
+                        window_start_t = time.time()
 
             time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
     
-    print(f"Task Finished. Points: {len(times)}")
-    return times, forces_wrist, forces_finger_a, forces_finger_b, phases
+    print(f"Task Finished. Points: {len(timestamps)}")
+    return timestamps, forces_finger_a, forces_finger_b, phases
 
-def save_csv(times, f_wrist, f_idx, f_thumb, phases):
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = f"peginhole_data_{timestamp}.csv"
+def save_csv(timestamps, f_idx, f_thumb, phases):
+    # Use the first timestamp for the filename to keep it unique
+    start_time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime(timestamps[0]))
+    filename = f"hand_data_{start_time_str}.csv"
     print(f"Saving data to {filename}...")
     
     with open(filename, mode='w', newline='') as file:
         writer = csv.writer(file)
-        # Header
-        writer.writerow(["Time_s", "Wrist_Force_N", "Index_Force_N", "Thumb_Force_N", "Phase"])
+        # Header changed to Timestamp_Epoch for synchronization
+        writer.writerow(["Timestamp_Epoch", "Index_Force_N", "Thumb_Force_N", "Phase"])
         # Rows
-        for i in range(len(times)):
+        for i in range(len(timestamps)):
             writer.writerow([
-                f"{times[i]:.4f}", 
-                f"{f_wrist[i]:.4f}", 
+                f"{timestamps[i]:.6f}",  # High precision for epoch time
                 f"{f_idx[i]:.4f}", 
                 f"{f_thumb[i]:.4f}", 
                 phases[i]
             ])
     print("CSV Save Complete.")
 
-def plot_results(times, f_wrist, f_idx, f_thumb, phases):
+def plot_results(timestamps, f_idx, f_thumb, phases):
     # --- IROS Style Config ---
     plt.rcParams.update({
         'font.size': 14,
@@ -184,26 +186,21 @@ def plot_results(times, f_wrist, f_idx, f_thumb, phases):
         'xtick.labelsize': 14,
         'ytick.labelsize': 14,
         'legend.fontsize': 14,
-        'font.family': 'serif', # Times New Roman style
+        'font.family': 'serif',
         'lines.linewidth': 2
     })
-    # -------------------------
+    
+    # Calculate Relative Time for Plotting (Easier to read than Epoch)
+    if len(timestamps) > 0:
+        t_start = timestamps[0]
+        rel_times = [t - t_start for t in timestamps]
+    else:
+        rel_times = []
 
-    plt.figure(figsize=(10, 8)) # Standardize size
+    plt.figure(figsize=(10, 6))
     
-    # Subplot 1
-    plt.subplot(2, 1, 1)
-    plt.plot(times, f_wrist, label='UR5 Wrist Force', color='black')
-    plt.title("UR5 Wrist Force")
-    plt.ylabel("Force (N)")
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(loc='upper right')
-    plt.xlim(left=0)
-    
-    # Subplot 2
-    plt.subplot(2, 1, 2)
     p_arr = np.array(phases)
-    t_arr = np.array(times)
+    t_arr = np.array(rel_times)
     
     if len(t_arr) > 0:
         max_f = max(max(f_idx), max(f_thumb)) * 1.1 if f_idx else 10
@@ -211,22 +208,22 @@ def plot_results(times, f_wrist, f_idx, f_thumb, phases):
         plt.fill_between(t_arr, 0, max_f, where=(p_arr==1), color='orange', alpha=0.15, label='Stable')
         plt.fill_between(t_arr, 0, max_f, where=(p_arr==2), color='green', alpha=0.15, label='Insert')
 
-    plt.plot(times, f_idx, label='Index Finger', color='blue')
-    plt.plot(times, f_thumb, label='Thumb Finger', color='red')
+    plt.plot(rel_times, f_idx, label='Index Finger', color='blue')
+    plt.plot(rel_times, f_thumb, label='Thumb Finger', color='red')
     
     thresh_val = (300 * 0.007478 - 0.414)
     plt.axhline(y=thresh_val, color='blue', linestyle=':', alpha=0.8, label='Thresh')
     
-    plt.title("Hand Finger Forces")
-    plt.xlabel("Time (s)")
+    plt.title("Hand Finger Forces (Synced)")
+    plt.xlabel("Time (s) - relative to start")
     plt.ylabel("Force (N)")
     plt.legend(loc='upper left')
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.xlim(left=0)
     
     plt.tight_layout()
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    save_path = f"peginhole_plot_{timestamp}.png"
+    timestamp_str = time.strftime("%Y%m%d-%H%M%S")
+    save_path = f"hand_plot_{timestamp_str}.png"
     plt.savefig(save_path, dpi=300)
     print(f"Plot saved to {save_path}")
 
@@ -234,7 +231,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="/dev/ttyUSB0", help="Hand Serial port")
     parser.add_argument("--hand-id", type=int, default=1, help="Hand ID")
-    parser.add_argument("--robot-ip", default="192.168.0.5", help="UR5 IP")
     args = parser.parse_args()
 
     print(f"Connecting to RH56 Hand on {args.port}...")
@@ -244,21 +240,14 @@ def main():
         print(f"Hand connection failed: {e}")
         return
 
-    print("Connecting to UR5 Interface (Passive)...")
-    try:
-        robot = ur5.UR5_Interface()
-        robot.start()
-        robot.start_ft_sensor(ip_address=args.robot_ip, poll_rate=100)
-    except Exception as e:
-        print(f"UR5 connection failed: {e}")
-        return
+    # No UR5 connection here anymore!
 
     try:
-        t, f_w, f_a, f_b, phases = run_passive_sensing_task(hand, robot)
+        t, f_a, f_b, phases = run_hand_control_task(hand)
         
         if len(t) > 0:
-            save_csv(t, f_w, f_a, f_b, phases)
-            plot_results(t, f_w, f_a, f_b, phases)
+            save_csv(t, f_a, f_b, phases)
+            plot_results(t, f_a, f_b, phases)
         
     finally:
         print("Cleaning up...")

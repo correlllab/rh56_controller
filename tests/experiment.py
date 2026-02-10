@@ -76,8 +76,8 @@ def build_presets() -> Dict[str, GraspPreset]:
                 "Index + thumb pinch. Thumb bend preset 650, thumb rotation 150. "
                 "Index closes to 0; thumb bend curls for contact."
             ),
-            prepare_angles=[1000, 1000, 1000, 1000, 500, 150],
-            close_angles=[1000, 1000, 1000, 0, 500, 150],
+            prepare_angles=[1000, 1000, 1000, 1000, 700, 150],
+            close_angles=[1000, 1000, 1000, 0, 800, 150],
             close_speed=500,
         ),
         "2": GraspPreset(

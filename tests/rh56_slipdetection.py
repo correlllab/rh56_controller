@@ -20,12 +20,18 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 
-try:
-    from rh56_controller.rh56_hand import RH56Hand
-    from magpie_control import ur5
-except ImportError as e:
-    print(f"错误: 缺少驱动模块 ({e})。")
-    sys.exit(1)
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+for path in (PROJECT_ROOT, SCRIPT_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+# --- UR5 + RH56 ---
+from magpie_control import ur5
+from rh56_controller.rh56_hand import RH56Hand
 
 DEFAULT_OPEN = [1000, 1000, 1000, 1000, 1000, 0]
 GRIP_ANGLES  = [1000, 1000, 0, 0, 850, 0] 
