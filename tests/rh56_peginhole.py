@@ -32,7 +32,7 @@ for path in (PROJECT_ROOT, SCRIPT_DIR):
 from rh56_controller.rh56_hand import RH56Hand
 
 DEFAULT_OPEN = [1000, 1000, 1000, 1000, 1000, 0]
-CLOSE_ANGLES = [1000, 1000, 1000, 0, 700, 150] 
+CLOSE_ANGLES = [1000, 1000, 1000, 0, 600, 150] 
 
 IDX_FINGER_A = 3    # Index finger
 IDX_FINGER_B = 4    # Thumb finger
@@ -41,7 +41,7 @@ IDX_FINGER_B = 4    # Thumb finger
 THUMB_SPIKE_THRESH = 50      
 INDEX_STABLE_THRESH = 300    
 INDEX_STABLE_TIME = 2.0      
-MODE_X_SPIKE = 75            
+MODE_X_SPIKE = 50            
 MODE_X_DROP = 25             
 MODE_X_WINDOW = 0.5          
 
@@ -73,7 +73,7 @@ def run_hand_control_task(hand):
     
     # Initialize Hand
     apply_speed(hand, 500, "init")
-    apply_angles(hand, [1000, 1000, 1000, 1000, 700, 150], "Prepare")
+    apply_angles(hand, [1000, 1000, 1000, 1000, 600, 150], "Prepare")
     time.sleep(1.0)
     
     task_running = True
@@ -224,8 +224,8 @@ def plot_results(timestamps, f_idx, f_thumb, phases):
     plt.tight_layout()
     timestamp_str = time.strftime("%Y%m%d-%H%M%S")
     save_path = f"hand_plot_{timestamp_str}.png"
-    plt.savefig(save_path, dpi=300)
-    print(f"Plot saved to {save_path}")
+    # plt.savefig(save_path, dpi=300)
+    # print(f"Plot saved to {save_path}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -251,7 +251,10 @@ def main():
         
     finally:
         print("Cleaning up...")
-        try: apply_angles(hand, DEFAULT_OPEN, "Final Open")
+        try: 
+            for _ in range(3):
+                apply_angles(hand, DEFAULT_OPEN, "Final Open")
+                time.sleep(0.5)
         except: pass
         print("Done.")
 
