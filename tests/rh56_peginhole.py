@@ -81,6 +81,7 @@ def run_hand_control_task(hand):
     try:
         while task_running:
             # --- 1. Capture Time (Unix Epoch) ---
+            loop_rate = 0.006
             current_epoch = time.time() 
             
             # --- 2. Read Hand Data ---
@@ -149,7 +150,11 @@ def run_hand_control_task(hand):
                         window_samples = []
                         window_start_t = time.time()
 
-            time.sleep(0.01)
+            
+            elapsed = time.time() - current_epoch
+            remaining = loop_rate - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
