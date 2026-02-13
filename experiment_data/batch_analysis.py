@@ -43,7 +43,8 @@ def analyze_pair(hand_file, ur5_file):
         
         h_noise = (p0_h['Index_Force_N'] + p0_h['Thumb_Force_N']).std()
         u_noise = p0_u['wrist_force_N'].std()
-        
+        print(f"Debug: {os.path.basename(hand_file)} - Hand Noise: {h_noise:.3f} N, Wrist Noise: {u_noise:.3f} N")
+
         results['Hand_MDF'] = 3 * h_noise
         results['Wrist_MDF'] = 3 * u_noise
         
@@ -72,9 +73,17 @@ def analyze_pair(hand_file, ur5_file):
 # 3. 批量执行
 # ==========================================
 
-hand_files = sorted(glob.glob('hand_data_*.csv'))
-ur5_files = sorted(glob.glob('ur5_task_data_*.csv'))
+# hand_files = sorted(glob.glob('hand_data_*.csv'))
+# ur5_files = sorted(glob.glob('ur5_task_data_*.csv'))
+all_hand_files = glob.glob('hand_data_*.csv')
+all_ur5_files = glob.glob('ur5_task_data_*.csv')
 
+# 2. Filter out any file containing "_old"
+hand_files = sorted([f for f in all_hand_files if '_old' not in f])
+ur5_files = sorted([f for f in all_ur5_files if '_old' not in f])
+
+print(f"Found {len(all_hand_files)} total files.")
+print(f"Processing {len(hand_files)} clean files (excluded {len(all_hand_files) - len(hand_files)} '_old' files)...")
 print(f"Processing {len(hand_files)} experiments...")
 all_results = []
 
@@ -151,3 +160,33 @@ create_boxplot('Hand_CV', 'Wrist_CV',
                'Fig2_Stability_CV.png')
 
 print("\nSuccess! Generated 2 figures.")
+
+
+# ==========================================
+# 5. PRINT FINAL STATISTICS FOR PAPER
+# ==========================================
+
+print("\n" + "="*40)
+print("FINAL RESULTS (For Paper / Manual Record)")
+print("="*40)
+
+# 1. Calculate the Raw Sigma (Noise) from the MDF (MDF = 3 * Sigma)
+# We divide by 3 because your code calculated MDF as 3 * std_dev
+hand_sigmas = df['Hand_MDF'] / 3
+wrist_sigmas = df['Wrist_MDF'] / 3
+
+# 2. Print the "Average" (Typical Performance)
+print(f"\n[TYPICAL NOISE] (Use these for 'Sensors have a noise floor of X')")
+print(f"Hand Average Sigma:  {hand_sigmas.mean():.4f} N")
+print(f"Wrist Average Sigma: {wrist_sigmas.mean():.4f} N")
+
+# 3. Print the "Worst Case" (Conservative Thresholds)
+print(f"\n[WORST CASE] (Use these for setting safe thresholds)")
+print(f"Hand Max Sigma:      {hand_sigmas.max():.4f} N")
+print(f"Wrist Max Sigma:     {wrist_sigmas.max():.4f} N")
+
+# 4. Print the Improvement Ratio
+improvement = wrist_sigmas.mean() / hand_sigmas.mean()
+print(f"\n[CONCLUSION]")
+print(f"The Hand is {improvement:.1f}x more sensitive than the Wrist.")
+print("="*40)
