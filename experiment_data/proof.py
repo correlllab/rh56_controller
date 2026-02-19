@@ -1,10 +1,37 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy import signal
 import glob
 import os
+import matplotlib as mpl
+
+# LaTeX-native output (PGF). Requires a working LaTeX (pdflatex).
+mpl.use("pgf")
+
+mpl.rcParams.update({
+    # IROS/IEEE-like typography sizes for 2-column figures
+    "font.size": 8,
+    "axes.labelsize": 8,
+    "axes.titlesize": 8,
+    "legend.fontsize": 7,
+    "xtick.labelsize": 7,
+    "ytick.labelsize": 7,
+
+    # line/marker aesthetics
+    "lines.linewidth": 1.0,
+    "axes.linewidth": 0.6,
+
+    # Use LaTeX for all text so it matches the paper font
+    "text.usetex": True,
+    "pgf.texsystem": "pdflatex",
+
+    # Make the text font match IEEE-like Times
+    # If your template already sets Times, this will follow it.
+    "pgf.preamble": r"\usepackage{newtxtext,newtxmath}",
+})
+
+import matplotlib.pyplot as plt
 
 # ==========================================
 # CONFIGURATION
@@ -129,56 +156,68 @@ for i, (hand_f, ur5_f) in enumerate(pairs):
         print(f"Error pair {i}: {e}")
 
 # ==========================================
-# PLOTTING (Spaghetti + Median + IQR)
+# PLOTTING (Spaghetti + Median + IQR), PGF/PDF vector export
 # ==========================================
 if all_thumb:
-    thumb = np.asarray(all_thumb)   # shape: (n_trials, INTERP_POINTS)
+    thumb = np.asarray(all_thumb)   # (n_trials, INTERP_POINTS)
     wrist = np.asarray(all_wrist)
 
     x = np.linspace(0, 100, INTERP_POINTS)
     n_trials = thumb.shape[0]
     avg_lag = float(np.mean(all_lags)) if len(all_lags) else 0.0
 
-    def robust_band(mat, lo=25, hi=75):
-        med = np.nanmedian(mat, axis=0)
-        p_lo = np.nanpercentile(mat, lo, axis=0)
-        p_hi = np.nanpercentile(mat, hi, axis=0)
-        return med, p_lo, p_hi
+    def band_iqr(mat):
+        # mat: (n_trials, n_points)
+        valid = np.any(~np.isnan(mat), axis=0)
 
-    h_med, h_p25, h_p75 = robust_band(thumb, 25, 75)
-    w_med, w_p25, w_p75 = robust_band(wrist, 25, 75)
+        med = np.full(mat.shape[1], np.nan)
+        p25 = np.full(mat.shape[1], np.nan)
+        p75 = np.full(mat.shape[1], np.nan)
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True, sharey=True)
+        if np.any(valid):
+            med[valid] = np.nanmedian(mat[:, valid], axis=0)
+            p25[valid] = np.nanpercentile(mat[:, valid], 25, axis=0)
+            p75[valid] = np.nanpercentile(mat[:, valid], 75, axis=0)
 
-    # --- Hand subplot ---
+        return med, p25, p75
+
+    h_med, h_p25, h_p75 = band_iqr(thumb)
+    w_med, w_p25, w_p75 = band_iqr(wrist)
+
+    # IEEE single-column width is about 3.5in
+    fig_w = 3.5
+    fig_h = 2.8
+    fig, axes = plt.subplots(2, 1, figsize=(fig_w, fig_h), sharex=True, sharey=True)
+
+    # Hand
     ax = axes[0]
     for k in range(n_trials):
-        ax.plot(x, thumb[k], linewidth=0.8, alpha=0.15)
-    ax.plot(x, h_med, linewidth=2.5, label="Hand Thumb (Median)")
-    ax.fill_between(x, h_p25, h_p75, alpha=0.20, label="Hand IQR (25–75%)")
-    ax.set_title("Hand: Spaghetti + Median + IQR")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        ax.plot(x, thumb[k], linewidth=0.6, alpha=0.12)
+    ax.plot(x, h_med, linewidth=1.4, label="Median")
+    ax.fill_between(x, h_p25, h_p75, alpha=0.18, label="IQR (25--75\\%)")
+    ax.set_ylabel("Norm. force")
+    ax.text(0.01, 0.92, "Hand", transform=ax.transAxes)
 
-    # --- Wrist subplot ---
+    # Wrist
     ax = axes[1]
     for k in range(n_trials):
-        ax.plot(x, wrist[k], linewidth=0.8, alpha=0.15)
-    ax.plot(x, w_med, linewidth=2.5, label=f"Wrist Force (Median, shifted {avg_lag:.2f}s)")
-    ax.fill_between(x, w_p25, w_p75, alpha=0.20, label="Wrist IQR (25–75%)")
-    ax.set_title("Wrist: Spaghetti + Median + IQR")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        ax.plot(x, wrist[k], linewidth=0.6, alpha=0.12)
+    ax.plot(x, w_med, linewidth=1.4, label=f"Median (shift {avg_lag:.2f}s)")
+    ax.fill_between(x, w_p25, w_p75, alpha=0.18, label="IQR (25--75\\%)")
+    ax.set_xlabel("Task progress (\\%)")
+    ax.set_ylabel("Norm. force")
+    ax.text(0.01, 0.92, "Wrist", transform=ax.transAxes)
 
-    fig.suptitle(f"Aligned Force Profiles (n={n_trials}, trimmed last {TRIM_SECONDS_FROM_END}s)", y=0.98)
-    axes[1].set_xlabel("Task Progress (%)")
-    axes[0].set_ylabel("Normalized Force")
-    axes[1].set_ylabel("Normalized Force")
+    for ax in axes:
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="upper right", frameon=False)
 
-    plt.tight_layout()
-    save_path = f"{OUTPUT_FOLDER}/spaghetti_median_iqr.png"
-    plt.savefig(save_path, dpi=200)
+    plt.tight_layout(pad=0.2)
+
+    base = f"{OUTPUT_FOLDER}/spaghetti_median_iqr"
+    plt.savefig(base + ".pdf", bbox_inches="tight")      # vector PDF
+    plt.savefig(base + ".pgf", bbox_inches="tight")      # LaTeX-native PGF
     plt.show()
-    print(f"Saved to {save_path}")
+    print(f"Saved to {base}.pdf and {base}.pgf")
 else:
     print("No valid data found.")
