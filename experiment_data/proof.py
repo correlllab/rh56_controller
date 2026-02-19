@@ -129,34 +129,56 @@ for i, (hand_f, ur5_f) in enumerate(pairs):
         print(f"Error pair {i}: {e}")
 
 # ==========================================
-# PLOTTING
+# PLOTTING (Spaghetti + Median + IQR)
 # ==========================================
 if all_thumb:
-    h_mean = np.nanmean(all_thumb, axis=0)
-    w_mean = np.nanmean(all_wrist, axis=0)
-    h_std = np.nanstd(all_thumb, axis=0)
-    w_std = np.nanstd(all_wrist, axis=0)
-    
-    avg_lag = np.mean(all_lags)
-    
-    plt.figure(figsize=(10, 6))
+    thumb = np.asarray(all_thumb)   # shape: (n_trials, INTERP_POINTS)
+    wrist = np.asarray(all_wrist)
+
     x = np.linspace(0, 100, INTERP_POINTS)
-    
-    plt.plot(x, h_mean, 'b-', label='Hand Thumb (Mean)', linewidth=2)
-    plt.fill_between(x, h_mean - h_std, h_mean + h_std, color='blue', alpha=0.15)
-    
-    plt.plot(x, w_mean, 'orange', label=f'Wrist Force (Shifted {avg_lag:.2f}s)', linewidth=2)
-    plt.fill_between(x, w_mean - w_std, w_mean + w_std, color='orange', alpha=0.15)
-    
-    plt.title(f"Aligned Force Profile (Trimmed Last {TRIM_SECONDS_FROM_END}s)")
-    plt.xlabel("Task Progress (%)")
-    plt.ylabel("Normalized Force")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    save_path = f"{OUTPUT_FOLDER}/average_fixed_trim.png"
-    plt.savefig(save_path)
+    n_trials = thumb.shape[0]
+    avg_lag = float(np.mean(all_lags)) if len(all_lags) else 0.0
+
+    def robust_band(mat, lo=25, hi=75):
+        med = np.nanmedian(mat, axis=0)
+        p_lo = np.nanpercentile(mat, lo, axis=0)
+        p_hi = np.nanpercentile(mat, hi, axis=0)
+        return med, p_lo, p_hi
+
+    h_med, h_p25, h_p75 = robust_band(thumb, 25, 75)
+    w_med, w_p25, w_p75 = robust_band(wrist, 25, 75)
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True, sharey=True)
+
+    # --- Hand subplot ---
+    ax = axes[0]
+    for k in range(n_trials):
+        ax.plot(x, thumb[k], linewidth=0.8, alpha=0.15)
+    ax.plot(x, h_med, linewidth=2.5, label="Hand Thumb (Median)")
+    ax.fill_between(x, h_p25, h_p75, alpha=0.20, label="Hand IQR (25–75%)")
+    ax.set_title("Hand: Spaghetti + Median + IQR")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    # --- Wrist subplot ---
+    ax = axes[1]
+    for k in range(n_trials):
+        ax.plot(x, wrist[k], linewidth=0.8, alpha=0.15)
+    ax.plot(x, w_med, linewidth=2.5, label=f"Wrist Force (Median, shifted {avg_lag:.2f}s)")
+    ax.fill_between(x, w_p25, w_p75, alpha=0.20, label="Wrist IQR (25–75%)")
+    ax.set_title("Wrist: Spaghetti + Median + IQR")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    fig.suptitle(f"Aligned Force Profiles (n={n_trials}, trimmed last {TRIM_SECONDS_FROM_END}s)", y=0.98)
+    axes[1].set_xlabel("Task Progress (%)")
+    axes[0].set_ylabel("Normalized Force")
+    axes[1].set_ylabel("Normalized Force")
+
+    plt.tight_layout()
+    save_path = f"{OUTPUT_FOLDER}/spaghetti_median_iqr.png"
+    plt.savefig(save_path, dpi=200)
     plt.show()
-    print(f"Analysis saved to {save_path}")
+    print(f"Saved to {save_path}")
 else:
     print("No valid data found.")
