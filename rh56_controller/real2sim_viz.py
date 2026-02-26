@@ -59,6 +59,7 @@ try:
     import matplotlib
     matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
+    from matplotlib.widgets import CheckButtons
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     import warnings
     warnings.filterwarnings("ignore", message=".*Matplotlib.*main thread.*")
@@ -107,11 +108,35 @@ _FORCE_CALIB: Dict[str, tuple] = {
 }
 _FORCE_CALIB_FALLBACK = (9.81 / 1000.0, 0.0)  # Inspire default: raw/1000 * g
 
+# Thumb yaw tangential force calibration (interim — borrows thumb_bend scale)
+# tau_yaw [N·m] = a_yaw * raw_yaw + b_yaw
+_THUMB_YAW_CALIB = (0.012547, -0.384)
+
+# r_eff(theta_flex_rad) polynomial from tools/thumb_lever_arm.py
+# r_eff = C2*theta² + C1*theta + C0  (metres)
+_THUMB_YAW_REFF_POLY = (-0.029209, -0.063028, 0.091856)
+
 
 def _raw_to_newtons(raw: float, finger: str) -> float:
     """Convert a raw force_act() reading to Newtons using calibrated coefficients."""
     a, b = _FORCE_CALIB.get(finger, _FORCE_CALIB_FALLBACK)
     return max(0.0, a * raw + b)
+
+
+def _raw_yaw_to_tangential_N(raw_yaw: float, theta_flex_raw: int) -> float:
+    """Convert raw yaw force reading to signed tangential force (N).
+
+    Sign convention follows the raw signal: positive = adduction torque.
+    Uses interim calibration (_THUMB_YAW_CALIB) and the MuJoCo FK polynomial
+    (_THUMB_YAW_REFF_POLY) for the lever arm.
+    """
+    a, b = _THUMB_YAW_CALIB
+    tau_yaw = a * float(raw_yaw) + b
+    theta_flex_rad = (float(theta_flex_raw) / 1000.0) * 0.60
+    c2, c1, c0 = _THUMB_YAW_REFF_POLY
+    r_eff = c2 * theta_flex_rad ** 2 + c1 * theta_flex_rad + c0
+    r_eff = max(r_eff, 0.010)
+    return tau_yaw / r_eff
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -144,6 +169,11 @@ class SharedState:
     q_sim_actual: float = 0.0
     fc_real: bool = False
     q_real: float = 0.0
+    # Thumb tangential force + constrained wrench cone (toggled)
+    thumb_tangential_signed_N: float = 0.0
+    pw_real_tangential: np.ndarray = field(default_factory=lambda: np.zeros((0, 6)))
+    fc_real_tangential: bool = False
+    q_real_tangential: float = 0.0
     object_pos: np.ndarray = field(default_factory=lambda: np.zeros(3))
     num_contacts: int = 0
 
@@ -155,24 +185,30 @@ class TimeSeriesBuffer:
     times: List[float] = field(default_factory=list)
     q_sim_actual: List[float] = field(default_factory=list)   # Newton units
     q_real: List[float] = field(default_factory=list)         # Newton units
+    q_real_tangential: List[float] = field(default_factory=list)  # constrained
     q_sim_geo: List[float] = field(default_factory=list)      # geometric (normalized)
     fc_sim: List[bool] = field(default_factory=list)
     fc_real: List[bool] = field(default_factory=list)
+    fc_real_tangential: List[bool] = field(default_factory=list)
     num_contacts: List[int] = field(default_factory=list)
     real_forces: Dict[str, List[float]] = field(default_factory=dict)
     sim_sensor: Dict[str, List[float]] = field(default_factory=dict)
+    thumb_tangential_N: List[float] = field(default_factory=list)
 
     def append(self, s: SharedState):
         self.times.append(s.sim_time)
         self.q_sim_actual.append(s.q_sim_actual)
         self.q_real.append(s.q_real)
+        self.q_real_tangential.append(s.q_real_tangential)
         self.q_sim_geo.append(s.q_sim_geo)
         self.fc_sim.append(s.fc_sim)
         self.fc_real.append(s.fc_real)
+        self.fc_real_tangential.append(s.fc_real_tangential)
         self.num_contacts.append(s.num_contacts)
         for f in SimAnalyzer.FINGER_NAMES:
             self.real_forces.setdefault(f, []).append(s.real_forces_N.get(f, 0.0))
             self.sim_sensor.setdefault(f, []).append(s.sim_sensor_N.get(f, 0.0))
+        self.thumb_tangential_N.append(abs(s.thumb_tangential_signed_N))
         if len(self.times) > self.max_len:
             self._trim()
 
@@ -181,13 +217,16 @@ class TimeSeriesBuffer:
         self.times = self.times[n:]
         self.q_sim_actual = self.q_sim_actual[n:]
         self.q_real = self.q_real[n:]
+        self.q_real_tangential = self.q_real_tangential[n:]
         self.q_sim_geo = self.q_sim_geo[n:]
         self.fc_sim = self.fc_sim[n:]
         self.fc_real = self.fc_real[n:]
+        self.fc_real_tangential = self.fc_real_tangential[n:]
         self.num_contacts = self.num_contacts[n:]
         for f in list(self.real_forces):
             self.real_forces[f] = self.real_forces[f][n:]
             self.sim_sensor[f] = self.sim_sensor[f][n:]
+        self.thumb_tangential_N = self.thumb_tangential_N[n:]
 
 
 # ── Main class ────────────────────────────────────────────────────────────────
@@ -204,6 +243,7 @@ class Real2SimViz:
         mirror_angles: bool,
         sim_only: bool,
         record_path: Optional[str],
+        thumb_tangential: bool = False,
     ):
         self.sim_only = sim_only
         self.mirror_angles = mirror_angles and not sim_only
@@ -235,6 +275,7 @@ class Real2SimViz:
         # Control flags
         self.running = True
         self.paused = False
+        self.show_tangential = thumb_tangential  # toggled by matplotlib checkbox
         self.viewer = None
         self._viz_thread = None
         self._reader_thread = None
@@ -242,9 +283,7 @@ class Real2SimViz:
     # ── Real hand reader thread ───────────────────────────────────────────────
 
     def _real_reader_thread(self):
-        """Poll force_act() at ~50 Hz and push to shared state."""
-        finger_names = SimAnalyzer.FINGER_NAMES  # ["thumb","index","middle","ring","pinky"]
-
+        """Poll force_act() (and angle_read() when tangential toggle is on) at ~50 Hz."""
         while self.running:
             if self.hand is None:
                 time.sleep(0.1)
@@ -256,14 +295,36 @@ class Real2SimViz:
             except Exception as e:
                 print(f"[Real2Sim] force_act error: {e}")
 
+            angles_raw = None
+            if self.show_tangential:
+                try:
+                    angles_raw = self.hand.angle_read()
+                except Exception as e:
+                    print(f"[Real2Sim] angle_read error: {e}")
+
             if forces_raw is not None and len(forces_raw) >= 5:
                 real_N: Dict[str, float] = {}
                 for real_idx, fname in REAL_IDX_TO_FINGER.items():
                     raw = float(forces_raw[real_idx])
                     real_N[fname] = _raw_to_newtons(raw, fname)
 
+                # Compute signed tangential force if toggle is on, data available,
+                # and thumb has actual contact (avoids bias artifact at raw_yaw=0
+                # caused by the calibration offset term; proper fix: dedicated calib).
+                thumb_tang_N = 0.0
+                if (self.show_tangential
+                        and len(forces_raw) >= 6
+                        and angles_raw is not None
+                        and len(angles_raw) >= 5
+                        and real_N.get("thumb", 0.0) > 0.1):
+                    raw_yaw_force = float(forces_raw[5])
+                    raw_flex_angle = int(angles_raw[4])
+                    thumb_tang_N = _raw_yaw_to_tangential_N(raw_yaw_force, raw_flex_angle)
+
                 with self._lock:
                     self._state.real_forces_N = real_N
+                    if self.show_tangential:
+                        self._state.thumb_tangential_signed_N = thumb_tang_N
 
             time.sleep(0.02)  # ~50 Hz
 
@@ -281,6 +342,7 @@ class Real2SimViz:
 
         with self._lock:
             real_forces_N = dict(self._state.real_forces_N)
+            thumb_tangential_signed_N = self._state.thumb_tangential_signed_N
 
         # In sim-only mode, use sim sensor magnitudes as "real" proxy
         if self.sim_only or self.hand is None:
@@ -292,6 +354,16 @@ class Real2SimViz:
         pw_sim_actual = self.sim.compute_sim_actual_wrenches(contacts, object_pos)
         # Real friction-disk boundary: Fn known, Ft unknown (both in Newtons)
         pw_real = self.sim.compute_real_wrench_cone(contacts, real_forces_N, object_pos)
+
+        # Constrained wrench cone with thumb tangential — only when toggle is on
+        pw_real_tangential = np.zeros((0, 6))
+        fc_real_tangential = False
+        q_real_tangential = 0.0
+        if self.show_tangential:
+            pw_real_tangential = self.sim.compute_real_wrench_cone_with_tangential(
+                contacts, real_forces_N, thumb_tangential_signed_N, object_pos)
+            fc_real_tangential, q_real_tangential = self.sim.evaluate_force_closure(
+                pw_real_tangential)
 
         fc_sim, q_sim_geo     = self.sim.evaluate_force_closure(pw_sim_cone)
         fc_sim_actual, q_sim_actual = self.sim.evaluate_force_closure(pw_sim_actual)
@@ -311,6 +383,10 @@ class Real2SimViz:
             q_sim_actual=q_sim_actual,
             fc_real=fc_real,
             q_real=q_real,
+            thumb_tangential_signed_N=thumb_tangential_signed_N,
+            pw_real_tangential=pw_real_tangential,
+            fc_real_tangential=fc_real_tangential,
+            q_real_tangential=q_real_tangential,
             object_pos=object_pos,
             num_contacts=len(contacts),
         )
@@ -333,9 +409,12 @@ class Real2SimViz:
                 "time": new_state.sim_time,
                 "fc_sim": fc_sim,
                 "fc_real": fc_real,
+                "fc_real_tangential": fc_real_tangential,
                 "q_sim_geo": q_sim_geo,
                 "q_sim_actual": q_sim_actual,
                 "q_real": q_real,
+                "q_real_tangential": q_real_tangential,
+                "thumb_tangential_signed_N": thumb_tangential_signed_N,
                 "num_contacts": len(contacts),
                 "real_forces_N": {f: v for f, v in real_forces_N.items()},
                 "sim_sensor_N": {f: v for f, v in sensor_N.items()},
@@ -367,6 +446,9 @@ class Real2SimViz:
               f"FC_sim={s.fc_sim} Q_geo={s.q_sim_geo:.5f} | "
               f"Q_sim(N)={s.q_sim_actual:.5f} Q_real(N)={s.q_real:.5f} | "
               f"FC_real={s.fc_real}")
+        if self.show_tangential:
+            print(f"  [TANGENTIAL ON] thumb_tan={s.thumb_tangential_signed_N:+.3f} N | "
+                  f"Q_real_tan={s.q_real_tangential:.5f} FC_real_tan={s.fc_real_tangential}")
         if s.contacts:
             print(f"\n  {'Finger':>8}  {'Normal(sim)':>12}  {'Normal(real)':>13}")
             for fname in SimAnalyzer.FINGER_NAMES:
@@ -383,16 +465,29 @@ class Real2SimViz:
             return
 
         fig = None
+        check_widget = None
         try:
             plt.ion()
             fig = plt.figure(figsize=(16, 9))
             fig.suptitle("Real2Sim Grasp Force Analysis — Inspire Hand", fontsize=13)
-            gs = fig.add_gridspec(2, 2, hspace=0.38, wspace=0.32)
+            # Main 2×2 grid; leave right margin for the toggle widget
+            gs = fig.add_gridspec(2, 2, hspace=0.38, wspace=0.32,
+                                  left=0.06, right=0.84, top=0.92, bottom=0.07)
 
             ax_sim_cone  = fig.add_subplot(gs[0, 0], projection="3d")
             ax_real_cone = fig.add_subplot(gs[0, 1], projection="3d")
             ax_forces    = fig.add_subplot(gs[1, 0])
             ax_quality   = fig.add_subplot(gs[1, 1])
+
+            # Toggle widget (persists across redraws — not cleared with cla)
+            ax_check = fig.add_axes([0.86, 0.82, 0.12, 0.08])
+            check_widget = CheckButtons(ax_check, ["Thumb\nTangential"],
+                                        [self.show_tangential])
+
+            def _on_check(label):
+                self.show_tangential = not self.show_tangential
+
+            check_widget.on_clicked(_on_check)
 
             while self.running:
                 with self._lock:
@@ -402,12 +497,15 @@ class Real2SimViz:
                         times=list(self._history.times),
                         q_sim_actual=list(self._history.q_sim_actual),
                         q_real=list(self._history.q_real),
+                        q_real_tangential=list(self._history.q_real_tangential),
                         q_sim_geo=list(self._history.q_sim_geo),
                         fc_sim=list(self._history.fc_sim),
                         fc_real=list(self._history.fc_real),
+                        fc_real_tangential=list(self._history.fc_real_tangential),
                         num_contacts=list(self._history.num_contacts),
                         real_forces={f: list(v) for f, v in self._history.real_forces.items()},
                         sim_sensor={f: list(v) for f, v in self._history.sim_sensor.items()},
+                        thumb_tangential_N=list(self._history.thumb_tangential_N),
                     )
 
                 try:
@@ -506,21 +604,38 @@ class Real2SimViz:
 
                     # ── Panel 3: Per-finger force bar chart ───────────────────
                     ax_forces.cla()
-                    ax_forces.set_title("Per-Finger Normal Force (N)", fontsize=10)
+                    show_tan = self.show_tangential
+                    ax_forces.set_title(
+                        "Per-Finger Normal Force (N)"
+                        + ("  |  Thumb Tangential ON" if show_tan else ""),
+                        fontsize=10)
                     ax_forces.set_ylabel("|F| (N)", fontsize=9)
 
                     fingers = SimAnalyzer.FINGER_NAMES
                     x = np.arange(len(fingers))
-                    w = 0.38
+                    w = 0.28 if show_tan else 0.38
                     real_vals = [s.real_forces_N.get(f, 0.0) for f in fingers]
                     sim_vals  = [s.sim_sensor_N.get(f, 0.0) for f in fingers]
                     colors    = [FINGER_COLORS_RGB.get(f, (0.5, 0.5, 0.5)) for f in fingers]
 
-                    ax_forces.bar(x - w / 2, real_vals, w,
-                                  color=colors, label="Real (Fn)", alpha=0.85)
-                    ax_forces.bar(x + w / 2, sim_vals, w,
-                                  color=colors, label="Sim sensor |F|", alpha=0.40,
-                                  hatch="//", edgecolor="gray")
+                    if show_tan:
+                        ax_forces.bar(x - w, real_vals, w,
+                                      color=colors, label="Real (Fn)", alpha=0.85)
+                        ax_forces.bar(x, sim_vals, w,
+                                      color=colors, label="Sim sensor |F|", alpha=0.40,
+                                      hatch="//", edgecolor="gray")
+                        # Thumb tangential bar (orange, only thumb slot)
+                        thumb_idx = fingers.index("thumb")
+                        ax_forces.bar(
+                            thumb_idx + w, abs(s.thumb_tangential_signed_N), w,
+                            color=(1.0, 0.55, 0.0), alpha=0.9,
+                            label=f"Thumb Ft_yaw ({s.thumb_tangential_signed_N:+.2f} N)")
+                    else:
+                        ax_forces.bar(x - w / 2, real_vals, w,
+                                      color=colors, label="Real (Fn)", alpha=0.85)
+                        ax_forces.bar(x + w / 2, sim_vals, w,
+                                      color=colors, label="Sim sensor |F|", alpha=0.40,
+                                      hatch="//", edgecolor="gray")
                     ax_forces.set_xticks(x)
                     ax_forces.set_xticklabels(fingers, rotation=25, fontsize=8)
                     ax_forces.legend(fontsize=7)
@@ -528,8 +643,10 @@ class Real2SimViz:
 
                     # ── Panel 4: Ferrari-Canny time series ────────────────────
                     ax_quality.cla()
+                    show_tan = self.show_tangential
                     ax_quality.set_title(
-                        "Ferrari-Canny Q  [sim actual (N) vs real disk (N)]",
+                        "Ferrari-Canny Q  [sim actual (N) vs real disk (N)"
+                        + (" vs tangential (N)]" if show_tan else "]"),
                         fontsize=10)
                     ax_quality.set_xlabel("Time (s)", fontsize=8)
                     ax_quality.set_ylabel("Q (N)", fontsize=8)
@@ -551,11 +668,23 @@ class Real2SimViz:
                         ax_quality.fill_between(t, 0, qr, where=(qr > 0),
                                                 color="blue", alpha=0.10,
                                                 interpolate=True)
+
+                        if show_tan and hist.q_real_tangential:
+                            qt = np.array(hist.q_real_tangential)
+                            ax_quality.plot(t, qt, color="darkorange", linewidth=1.5,
+                                            linestyle="-.",
+                                            label="Real+thumb Ft_yaw (constrained)")
+                            ax_quality.fill_between(t, 0, qt, where=(qt > 0),
+                                                    color="orange", alpha=0.10,
+                                                    interpolate=True)
+
                         ax_quality.legend(fontsize=8)
 
                     # Force closure status annotation
                     fc_text = (f"FC_sim={'✓' if s.fc_sim else '✗'}  "
                                f"FC_real={'✓' if s.fc_real else '✗'}")
+                    if show_tan:
+                        fc_text += f"  FC_tan={'✓' if s.fc_real_tangential else '✗'}"
                     ax_quality.text(
                         0.02, 0.97, fc_text,
                         transform=ax_quality.transAxes,
@@ -589,14 +718,17 @@ class Real2SimViz:
         d = self._recording
         fingers = SimAnalyzer.FINGER_NAMES
 
-        times        = np.array([r["time"] for r in d])
-        fc_sim       = np.array([r["fc_sim"] for r in d])
-        fc_real      = np.array([r["fc_real"] for r in d])
-        q_sim_geo    = np.array([r["q_sim_geo"] for r in d])
-        q_sim_actual = np.array([r["q_sim_actual"] for r in d])
-        q_real       = np.array([r["q_real"] for r in d])
-        num_contacts = np.array([r["num_contacts"] for r in d])
-        object_pos   = np.array([r["object_pos"] for r in d])
+        times                  = np.array([r["time"] for r in d])
+        fc_sim                 = np.array([r["fc_sim"] for r in d])
+        fc_real                = np.array([r["fc_real"] for r in d])
+        fc_real_tangential     = np.array([r["fc_real_tangential"] for r in d])
+        q_sim_geo              = np.array([r["q_sim_geo"] for r in d])
+        q_sim_actual           = np.array([r["q_sim_actual"] for r in d])
+        q_real                 = np.array([r["q_real"] for r in d])
+        q_real_tangential      = np.array([r["q_real_tangential"] for r in d])
+        thumb_tangential_N     = np.array([r["thumb_tangential_signed_N"] for r in d])
+        num_contacts           = np.array([r["num_contacts"] for r in d])
+        object_pos             = np.array([r["object_pos"] for r in d])
 
         real_forces = np.array([[r["real_forces_N"].get(f, 0.0) for f in fingers]
                                  for r in d])
@@ -606,7 +738,10 @@ class Real2SimViz:
         np.savez(
             self.record_path,
             times=times, fc_sim=fc_sim, fc_real=fc_real,
+            fc_real_tangential=fc_real_tangential,
             q_sim_geo=q_sim_geo, q_sim_actual=q_sim_actual, q_real=q_real,
+            q_real_tangential=q_real_tangential,
+            thumb_tangential_signed_N=thumb_tangential_N,
             num_contacts=num_contacts, object_pos=object_pos,
             real_forces_N=real_forces, sim_sensor_N=sim_sensor,
         )
@@ -623,10 +758,13 @@ class Real2SimViz:
         print("  R     — Reset to home keyframe")
         print("  S     — Print detailed status")
         print("  Q/Esc — Quit")
+        print("  [Matplotlib] Check 'Thumb Tangential' to enable yaw tangential force")
         if self.sim_only or self.hand is None:
             print("  [Running in SIM-ONLY mode — real forces from sim sensors]")
         if self.mirror_angles:
             print("  [Mirror-angles ON — sim ctrl sent to real hand each step]")
+        if self.show_tangential:
+            print("  [Thumb Tangential ON at startup]")
         print()
 
         # Start real-hand reader thread
@@ -653,10 +791,21 @@ class Real2SimViz:
                 target=self._viz_thread_func, daemon=True)
             self._viz_thread.start()
 
+        # Batch sim steps per display frame to run at real time.
+        # Analysis (contacts, wrench cones, ConvexHull) runs once per frame.
+        _sim_dt = self.sim.model.opt.timestep
+        _steps_per_frame = max(1, round((1 / 60) / _sim_dt))
+        print(f"[Real2Sim] timestep={_sim_dt*1000:.1f} ms  "
+              f"steps_per_frame={_steps_per_frame}")
+
         last_print = 0.0
         try:
             while self.viewer.is_running() and self.running:
                 if not self.paused:
+                    # Sub-steps: advance sim without expensive analysis
+                    for _ in range(_steps_per_frame - 1):
+                        self.sim.step()
+                    # Final step: step + full contact/force/FC analysis
                     state, sensor_vecs, tip_pos = self._analysis_step()
 
                     # Update viewer overlays
@@ -677,7 +826,7 @@ class Real2SimViz:
                         last_print = state.sim_time
 
                 self.viewer.sync()
-                time.sleep(max(self.sim.model.opt.timestep, 0.001))
+                time.sleep(1 / 60)
 
         except KeyboardInterrupt:
             print("\n[Real2Sim] Interrupted")
@@ -797,6 +946,9 @@ def main():
                         help="Save metrics to .npz file")
     parser.add_argument("--replay", type=str, default=None,
                         help="Replay a previously saved .npz recording")
+    parser.add_argument("--thumb-tangential", action="store_true",
+                        help="Enable thumb yaw tangential force at startup "
+                             "(can also toggle in the Matplotlib window)")
     args = parser.parse_args()
 
     if args.replay:
@@ -816,6 +968,7 @@ def main():
         mirror_angles=args.mirror_angles,
         sim_only=args.sim_only,
         record_path=args.record,
+        thumb_tangential=args.thumb_tangential,
     )
     viz.run(show_viz=not args.no_viz)
 

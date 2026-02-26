@@ -115,6 +115,9 @@ class SimAnalyzer:
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "box")
         self.object_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "object")
+        # Thumb yaw body (origin of the yaw joint, used for lever arm FK)
+        self.yaw_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "thumb_proximal_base")
         self.body_to_finger = self._build_body_to_finger_map()
         self.tip_site_ids = self._cache_site_ids()
         self.sensor_addrs = self._cache_sensor_addrs()
@@ -213,7 +216,7 @@ class SimAnalyzer:
             1000 - int(np.clip(c / r, 0.0, 1.0) * 1000)
             for c, r in zip(ctrl, self.SIM_CTRL_RANGES)
         ]
-        print(cmd)
+        # print(cmd)
         return cmd
 
     # ── Contact detection ─────────────────────────────────────────────────────
@@ -457,6 +460,140 @@ class SimAnalyzer:
 
                 torque = np.cross(r, f_on_obj)
                 all_wrenches.append(np.concatenate([f_on_obj, torque]))
+
+        return np.array(all_wrenches) if all_wrenches else np.zeros((0, 6))
+
+    # ── Thumb yaw helpers ─────────────────────────────────────────────────────
+
+    def get_thumb_yaw_force_dir(self) -> np.ndarray:
+        """World-frame unit vector along which yaw torque creates tangential force.
+
+        Direction: ẑ_yaw × r̂_tip  — perpendicular to both the yaw axis and the
+        moment arm from the yaw joint origin to the fingertip.
+
+        Returns (3,) unit vector.  Falls back to [1,0,0] if FK data is degenerate.
+        """
+        if self.yaw_body_id < 0 or "thumb" not in self.tip_site_ids:
+            return np.array([1.0, 0.0, 0.0])
+
+        R_base = self.data.xmat[self.yaw_body_id].reshape(3, 3)
+        z_yaw = R_base @ np.array([0.0, 0.0, -1.0])  # yaw axis in world frame
+
+        p_tip = self.data.site_xpos[self.tip_site_ids["thumb"]].copy()
+        p_yaw = self.data.xpos[self.yaw_body_id].copy()
+
+        r_vec = p_tip - p_yaw
+        r_axial = np.dot(r_vec, z_yaw) * z_yaw
+        r_perp = r_vec - r_axial
+        r_norm = np.linalg.norm(r_perp)
+        if r_norm < 1e-6:
+            return np.array([1.0, 0.0, 0.0])
+
+        r_hat = r_perp / r_norm
+        f_dir = np.cross(z_yaw, r_hat)
+        f_norm = np.linalg.norm(f_dir)
+        return f_dir / f_norm if f_norm > 1e-9 else np.array([1.0, 0.0, 0.0])
+
+    def compute_real_wrench_cone_with_tangential(
+        self,
+        contacts: List[ContactInfo],
+        real_forces_N: Dict[str, float],
+        thumb_tangential_signed_N: float,
+        object_pos: np.ndarray,
+    ) -> np.ndarray:
+        """Friction-disk wrench cone with thumb yaw tangential constraint applied.
+
+        Identical to compute_real_wrench_cone for all non-thumb fingers.
+
+        For the thumb contact, we additionally know one tangential component:
+            Ft_yaw = thumb_tangential_signed_N  (from the yaw motor torque proxy)
+
+        This constrains the feasible thumb contact force from a full disk to a
+        chord: the remaining unknown is Ft_radial (the component perpendicular to
+        the yaw-sensitive direction in the contact tangent plane):
+
+            Ft_yaw² + Ft_radial²  ≤  (μ * Fn)²
+            →  Ft_radial ∈ [-Ft_radial_max, +Ft_radial_max]
+            where Ft_radial_max = sqrt(max(0, (μ*Fn)² - Ft_yaw²))
+
+        k samples are drawn along this chord instead of around the full circle.
+
+        If |Ft_yaw| > μ*Fn (outside friction cone — saturated or miscalibrated),
+        we fall back to the full disk for that contact.
+        """
+        if not contacts:
+            return np.zeros((0, 6))
+
+        k = self.friction_cone_edges
+
+        dominant: Dict[str, ContactInfo] = {}
+        for c in contacts:
+            if (c.finger_name not in dominant
+                    or c.normal_force > dominant[c.finger_name].normal_force):
+                dominant[c.finger_name] = c
+
+        # Yaw force direction in world frame (computed once from current FK)
+        f_yaw_dir = self.get_thumb_yaw_force_dir() if "thumb" in dominant else None
+
+        all_wrenches: List[np.ndarray] = []
+        for finger, c in dominant.items():
+            fn = real_forces_N.get(finger, 0.0)
+            if fn < 1e-3:
+                continue
+
+            normal = c.frame[0]
+            t1 = c.frame[1]
+            t2 = c.frame[2]
+            r = c.position - object_pos
+
+            if finger == "thumb" and f_yaw_dir is not None:
+                Ft_yaw = thumb_tangential_signed_N
+                ft_max = self.mu * fn
+
+                # Project yaw-sensitive direction onto contact tangent plane
+                a1 = float(np.dot(f_yaw_dir, t1))
+                a2 = float(np.dot(f_yaw_dir, t2))
+                norm_proj = (a1 ** 2 + a2 ** 2) ** 0.5
+
+                # Fallback to full disk if projection is degenerate or Ft_yaw
+                # lies outside the friction cone (bad calibration / saturation).
+                if norm_proj < 1e-6 or abs(Ft_yaw) > ft_max * 1.001:
+                    for j in range(k):
+                        theta = 2.0 * np.pi * j / k
+                        f = fn * normal + ft_max * (
+                            np.cos(theta) * t1 + np.sin(theta) * t2)
+                        f_on_obj = f if c.box_is_geom1 else -f
+                        torque = np.cross(r, f_on_obj)
+                        all_wrenches.append(np.concatenate([f_on_obj, torque]))
+                else:
+                    # e1: unit vector in tangent plane along yaw-sensitive dir
+                    # e2: orthogonal to e1 within the tangent plane
+                    inv = 1.0 / norm_proj
+                    e1 = np.array([a1 * inv, a2 * inv])
+                    e2 = np.array([-a2 * inv, a1 * inv])
+
+                    Ft_rad_max = (max(0.0, ft_max ** 2 - Ft_yaw ** 2)) ** 0.5
+
+                    # k samples uniformly along the constrained chord
+                    for j in range(k):
+                        # t in [-1, 1], endpoints inclusive
+                        t_param = (2.0 * j / (k - 1) - 1.0) if k > 1 else 0.0
+                        Ft_rad = Ft_rad_max * t_param
+                        Ft1 = Ft_yaw * e1[0] + Ft_rad * e2[0]
+                        Ft2 = Ft_yaw * e1[1] + Ft_rad * e2[1]
+                        f = fn * normal + Ft1 * t1 + Ft2 * t2
+                        f_on_obj = f if c.box_is_geom1 else -f
+                        torque = np.cross(r, f_on_obj)
+                        all_wrenches.append(np.concatenate([f_on_obj, torque]))
+            else:
+                # Standard friction disk for non-thumb fingers
+                for j in range(k):
+                    theta = 2.0 * np.pi * j / k
+                    f = fn * normal + fn * self.mu * (
+                        np.cos(theta) * t1 + np.sin(theta) * t2)
+                    f_on_obj = f if c.box_is_geom1 else -f
+                    torque = np.cross(r, f_on_obj)
+                    all_wrenches.append(np.concatenate([f_on_obj, torque]))
 
         return np.array(all_wrenches) if all_wrenches else np.zeros((0, 6))
 

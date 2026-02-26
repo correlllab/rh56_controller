@@ -1,10 +1,24 @@
 import struct
 import serial
+import threading
 from typing import List, Optional
 import time
 
 # Import here to avoid circular import issues in the original design
 from .kinematics import TorqueCalculator
+
+# ── Thumb yaw tangential force estimation ────────────────────────────────────
+# Polynomial r_eff(theta_flex_rad): effective lever arm (m) from yaw joint to
+# fingertip, projected onto the plane ⊥ to the yaw axis.
+# Source: tools/thumb_lever_arm.py  (2nd-order fit, R² ≈ 1.000,
+#         max residual 0.13 mm over flex range 0–0.6 rad)
+# r_eff = C2*theta² + C1*theta + C0
+_THUMB_YAW_REFF_POLY = (-0.029209, -0.063028, 0.091856)  # (C2, C1, C0), metres
+
+# Interim torque calibration: tau_yaw [N·m] ≈ a*raw + b
+# Borrows thumb_bend coefficients as an order-of-magnitude estimate.
+# Replace a_yaw/b_yaw once dedicated torque calibration is done.
+_THUMB_YAW_CALIB = (0.012547, -0.384)
 
 # Define constants for command addresses to avoid "magic numbers"
 _CMD_WRITE = 0x12
@@ -42,6 +56,7 @@ class RH56Hand:
         )
         self.hand_id = hand_id
         self.force_limits = [1000] * 6  # Default force limits for each finger
+        self._serial_lock = threading.Lock()
 
     def _calc_checksum(self, data: bytes) -> int:
         return sum(data) & 0xFF
@@ -54,8 +69,9 @@ class RH56Hand:
         frame += data
         checksum = self._calc_checksum(frame[2:])
         frame += bytes([checksum])
-        self.ser.write(frame)
-        response = self.ser.read(64)
+        with self._serial_lock:
+            self.ser.write(frame)
+            response = self.ser.read(64)
         return response if response else None
 
     def _parse_response(self, response: bytes) -> Optional[List[int]]:
@@ -143,6 +159,50 @@ class RH56Hand:
             else:
                 print("No force response received")
             return None
+
+    def thumb_yaw_tangential_N(
+        self,
+        raw_yaw: float,
+        theta_flex_raw: int,
+    ) -> dict:
+        """Estimate tangential contact force at the thumb tip from the yaw motor reading.
+
+        The yaw motor senses torque from forces perpendicular to the radial
+        direction (ẑ_yaw × r̂).  This is ONE component of the 2D tangential force;
+        the radial component (along r̂) is invisible to this sensor.
+
+        Args:
+            raw_yaw:        force_act()[5] — raw yaw torque proxy (0–1000).
+            theta_flex_raw: angle_read()[4] — thumb bend raw angle (0–1000).
+                            Maps to flex_rad = (raw / 1000) * 0.60.
+
+        Returns dict with:
+            signed_N  — signed force magnitude (N); sign follows raw convention
+                        (positive = adduction direction).
+            N         — abs(signed_N).
+            tau_Nm    — estimated yaw torque (N·m), interim calibration.
+            r_eff_m   — effective lever arm (m) at the current flex angle.
+
+        Notes:
+            * Calibration is interim — borrow thumb_bend coefficients.
+            * Polynomial r_eff from tools/thumb_lever_arm.py MuJoCo FK sweep.
+            * Replace _THUMB_YAW_CALIB with dedicated torque calibration later.
+        """
+        a, b = _THUMB_YAW_CALIB
+        tau_yaw = a * float(raw_yaw) + b  # N·m (interim)
+
+        theta_flex_rad = (float(theta_flex_raw) / 1000.0) * 0.60
+        c2, c1, c0 = _THUMB_YAW_REFF_POLY
+        r_eff = c2 * theta_flex_rad ** 2 + c1 * theta_flex_rad + c0
+        r_eff = max(r_eff, 0.010)  # clamp: never below 10 mm (div-by-zero guard)
+
+        signed_N = tau_yaw / r_eff
+        return {
+            "signed_N": signed_N,
+            "N": abs(signed_N),
+            "tau_Nm": tau_yaw,
+            "r_eff_m": r_eff,
+        }
 
     def temp_read(self) -> Optional[List[int]]:
         """
