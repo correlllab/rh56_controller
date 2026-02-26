@@ -1,20 +1,28 @@
 import time, csv, threading
 import numpy as np
-
+import sys
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+for path in (PROJECT_ROOT, SCRIPT_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
 from rh56_controller.rh56_hand import RH56Hand
+from magpie_control import ur5
 
 ROBOT_IP = "192.168.0.5"
-HAND_PORT = "/dev/ttyUSB0"
+HAND_PORT = "/dev/ttyUSB1"
 HAND_ID = 1
 
 OUTPUT_CSV = f"ur5_task_data_{int(time.time())}.csv"
 
-WRIST_CONTACT_SPIKE_N = 2.0  # phase0: f_norm - baseline > this => contact
+WRIST_CONTACT_SPIKE_N = 5.0  # phase0: f_norm - baseline > this => contact
 WRIST_STABLE_THRESH_N = 3.0  # phase1: f_norm > this for stable time => stable
 WRIST_STABLE_TIME_S = 1.0
 
-WRIST_WINDOW_S = 0.3  # phase2: window size
-WRIST_SPIKE_N = 1.0  # phase2: avg delta >= spike => spike_detected True
+WRIST_WINDOW_S = 0.5  # phase2: window size
+WRIST_SPIKE_N = 5.0  # phase2: avg delta >= spike => spike_detected True
 WRIST_DROP_N = 0.8  # phase2: after spike, avg delta <= -drop => open
 
 BASELINE_ALPHA = 0.05
@@ -33,6 +41,9 @@ def apply_angles(hand, angles):
 
 def apply_speed(hand, speed):
     hand.speed_set([speed] * 6)
+
+def apply_force(hand, force):
+    hand.force_set([force] * 6)
 
 
 data_log = []
@@ -109,7 +120,8 @@ def background_recorder_with_hand(robot, hand, sample_period_s=0.01):
     spike_detected = False
 
     apply_speed(hand, 1000)
-    apply_angles(hand, CLOSE_ANGLES)
+    apply_force(hand, 500)
+    apply_angles(hand, [1000, 1000, 1000, 1000, 600, 150])
     time.sleep(1)
 
     print("Background recording + hand control started...")
@@ -193,6 +205,7 @@ def background_recorder_with_hand(robot, hand, sample_period_s=0.01):
                 window_start = tm
         elif hand_phase == 3:
             apply_speed(hand, 1000)
+            print(">>> [Phase 3] Final phase. Ensuring hand is open.")
             for _ in range(5):
                 apply_angles(hand, DEFAULT_OPEN)
                 time.sleep(0.5)
@@ -241,8 +254,10 @@ try:
     recorder_thread.start()
 
     print("Executing movement sequence...")
+    
 
     robot.moveL(pose_peg_prep, linSpeed=0.5, linAccel=0.75, asynch=False)
+    time.sleep(2)  # brief pause before starting motion
     robot.moveL(pose_peg_go, linSpeed=0.5, linAccel=0.75, asynch=False)
     robot.moveL(pose_peg_n, linSpeed=0.5, linAccel=0.75, asynch=False)
 
@@ -268,7 +283,6 @@ try:
         tolerance=0.015,
     )
 
-    robot.stop()
     robot.moveL(pose_peg_lift, linSpeed=0.5, linAccel=0.75)
 
 finally:
