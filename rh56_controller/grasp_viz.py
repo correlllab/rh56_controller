@@ -47,9 +47,8 @@ _HERE = pathlib.Path(__file__).parent.parent
 _GRASP_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
 _ROBOT_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "ur5_inspire.xml")
 
-# Finger actuator ctrl maxima (rad) — matches inspire_right.xml
-# Order: [pinky, ring, middle, index, thumb_proximal, thumb_yaw]
-_SIM_CTRL_MAX = np.array([1.57, 1.57, 1.57, 1.57, 0.60, 1.308])
+# Actuator names in DOF order (same as real hand angle_set / angle_read)
+_ACTUATOR_ORDER = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
 
 # eeff site local position in hand base body frame (from inspire_right_ur5.xml)
 _EEFF_LOCAL = np.array([0.070, 0.016, 0.155])
@@ -181,9 +180,12 @@ class GraspViz:
             r.ctrl_values.get("thumb_proximal",  0.0),
             r.ctrl_values.get("thumb_yaw",       0.0),
         ])
-        # Inverted convention: real = 1000 - round(ctrl/ctrl_max * 1000)
+        # Inverted convention: real = 1000 - round((ctrl-min)/(max-min) * 1000)
+        ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+        ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])
+        rng = ctrl_max - ctrl_min
         real_cmd = np.round(
-            (1.0 - np.clip(finger_ctrl / _SIM_CTRL_MAX, 0.0, 1.0)) * 1000
+            (1.0 - np.clip((finger_ctrl - ctrl_min) / np.where(rng > 0, rng, 1.0), 0.0, 1.0)) * 1000
         ).astype(int)
         try:
             self._hand.angle_set(real_cmd.tolist())
@@ -287,24 +289,21 @@ class GraspViz:
         data.qpos[jm["rot_y"]] = rot_y
         data.qpos[jm["rot_z"]] = rot_z
 
-        # Non-thumb fingers (1:1 coupling except index)
-        data.qpos[jm["pinky"]]       = pinky
-        data.qpos[jm["pinky_inter"]] = pinky
-        data.qpos[jm["ring"]]        = ring
-        data.qpos[jm["ring_inter"]]  = ring
-        data.qpos[jm["middle"]]      = middle
-        data.qpos[jm["middle_inter"]] = middle
-        data.qpos[jm["index"]]       = index
-        # polycoef="0.15 1 0 0 0": index_intermediate = 0.15 + 1.0 * index_proximal
-        data.qpos[jm["index_inter"]] = index + 0.15
+        # Non-thumb fingers — coupling from inspire_right.xml polycoef (recalibrated)
+        data.qpos[jm["pinky"]]        = pinky
+        data.qpos[jm["pinky_inter"]]  = -0.15 + 1.1169 * pinky   # polycoef="-0.15 1.1169"
+        data.qpos[jm["ring"]]         = ring
+        data.qpos[jm["ring_inter"]]   = -0.15 + 1.1169 * ring
+        data.qpos[jm["middle"]]       = middle
+        data.qpos[jm["middle_inter"]] = -0.15 + 1.1169 * middle
+        data.qpos[jm["index"]]        = index
+        data.qpos[jm["index_inter"]]  = 1.1169 * index            # polycoef="-0.00 1.1169"
 
-        # Thumb
-        data.qpos[jm["thumb_yaw"]]   = yaw
-        data.qpos[jm["thumb_pitch"]] = pitch
-        # polycoef="0.15 1.25 0 0": thumb_intermediate = 0.15 + 1.25 * pitch
-        data.qpos[jm["thumb_inter"]] = 0.15 + 1.25 * pitch
-        # polycoef="0.15 0.75 0 0 0": thumb_distal = 0.15 + 0.75 * pitch
-        data.qpos[jm["thumb_distal"]] = 0.15 + 0.75 * pitch
+        # Thumb — coupling from inspire_right.xml polycoef (recalibrated)
+        data.qpos[jm["thumb_yaw"]]    = yaw
+        data.qpos[jm["thumb_pitch"]]  = pitch
+        data.qpos[jm["thumb_inter"]]  = 1.33 * pitch              # polycoef="0.0 1.33"
+        data.qpos[jm["thumb_distal"]] = 0.66 * pitch              # polycoef="0.0 0.66"
 
         mujoco.mj_kinematics(model, data)
 

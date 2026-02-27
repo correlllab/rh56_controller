@@ -49,12 +49,27 @@ SCENE_XML = str(ROOT / "h1_mujoco" / "inspire" / "inspire_scene.xml")
 
 # DOF labels — same order as angle_set / angle_read and sim actuators
 FINGER_NAMES = ["pinky", "ring", "middle", "index", "thumb_bend", "thumb_yaw"]
-
-# Actuator ctrlrange maxima (rad) — matches inspire_right.xml
-SIM_CTRL_MAX = np.array([1.57, 1.57, 1.50, 1.50, 0.57, 1.308])
-# SIM_CTRL_MAX = np.array([1.34, 1.34, 1.34, 1.34, 0.6, 1.308])
+# Actuator names in the model (index-aligned with FINGER_NAMES)
+_ACT_NAMES   = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
 
 N = len(FINGER_NAMES)
+
+
+def _load_ctrl_ranges(xml_path: str):
+    """Read ctrl [min, max] arrays from a MuJoCo model file."""
+    m = mujoco.MjModel.from_xml_path(xml_path)
+    mins, maxs = [], []
+    for aname in _ACT_NAMES:
+        aid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_ACTUATOR, aname)
+        if aid < 0:
+            raise ValueError(f"Actuator '{aname}' not found in {xml_path}")
+        mins.append(float(m.actuator_ctrlrange[aid, 0]))
+        maxs.append(float(m.actuator_ctrlrange[aid, 1]))
+    return np.array(mins), np.array(maxs)
+
+
+# Initialise from default scene XML; overwritten in main() if --xml is passed.
+SIM_CTRL_MIN, SIM_CTRL_MAX = _load_ctrl_ranges(SCENE_XML)
 
 # Toggle state labels / colours
 # True  = matplotlib sliders drive data.ctrl
@@ -69,22 +84,29 @@ _TOGGLE_COLORS = {True: "#f4a0a0", False: "#a0d4a0"}  # red-ish / green-ish
 # ── Unit-conversion helpers ────────────────────────────────────────────────────
 
 def real_to_ctrl(real: np.ndarray) -> np.ndarray:
-    """Real hand [0–1000] → sim ctrl [rad].  INVERTED convention."""
-    return (1.0 - np.clip(real / 1000.0, 0.0, 1.0)) * SIM_CTRL_MAX
+    """Real hand [0–1000] → sim ctrl [rad].  INVERTED convention.
+    real=1000 (open/abducted) → ctrl=ctrl_min; real=0 (closed) → ctrl=ctrl_max.
+    """
+    frac = 1.0 - np.clip(real / 1000.0, 0.0, 1.0)
+    return SIM_CTRL_MIN + frac * (SIM_CTRL_MAX - SIM_CTRL_MIN)
 
 
 def ctrl_to_real(ctrl: np.ndarray) -> np.ndarray:
     """Sim ctrl [rad] → real hand [0–1000]."""
-    return np.round((1.0 - np.clip(ctrl / SIM_CTRL_MAX, 0.0, 1.0)) * 1000).astype(int)
+    rng = SIM_CTRL_MAX - SIM_CTRL_MIN
+    frac = np.where(rng > 0, np.clip((ctrl - SIM_CTRL_MIN) / rng, 0.0, 1.0), 0.0)
+    return np.round((1.0 - frac) * 1000).astype(int)
 
 
 def qpos_to_real(model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray:
     """Actual sim joint q-positions → real-hand 0–1000 scale."""
     out = np.zeros(N, dtype=int)
-    for i, cmax in enumerate(SIM_CTRL_MAX):
+    for i in range(N):
         jnt_id = model.actuator_trnid[i, 0]
         q = data.qpos[model.jnt_qposadr[jnt_id]]
-        out[i] = int(np.clip(1.0 - q / cmax, 0.0, 1.0) * 1000)
+        rng = SIM_CTRL_MAX[i] - SIM_CTRL_MIN[i]
+        frac = float(np.clip((q - SIM_CTRL_MIN[i]) / rng, 0.0, 1.0)) if rng > 0 else 0.0
+        out[i] = int((1.0 - frac) * 1000)
     return out
 
 
@@ -335,13 +357,16 @@ def main():
     except Exception:
         pass
 
+    # Refresh ctrl ranges from the actually-loaded model (may differ from default)
+    global SIM_CTRL_MIN, SIM_CTRL_MAX
+    SIM_CTRL_MIN, SIM_CTRL_MAX = _load_ctrl_ranges(args.xml)
+
     print("\n[hand_mirror] Actuator → joint mapping:")
     for i, name in enumerate(FINGER_NAMES):
         jnt_id = model.actuator_trnid[i, 0]
         jnt_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
         jnt_range = model.jnt_range[jnt_id]
-        print(f"  [{i}] {name:12s}  ctrl_max={SIM_CTRL_MAX[i]:.3f} rad"
-              f"  ({np.degrees(SIM_CTRL_MAX[i]):.1f}°)"
+        print(f"  [{i}] {name:12s}  ctrl=[{SIM_CTRL_MIN[i]:.3f}, {SIM_CTRL_MAX[i]:.3f}] rad"
               f"  joint='{jnt_name}'  range=[{jnt_range[0]:.3f}, {jnt_range[1]:.3f}]")
 
     # ── Matplotlib ─────────────────────────────────────────────────────────────

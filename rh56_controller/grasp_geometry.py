@@ -50,13 +50,20 @@ TIP_SITES: Dict[str, str] = {
 # Actuator order in inspire_right.xml
 ACTUATOR_NAMES = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
 
+# Fixed strategy constant: thumb yaw for 2-finger line (not a physical limit)
+_THUMB_YAW_LINE: float = 1.16
+
+# Fallback ctrl maxima matching inspire_right.xml / inspire_grasp_scene.xml.
+# Used only in __main__ and for external callers that haven't loaded a model yet.
+# InspireHandFK always reads these live from model.actuator_ctrlrange.
 CTRL_MAX: Dict[str, float] = {
-    "pinky":         1.57,
-    "ring":          1.57,
-    "middle":        1.50,
-    "index":         1.50,
-    "thumb_proximal": 0.60,
-    "thumb_yaw":     1.308,
+    "pinky":          1.57,
+    "ring":           1.57,
+    "middle":         1.50,
+    "index":          1.50,
+    "thumb_proximal": 0.57,
+    "thumb_yaw":      1.308,
+    "thumb_yaw_line": _THUMB_YAW_LINE,
 }
 
 # Non-thumb fingers in medial-to-lateral order (index = most radial)
@@ -110,11 +117,17 @@ class InspireHandFK:
                 raise ValueError(f"Actuator '{aname}' not found in model")
             self._act_ids[aname] = aid
 
+        # Read ctrl ranges from model (source of truth — no hardcoding)
+        self._init_ctrl_max()
+
         # Cache joint qpos addresses (needed for sweep and for _load_tables path)
         self._cache_joint_addrs()
 
-        # Build or load FK tables
-        if not rebuild and os.path.exists(_CACHE_PATH):
+        # Build or load FK tables — invalidate cache if XML is newer
+        xml_mtime   = os.path.getmtime(xml_path)
+        cache_mtime = os.path.getmtime(_CACHE_PATH) if os.path.exists(_CACHE_PATH) else 0
+        cache_valid = (not rebuild) and os.path.exists(_CACHE_PATH) and (cache_mtime > xml_mtime)
+        if cache_valid:
             self._load_tables(_CACHE_PATH)
         else:
             print("[InspireHandFK] Building FK tables (first run, ~2s)...")
@@ -125,6 +138,21 @@ class InspireHandFK:
         # Build interpolators
         self._build_interpolators()
         print("[InspireHandFK] Ready.")
+
+    # ------------------------------------------------------------------
+    # Ctrl range initialisation (reads from loaded MuJoCo model)
+    # ------------------------------------------------------------------
+    def _init_ctrl_max(self):
+        """Populate self.ctrl_min / self.ctrl_max from model.actuator_ctrlrange."""
+        self.ctrl_min: Dict[str, float] = {}
+        self.ctrl_max: Dict[str, float] = {}
+        for aname in ACTUATOR_NAMES:
+            aid = self._act_ids[aname]
+            self.ctrl_min[aname] = float(self._model.actuator_ctrlrange[aid, 0])
+            self.ctrl_max[aname] = float(self._model.actuator_ctrlrange[aid, 1])
+        # Strategy constant: preferred thumb yaw for 2-finger line (not a physical limit)
+        self.ctrl_min["thumb_yaw_line"] = _THUMB_YAW_LINE  # same as max (fixed value)
+        self.ctrl_max["thumb_yaw_line"] = _THUMB_YAW_LINE
 
     # ------------------------------------------------------------------
     # FK sweep helpers
@@ -162,18 +190,18 @@ class InspireHandFK:
         ctrl = float(ctrl)
         if fname == "index":
             d.qpos[a["index_proximal_joint"]]      = ctrl
-            # polycoef="0.15 1 0 0 0": index_intermediate = 0.15 + 1.0 * index_proximal
-            inter = ctrl + 0.15
-            d.qpos[a["index_intermediate_joint"]]  = inter
+            # polycoef="-0.00 1.1169 0 0 0": index_intermediate = 1.1169 * index_proximal
+            d.qpos[a["index_intermediate_joint"]]  = -0.05 + 1.1169 * ctrl
         elif fname == "middle":
             d.qpos[a["middle_proximal_joint"]]     = ctrl
-            d.qpos[a["middle_intermediate_joint"]] = ctrl   # 1:1 coupling
+            # polycoef="-0.15 1.1169 0 0 0": intermediate = -0.15 + 1.1169 * proximal
+            d.qpos[a["middle_intermediate_joint"]] = -0.15 + 1.1169 * ctrl
         elif fname == "ring":
             d.qpos[a["ring_proximal_joint"]]       = ctrl
-            d.qpos[a["ring_intermediate_joint"]]   = ctrl
+            d.qpos[a["ring_intermediate_joint"]]   = -0.15 + 1.1169 * ctrl
         elif fname == "pinky":
             d.qpos[a["pinky_proximal_joint"]]      = ctrl
-            d.qpos[a["pinky_intermediate_joint"]]  = ctrl
+            d.qpos[a["pinky_intermediate_joint"]]  = -0.15 + 1.1169 * ctrl
 
     def _set_thumb_qpos(self, ctrl_pitch: float, ctrl_yaw: float):
         """Set thumb qpos including all coupled joints."""
@@ -183,12 +211,10 @@ class InspireHandFK:
         y = float(ctrl_yaw)
         d.qpos[a["thumb_proximal_yaw_joint"]]   = y
         d.qpos[a["thumb_proximal_pitch_joint"]] = p
-        # polycoef="0.15 1.25 0 0": thumb_intermediate = 0.15 + 1.25 * thumb_proximal_pitch
-        inter = 0.15 + 1.25 * p
-        d.qpos[a["thumb_intermediate_joint"]]   = inter
-        # polycoef="0.15 0.75 0 0 0": thumb_distal = 0.15 + 0.75 * thumb_proximal_pitch
-        distal = 0.15 + 0.75 * p
-        d.qpos[a["thumb_distal_joint"]]         = distal
+        # polycoef="0.0 1.33 0 0": thumb_intermediate = 1.33 * thumb_proximal_pitch
+        d.qpos[a["thumb_intermediate_joint"]]   = 0.15 + 1.33 * p
+        # polycoef="0.0 0.66 0 0 0": thumb_distal = 0.66 * thumb_proximal_pitch
+        d.qpos[a["thumb_distal_joint"]]         = 0.15 + 0.66 * p
 
     def _reset_qpos(self):
         """Zero all qpos and update FK."""
@@ -207,8 +233,8 @@ class InspireHandFK:
         self._finger_tips  = {}
 
         for fname in NON_THUMB_FINGERS:
-            c_max = CTRL_MAX[fname]
-            ctrl_vals = np.linspace(0.0, c_max, self.N_SAMPLES_1D)
+            c_min, c_max = self.ctrl_min[fname], self.ctrl_max[fname]
+            ctrl_vals = np.linspace(c_min, c_max, self.N_SAMPLES_1D)
             tips = np.zeros((self.N_SAMPLES_1D, 3))
             for i, cv in enumerate(ctrl_vals):
                 self._reset_qpos()
@@ -219,8 +245,8 @@ class InspireHandFK:
             self._finger_tips[fname] = tips
 
         # Thumb: 2-D sweep (pitch × yaw)
-        pitch_vals = np.linspace(0.0, CTRL_MAX["thumb_proximal"], self.N_SAMPLES_2D)
-        yaw_vals   = np.linspace(0.0, CTRL_MAX["thumb_yaw"],      self.N_SAMPLES_2D)
+        pitch_vals = np.linspace(self.ctrl_min["thumb_proximal"], self.ctrl_max["thumb_proximal"], self.N_SAMPLES_2D)
+        yaw_vals   = np.linspace(self.ctrl_min["thumb_yaw"],      self.ctrl_max["thumb_yaw"],      self.N_SAMPLES_2D)
         thumb_tips = np.zeros((self.N_SAMPLES_2D, self.N_SAMPLES_2D, 3))
         for i, pv in enumerate(pitch_vals):
             for j, yv in enumerate(yaw_vals):
@@ -277,13 +303,13 @@ class InspireHandFK:
     # ------------------------------------------------------------------
     def finger_tip(self, name: str, ctrl: float) -> np.ndarray:
         """Return (3,) fingertip position in hand base frame."""
-        ctrl = float(np.clip(ctrl, 0.0, CTRL_MAX[name]))
+        ctrl = float(np.clip(ctrl, self.ctrl_min[name], self.ctrl_max[name]))
         return self._finger_interp[name](ctrl)
 
     def thumb_tip(self, ctrl_pitch: float, ctrl_yaw: float) -> np.ndarray:
         """Return (3,) thumb tip position in hand base frame."""
-        cp = float(np.clip(ctrl_pitch, 0.0, CTRL_MAX["thumb_proximal"]))
-        cy = float(np.clip(ctrl_yaw,   0.0, CTRL_MAX["thumb_yaw"]))
+        cp = float(np.clip(ctrl_pitch, self.ctrl_min["thumb_proximal"], self.ctrl_max["thumb_proximal"]))
+        cy = float(np.clip(ctrl_yaw,   self.ctrl_min["thumb_yaw"],      self.ctrl_max["thumb_yaw"]))
         return self._thumb_interp([[cp, cy]])[0]
 
     def all_tips(self, ctrl_dict: Dict[str, float]) -> Dict[str, np.ndarray]:
@@ -332,7 +358,7 @@ class InspireHandFK:
             def _z_err(c, tgt=target_z_base):
                 return float(self._finger_interp[fname](c)[2]) - tgt
             try:
-                c_sol = brentq(_z_err, 0.0, CTRL_MAX[fname], xtol=1e-6)
+                c_sol = brentq(_z_err, self.ctrl_min[fname], self.ctrl_max[fname], xtol=1e-6)
                 result[fname] = float(c_sol)
             except ValueError:
                 result[fname] = None
@@ -344,7 +370,7 @@ class InspireHandFK:
         Find thumb ctrl_pitch such that thumb tip Z == target_z_base,
         at fixed ctrl_yaw.  Returns None if out of range.
         """
-        cy = float(np.clip(ctrl_yaw, 0.0, CTRL_MAX["thumb_yaw"]))
+        cy = float(np.clip(ctrl_yaw, 0.0, self.ctrl_max["thumb_yaw"]))
         # Sample z over pitch range at fixed yaw
         pitches = self._thumb_pitch_vals
         zvals = self._thumb_interp(
@@ -356,7 +382,7 @@ class InspireHandFK:
         def _z_err(p):
             return float(self._thumb_interp([[p, cy]])[0, 2]) - target_z_base
         try:
-            return float(brentq(_z_err, 0.0, CTRL_MAX["thumb_proximal"], xtol=1e-6))
+            return float(brentq(_z_err, self.ctrl_min["thumb_proximal"], self.ctrl_max["thumb_proximal"], xtol=1e-6))
         except ValueError:
             return None
 
@@ -485,7 +511,7 @@ class ClosureGeometry:
             self.fk._cache_prox_body_ids()
         # Cylinder thumb-yaw transition: below this prox-joint diameter the
         # thumb tip would collide with the non-thumb finger tips at max yaw.
-        self._cyl_transition_ctrl: float = CTRL_MAX["index"]
+        self._cyl_transition_ctrl: float = self.fk.ctrl_max["index"]
         self._cyl_transition_diameter: float = 0.0
         self._compute_cyl_transition()
 
@@ -504,16 +530,16 @@ class ClosureGeometry:
         The threshold is the crossover diameter.
         """
         n = 80
-        ctrls = np.linspace(0.0, CTRL_MAX["index"], n)
+        ctrls = np.linspace(0.0, self.fk.ctrl_max["index"], n)
         crossover = None
         for c in ctrls:
             idx_x = float(self.fk.finger_tip("index", c)[0])
             # thumb pitch that gives same Z as index at ctrl c
             idx_z = float(self.fk.finger_tip("index", c)[2])
-            cp = self.fk.thumb_tip_at_z(idx_z, ctrl_yaw=CTRL_MAX["thumb_yaw"])
+            cp = self.fk.thumb_tip_at_z(idx_z, ctrl_yaw=self.fk.ctrl_max["thumb_yaw"])
             if cp is None:
                 continue
-            th_x = float(self.fk.thumb_tip(cp, CTRL_MAX["thumb_yaw"])[0])
+            th_x = float(self.fk.thumb_tip(cp, self.fk.ctrl_max["thumb_yaw"])[0])
             # width at this config (thumb opposes index)
             w = abs(th_x - idx_x)
             if th_x > idx_x:
@@ -526,7 +552,7 @@ class ClosureGeometry:
         """Return optimal thumb yaw ctrl (rad) for given cylinder diameter."""
         if self._thumb_yaw_threshold is None or \
                 cylinder_diameter >= self._thumb_yaw_threshold:
-            return CTRL_MAX["thumb_yaw"]
+            return self.fk.ctrl_max["thumb_yaw"]
         return 0.0
 
     # ------------------------------------------------------------------
@@ -534,10 +560,12 @@ class ClosureGeometry:
     # ------------------------------------------------------------------
     _N_S = 120   # samples of closure parameter s for sweeps
 
-    def _joint_dist(self, ref_finger: str, s: float) -> float:
+    def _joint_dist(self, ref_finger: str, s: float,
+                    ctrl_yaw: Optional[float] = None) -> float:
         """
         XZ-plane distance between thumb tip and reference finger tip at uniform
-        closure parameter s.  Both scale proportionally with s; thumb yaw is max.
+        closure parameter s.  Both scale proportionally with s; thumb yaw is max
+        (or ctrl_yaw if provided).
 
         WHY XZ DISTANCE (not 3D):
           world_X_separation = R @ d, component 0 = hypot(d[0], d[2])  (algebraic identity
@@ -546,25 +574,29 @@ class ClosureGeometry:
           effective graspable width.  Using 3D distance causes the minimum to be reached
           when the two tips are side-by-side in Y (d[2] sign flip → tilt discontinuity).
         """
-        ctrl_pitch = s * CTRL_MAX["thumb_proximal"]
-        ctrl_ref   = s * CTRL_MAX[ref_finger]
-        T = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
+        if ctrl_yaw is None:
+            ctrl_yaw = self.fk.ctrl_max["thumb_yaw"]
+        ctrl_pitch = self.fk.ctrl_min["thumb_proximal"] + s * (self.fk.ctrl_max["thumb_proximal"] - self.fk.ctrl_min["thumb_proximal"])
+        ctrl_ref   = self.fk.ctrl_min[ref_finger]      + s * (self.fk.ctrl_max[ref_finger]      - self.fk.ctrl_min[ref_finger])
+        T = self.fk.thumb_tip(ctrl_pitch, ctrl_yaw)
         I = self.fk.finger_tip(ref_finger, ctrl_ref)
         d = T - I
         return float(np.hypot(d[0], d[2]))
 
-    def _joint_closure_range(self, ref_finger: str) -> Tuple[float, float, float]:
+    def _joint_closure_range(self, ref_finger: str,
+                              ctrl_yaw: Optional[float] = None) -> Tuple[float, float, float]:
         """
         Sweep s∈[0,1] and return (s_at_min, D_min, D_open).
         D is the XZ-distance between thumb and ref_finger at closure s.
         """
         s_vals = np.linspace(0.0, 1.0, self._N_S)
-        d_vals = np.array([self._joint_dist(ref_finger, float(s)) for s in s_vals])
+        d_vals = np.array([self._joint_dist(ref_finger, float(s), ctrl_yaw) for s in s_vals])
         idx_min = int(np.argmin(d_vals))
         return float(s_vals[idx_min]), float(d_vals[idx_min]), float(d_vals[0])
 
     def _solve_joint_closure(self, ref_finger: str,
-                              target_width: float) -> Tuple[float, float, float]:
+                              target_width: float,
+                              ctrl_yaw: Optional[float] = None) -> Tuple[float, float, float]:
         """
         Find closure parameter s such that |T(s) - finger_tip(s)| = target_width,
         where both thumb pitch and finger ctrl scale linearly with s.
@@ -572,7 +604,7 @@ class ClosureGeometry:
         Returns (s, ctrl_pitch, ctrl_ref).
         Clamps to achievable range silently.
         """
-        s_min, d_min, d_open = self._joint_closure_range(ref_finger)
+        s_min, d_min, d_open = self._joint_closure_range(ref_finger, ctrl_yaw)
 
         if target_width >= d_open:
             return 0.0, 0.0, 0.0
@@ -580,13 +612,16 @@ class ClosureGeometry:
             s = s_min
         else:
             def _err(s):
-                return self._joint_dist(ref_finger, s) - target_width
+                return self._joint_dist(ref_finger, s, ctrl_yaw) - target_width
             try:
                 s = float(brentq(_err, 0.0, s_min, xtol=1e-5))
             except ValueError:
                 s = s_min
 
-        return s, s * CTRL_MAX["thumb_proximal"], s * CTRL_MAX[ref_finger]
+        cm = self.fk.ctrl_max
+        mn = self.fk.ctrl_min
+        return s, mn["thumb_proximal"] + s * (cm["thumb_proximal"] - mn["thumb_proximal"]), \
+                  mn[ref_finger]      + s * (cm[ref_finger]      - mn[ref_finger])
 
     # ------------------------------------------------------------------
     # Cylinder helpers: proximal-intermediate joint distance model
@@ -598,8 +633,14 @@ class ClosureGeometry:
         Thumb is at max_yaw, pitch = ctrl * (max_pitch / max_index_ctrl) for proportional motion.
         """
         # Scale thumb pitch proportionally to finger ctrl
-        thumb_pitch = ctrl * (CTRL_MAX["thumb_proximal"] / CTRL_MAX["index"])
-        T_prox = self.fk.prox_joint_pos("thumb", thumb_pitch, CTRL_MAX["thumb_yaw"])
+        # Map uniform finger ctrl [ctrl_min_idx, ctrl_max_idx] → thumb pitch proportionally
+        cm = self.fk.ctrl_max
+        mn = self.fk.ctrl_min
+        idx_range   = cm["index"]          - mn["index"]
+        pitch_range = cm["thumb_proximal"] - mn["thumb_proximal"]
+        s = (ctrl - mn["index"]) / idx_range if idx_range > 0 else 0.0
+        thumb_pitch = mn["thumb_proximal"] + s * pitch_range
+        T_prox = self.fk.prox_joint_pos("thumb", thumb_pitch, cm["thumb_yaw"])
         prox_pts = np.array([
             self.fk.prox_joint_pos(f, ctrl) for f in NON_THUMB_FINGERS
         ])
@@ -611,18 +652,23 @@ class ClosureGeometry:
         Find the uniform ctrl at which the thumb TIP (at max_yaw, scaled pitch)
         first approaches within COLLISION_DIST of any non-thumb finger TIP.
         Sweeping from open (ctrl=0) toward closed; returns the ctrl at transition,
-        or CTRL_MAX["index"] if no collision threshold is crossed.
+        or ctrl_max["index"] if no collision threshold is crossed.
         """
         COLLISION_DIST = 0.020   # 20 mm — comfortable clearance at max yaw
-        ctrls = np.linspace(0.0, CTRL_MAX["index"], 100)
+        cm = self.fk.ctrl_max
+        mn = self.fk.ctrl_min
+        ctrls = np.linspace(mn["index"], cm["index"], 100)
+        idx_range   = cm["index"]          - mn["index"]
+        pitch_range = cm["thumb_proximal"] - mn["thumb_proximal"]
         for c in ctrls:
-            thumb_pitch = c * (CTRL_MAX["thumb_proximal"] / CTRL_MAX["index"])
-            th_tip = self.fk.thumb_tip(thumb_pitch, CTRL_MAX["thumb_yaw"])
+            s = (c - mn["index"]) / idx_range if idx_range > 0 else 0.0
+            thumb_pitch = mn["thumb_proximal"] + s * pitch_range
+            th_tip = self.fk.thumb_tip(thumb_pitch, cm["thumb_yaw"])
             finger_tips = np.array([self.fk.finger_tip(f, c) for f in NON_THUMB_FINGERS])
             min_dist = float(np.min(np.linalg.norm(finger_tips - th_tip, axis=1)))
             if min_dist < COLLISION_DIST:
                 return float(c)
-        return float(CTRL_MAX["index"])
+        return float(cm["index"])
 
     def _compute_cyl_transition(self):
         """Pre-compute the cylinder diameter at the thumb-yaw transition point."""
@@ -644,7 +690,7 @@ class ClosureGeometry:
         (5 mm) because the XZ minimum is near-zero (tips touching in Y only).
         """
         if "cylinder" in mode:
-            ctrls = np.linspace(0.0, CTRL_MAX["index"], 60)
+            ctrls = np.linspace(self.fk.ctrl_min["index"], self.fk.ctrl_max["index"], 60)
             diams = np.array([self._prox_joint_diameter_at_ctrl(float(c)) for c in ctrls])
             return (max(float(diams.min()), self.PRACTICAL_MIN_WIDTH), float(diams.max()))
         else:
@@ -660,12 +706,15 @@ class ClosureGeometry:
         2-finger index-thumb line closure.
 
         Both index ctrl and thumb pitch scale proportionally with a single closure
-        parameter s ∈ [0, 1].  Thumb yaw is fixed at maximum.  The base_tilt_y
-        angle makes the thumb→index direction horizontal in world frame.
+        parameter s ∈ [0, 1].  Thumb yaw is fixed at thumb_yaw_line (1.16 rad),
+        which reduces skew vs. full-yaw at small widths.  The base_tilt_y angle
+        makes the thumb→index direction horizontal in world frame.
         """
-        _, ctrl_pitch, c_idx = self._solve_joint_closure("index", target_width)
+        yaw_line = self.fk.ctrl_max["thumb_yaw_line"]
+        _, ctrl_pitch, c_idx = self._solve_joint_closure("index", target_width,
+                                                          ctrl_yaw=yaw_line)
         I = self.fk.finger_tip("index", c_idx)
-        T = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
+        T = self.fk.thumb_tip(ctrl_pitch, yaw_line)
 
         d = T - I
         # With R = Ry(θ)@Rx(π): (R@d)[2] = -sin(θ)*d[0]-cos(θ)*d[2] = 0
@@ -686,7 +735,7 @@ class ClosureGeometry:
             "index":           float(c_idx),
             "middle": 0.0, "ring": 0.0, "pinky": 0.0,
             "thumb_proximal":  float(ctrl_pitch),
-            "thumb_yaw":       CTRL_MAX["thumb_yaw"],
+            "thumb_yaw":       self.fk.ctrl_max["thumb_yaw_line"],
         }
         return ClosureResult(
             mode="2-finger line",
@@ -709,18 +758,18 @@ class ClosureGeometry:
 
         _, ctrl_pitch, c_ref = self._solve_joint_closure(ref_finger, target_width)
         I_ref = self.fk.finger_tip(ref_finger, c_ref)
-        T     = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
+        T     = self.fk.thumb_tip(ctrl_pitch, self.fk.ctrl_max["thumb_yaw"])
 
         # Coplanar corrections: bring all active fingers to reference finger's base-frame Z.
         # Direction-aware fallback: Z decreases as ctrl increases (finger curls).
         #   target_z > z_max → finger can't reach (too extended) → use ctrl=0 (highest Z)
-        #   target_z < z_min → finger can't reach (too curled)   → use CTRL_MAX (lowest Z)
+        #   target_z < z_min → finger can't reach (too curled)   → use ctrl_max (lowest Z)
         target_z = float(I_ref[2])
         coplanar = self.fk.coplanar_ctrls(target_z, fingers=fingers)
         for f in fingers:
             if coplanar.get(f) is None:
                 _, z_max = self.fk.z_range_for_finger(f)
-                coplanar[f] = 0.0 if target_z >= z_max else float(CTRL_MAX[f])
+                coplanar[f] = 0.0 if target_z >= z_max else float(self.fk.ctrl_max[f])
 
         tips: Dict[str, np.ndarray] = {
             f: self.fk.finger_tip(f, coplanar[f]) for f in fingers
@@ -749,7 +798,7 @@ class ClosureGeometry:
         for f in fingers:
             ctrl[f] = float(coplanar[f])
         ctrl["thumb_proximal"] = float(ctrl_pitch)
-        ctrl["thumb_yaw"]      = CTRL_MAX["thumb_yaw"]
+        ctrl["thumb_yaw"]      = self.fk.ctrl_max["thumb_yaw"]
 
         return ClosureResult(
             mode=f"{n_fingers}-finger plane",
@@ -773,8 +822,10 @@ class ClosureGeometry:
         parameter (ctrl_finger → thumb_pitch = ctrl * max_pitch / max_index_ctrl).
         Thumb yaw is fixed at maximum (opposing the finger side).
         """
+        cm = self.fk.ctrl_max
+        mn = self.fk.ctrl_min
         n_sweep     = 60
-        ctrls_sweep = np.linspace(0.0, CTRL_MAX["index"], n_sweep)
+        ctrls_sweep = np.linspace(mn["index"], cm["index"], n_sweep)
         prox_diams  = np.array([self._prox_joint_diameter_at_ctrl(float(c))
                                  for c in ctrls_sweep])
         idx_min     = int(np.argmin(prox_diams))
@@ -783,24 +834,27 @@ class ClosureGeometry:
         d_open      = float(prox_diams[0])
 
         if target_diameter >= d_open:
-            c_uni = 0.0
+            c_uni = mn["index"]
         elif target_diameter <= d_min:
             c_uni = c_min
         else:
-            # Monotone-decreasing region [0, c_min]
+            # Monotone-decreasing region [ctrl_min_index, c_min]
             def _prox_err(c):
                 return self._prox_joint_diameter_at_ctrl(c) - target_diameter
             try:
-                c_uni = float(brentq(_prox_err, 0.0, c_min, xtol=1e-5))
+                c_uni = float(brentq(_prox_err, mn["index"], c_min, xtol=1e-5))
             except ValueError:
                 c_uni = c_min
 
         # Thumb yaw: at max for opposition (large cylinder), 0 for palm grasp (small).
         # The transition diameter was pre-computed from the tip-clearance check.
-        thumb_yaw   = (CTRL_MAX["thumb_yaw"]
+        thumb_yaw   = (cm["thumb_yaw"]
                        if target_diameter >= self._cyl_transition_diameter
                        else 0.0)
-        thumb_pitch = c_uni * (CTRL_MAX["thumb_proximal"] / CTRL_MAX["index"])
+        idx_range   = cm["index"] - mn["index"]
+        pitch_range = cm["thumb_proximal"] - mn["thumb_proximal"]
+        s_uni       = (c_uni - mn["index"]) / idx_range if idx_range > 0 else 0.0
+        thumb_pitch = mn["thumb_proximal"] + s_uni * pitch_range
         T = self.fk.thumb_tip(thumb_pitch, thumb_yaw)
 
         # Coplanar corrections from index Z at c_uni.
@@ -813,7 +867,7 @@ class ClosureGeometry:
         for f in NON_THUMB_FINGERS:
             if coplanar.get(f) is None:
                 _, z_max = self.fk.z_range_for_finger(f)
-                coplanar[f] = 0.0 if target_z >= z_max else float(CTRL_MAX[f])
+                coplanar[f] = 0.0 if target_z >= z_max else float(self.fk.ctrl_max[f])
 
         tips: Dict[str, np.ndarray] = {
             f: self.fk.finger_tip(f, coplanar[f]) for f in NON_THUMB_FINGERS
@@ -892,11 +946,11 @@ if __name__ == "__main__":
 
     print("\n=== FK range summary (base frame) ===")
     for fname in NON_THUMB_FINGERS:
-        z0 = fk.finger_tip(fname, 0.0)
-        z1 = fk.finger_tip(fname, CTRL_MAX[fname])
+        z0 = fk.finger_tip(fname, fk.ctrl_min[fname])
+        z1 = fk.finger_tip(fname, fk.ctrl_max[fname])
         print(f"  {fname:8s}: open={z0}, closed={z1}")
-    th0 = fk.thumb_tip(0.0, 0.0)
-    th1 = fk.thumb_tip(CTRL_MAX["thumb_proximal"], CTRL_MAX["thumb_yaw"])
+    th0 = fk.thumb_tip(fk.ctrl_min["thumb_proximal"], fk.ctrl_min["thumb_yaw"])
+    th1 = fk.thumb_tip(fk.ctrl_max["thumb_proximal"], fk.ctrl_max["thumb_yaw"])
     print(f"  {'thumb':8s}: open={th0}, closed={th1}")
 
     print("\n=== Closure geometry ===")
