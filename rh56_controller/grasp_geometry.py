@@ -32,7 +32,7 @@ from scipy.optimize import brentq
 # Paths
 # ---------------------------------------------------------------------------
 _HERE = pathlib.Path(__file__).parent.parent   # repo root
-_DEFAULT_XML = str(_HERE / "h1_mujoco" / "inspire" / "inspire_right.xml")
+_DEFAULT_XML = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
 _CACHE_PATH  = str(_HERE / "h1_mujoco" / "inspire" / ".fk_cache.npz")
 
 
