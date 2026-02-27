@@ -350,18 +350,18 @@ class InspireHandFK:
             if not (z_min <= target_z_base <= z_max):
                 result[fname] = None
                 continue
-            # z(ctrl) is monotone (decreasing) → use interp1d inverse
-            # Build inverse: z → ctrl
-            # Sort by z ascending for brentq
+            # Invert z(ctrl) via brentq; fall back to nearest-neighbour in FK table
+            # if brentq fails (can happen when z is non-monotone at ctrl=0 due to
+            # negative intermediate-joint offsets in the coupling polycoef).
             ctrl_vals = self._finger_ctrl[fname]
-            # z decreases as ctrl increases → reverse
             def _z_err(c, tgt=target_z_base):
                 return float(self._finger_interp[fname](c)[2]) - tgt
             try:
                 c_sol = brentq(_z_err, self.ctrl_min[fname], self.ctrl_max[fname], xtol=1e-6)
                 result[fname] = float(c_sol)
             except ValueError:
-                result[fname] = None
+                # Non-monotone Z: pick the ctrl in the FK table with the smallest |z - target|
+                result[fname] = float(ctrl_vals[int(np.argmin(np.abs(zvals - target_z_base)))])
         return result
 
     def thumb_tip_at_z(self, target_z_base: float,

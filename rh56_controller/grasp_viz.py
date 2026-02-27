@@ -289,7 +289,7 @@ class GraspViz:
         data.qpos[jm["rot_y"]] = rot_y
         data.qpos[jm["rot_z"]] = rot_z
 
-        # Non-thumb fingers — coupling from inspire_right.xml polycoef (recalibrated)
+        # Non-thumb fingers — coupling from inspire_grasp_scene.xml <equality> polycoefs
         data.qpos[jm["pinky"]]        = pinky
         data.qpos[jm["pinky_inter"]]  = -0.15 + 1.1169 * pinky   # polycoef="-0.15 1.1169"
         data.qpos[jm["ring"]]         = ring
@@ -297,13 +297,13 @@ class GraspViz:
         data.qpos[jm["middle"]]       = middle
         data.qpos[jm["middle_inter"]] = -0.15 + 1.1169 * middle
         data.qpos[jm["index"]]        = index
-        data.qpos[jm["index_inter"]]  = 1.1169 * index            # polycoef="-0.00 1.1169"
+        data.qpos[jm["index_inter"]]  = -0.05 + 1.1169 * index   # polycoef="-0.05 1.1169"
 
-        # Thumb — coupling from inspire_right.xml polycoef (recalibrated)
+        # Thumb — coupling from inspire_grasp_scene.xml <equality> polycoefs
         data.qpos[jm["thumb_yaw"]]    = yaw
         data.qpos[jm["thumb_pitch"]]  = pitch
-        data.qpos[jm["thumb_inter"]]  = 1.33 * pitch              # polycoef="0.0 1.33"
-        data.qpos[jm["thumb_distal"]] = 0.66 * pitch              # polycoef="0.0 0.66"
+        data.qpos[jm["thumb_inter"]]  = 0.15 + 1.33 * pitch      # polycoef="0.15 1.33"
+        data.qpos[jm["thumb_distal"]] = 0.15 + 0.66 * pitch      # polycoef="0.15 0.66"
 
         mujoco.mj_kinematics(model, data)
 
