@@ -1,0 +1,402 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\geometry{margin=2.5cm}
+
+\newcommand{\R}{\mathbf{R}}
+\newcommand{\p}{\mathbf{p}}
+\newcommand{\T}{\mathbf{T}}
+\newcommand{\d}{\mathbf{d}}
+\newcommand{\e}{\mathbf{e}}
+\newcommand{\bx}{\hat{\mathbf{x}}}
+\newcommand{\by}{\hat{\mathbf{y}}}
+\newcommand{\bz}{\hat{\mathbf{z}}}
+
+\title{Antipodal Grasp Geometry for the Inspire RH56 Dexterous Hand\\
+\large Mathematical Reference}
+\author{rh56\_controller}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+% ---------------------------------------------------------------------------
+\section{Coordinate Systems}
+
+\subsection{Hand Base Frame $\mathcal{F}_b$}
+
+The origin is the root of the floating hand model.  Axes are defined by the
+body quaternions in \texttt{inspire\_right.xml}:
+\begin{align*}
+  \bx_b &: \text{palm closure direction (fingertips curl toward $+X$ when flexed)}\\
+  \by_b &: \text{finger spread (index at $Y\approx+32\,\text{mm}$, pinky at $Y\approx-26\,\text{mm}$)}\\
+  \bz_b &: \text{finger extension (wrist toward fingertip when open)}
+\end{align*}
+At full extension all non-thumb fingertip $Z$ values lie in $[200,\,216]\,\text{mm}$.
+At full flexion they lie in $[90,\,100]\,\text{mm}$, with $X$ advancing to $[27,\,34]\,\text{mm}$.
+
+\subsection{World Frame $\mathcal{F}_w$}
+
+For a top-down grasp approach the hand hangs fingers-downward above the target plane
+at world height $g_z$.  The combined rotation
+\begin{equation}
+  \R(\theta) \;=\; R_y(\theta)\,R_x(\pi)
+  \label{eq:R}
+\end{equation}
+maps $\mathcal{F}_b \to \mathcal{F}_w$.  Written explicitly:
+\begin{equation}
+  \R(\theta) = \begin{pmatrix}
+    \cos\theta & 0 & -\sin\theta \\
+    0 & -1 & 0 \\
+    -\sin\theta & 0 & -\cos\theta
+  \end{pmatrix}
+  \label{eq:Rmat}
+\end{equation}
+$R_x(\pi)$ alone maps $\bz_b \to -\bz_w$ (fingers down) and $\bx_b \to \bx_w$
+(closure stays horizontal).  The subsequent $R_y(\theta)$ tilts the hand about the
+spread axis to level the grasp plane.
+
+% ---------------------------------------------------------------------------
+\section{Forward Kinematics Model}
+
+\subsection{Joint Coupling}
+
+Equality constraints in \texttt{inspire\_right.xml} use MuJoCo's \texttt{polycoef}
+convention: \texttt{polycoef="$a_0\;a_1$"} enforces $q_1 = a_0 + a_1\,q_2$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Joint pair & Coupling equation & Source \\
+\midrule
+pinky / ring / middle intermediate & $q_\text{inter} = q_\text{prox}$ & \texttt{polycoef="0 1 0 0 0"} \\
+index intermediate & $q_\text{inter} = 0.15 + q_\text{prox}$ & \texttt{polycoef="0.15 1 0 0 0"} \\
+thumb intermediate & $q_\text{inter} = 0.15 + 1.25\,q_\text{pitch}$ & \texttt{polycoef="0.15 1.25 0 0"} \\
+thumb distal & $q_\text{dist}   = 0.15 + 0.75\,q_\text{pitch}$ & \texttt{polycoef="0.15 0.75 0 0 0"} \\
+\bottomrule
+\end{tabular}
+\caption{Joint coupling equations. The 0.15~rad preload means all coupled joints are
+pre-bent $\approx8.6°$ at zero proximal angle, shifting fingertip positions relative
+to a na\"ive rigid-link model.}
+\end{table}
+
+\subsection{FK Sweep}
+
+Because the 3-D body quaternions in the XML make analytical FK intractable, all
+fingertip positions are computed numerically via MuJoCo's \texttt{mj\_kinematics}.
+
+\paragraph{Non-thumb fingers.}
+For finger $f$ with maximum control $c_f^{\max}$, sweep 200 uniformly-spaced
+control values $c \in [0, c_f^{\max}]$:
+\begin{enumerate}
+  \item Zero all \texttt{qpos}.
+  \item Set $q_\text{prox}(f) = c$ and coupled joint(s) per Table~1.
+  \item Call \texttt{mj\_kinematics} (kinematics only; no dynamics, no equality solver).
+  \item Record $\p_f(c) = \texttt{site\_xpos[tip\_site]}$ in the base frame.
+\end{enumerate}
+The result is a table $\{c_i, \p_f(c_i)\}_{i=1}^{200}$ interpolated with
+\texttt{scipy.interpolate.interp1d} (linear, extrapolation to boundary).
+
+\paragraph{Thumb.}
+The thumb has two independent DOF (pitch $p \in [0,\,0.6]$ and yaw
+$y \in [0,\,1.308]$).  A $50 \times 50$ grid sweep produces
+$\T(p, y) \in \mathbb{R}^{50\times50\times3}$, interpolated with
+\texttt{RegularGridInterpolator}.
+
+\paragraph{Caching.}
+Tables are saved to \texttt{.fk\_cache.npz} and reloaded on subsequent runs.
+Rebuild is forced with \texttt{InspireHandFK(rebuild=True)}.
+
+% ---------------------------------------------------------------------------
+\section{Grasp Tilt}
+
+\subsection{The Coplanarity Constraint}
+
+Let $\d = \T - \mathbf{C}$ be the vector from the reference finger tip (or centroid)
+to the thumb tip, all in the base frame.  The grasp plane is horizontal in world frame
+when the world-$Z$ components of $\T$ and $\mathbf{C}$ are equal, i.e.\ when
+\begin{equation}
+  \bigl(\R(\theta)\,\d\bigr)_z = 0.
+\end{equation}
+Using \eqref{eq:Rmat}:
+\begin{equation}
+  -\sin\theta\,d_x - \cos\theta\,d_z = 0
+  \;\implies\;
+  \tan\theta = -\frac{d_z}{d_x}
+  \;\implies\;
+  \boxed{\theta = \operatorname{atan2}(-d_z,\; d_x).}
+  \label{eq:tilt}
+\end{equation}
+
+\subsection{Effective Grasp Width Identity}
+
+Substituting \eqref{eq:tilt} into the world-$X$ component:
+\begin{equation}
+  \bigl(\R(\theta)\,\d\bigr)_x
+  = \cos\theta\,d_x - \sin\theta\,d_z
+  = \frac{d_x^2}{r} + \frac{d_z^2}{r}
+  = r
+  \qquad\text{where } r = \sqrt{d_x^2 + d_z^2}.
+  \label{eq:width}
+\end{equation}
+The graspable width equals the \textbf{XZ-plane distance} between thumb tip and finger
+centroid in the base frame.  The $Y$ component (anatomical spread, $\approx70$~mm for
+thumb vs.\ index) is not closeable by rotation and does not contribute.
+
+\textit{Corollary}: using the full 3-D distance as the width criterion causes $d_z$ to
+change sign at the minimum distance, which flips the sign of $\theta$ and creates a
+~155° discontinuity.  The XZ distance avoids this entirely.
+
+\subsection{Modal Shift at $d_x = 0$ and the Clip Fix}
+
+As the closure parameter $s$ increases toward maximum, the thumb tip eventually reaches
+the same $X$ as the reference finger ($d_x = 0$ at $s = s_{d_0} \approx 0.437$ for
+index), after which $d_x < 0$ (thumb behind finger in $X$).  From \eqref{eq:tilt}:
+\begin{equation}
+  d_x > 0: \quad \theta \in (-\tfrac\pi2, \tfrac\pi2)
+  \quad\text{(standard top-down approach)}
+\end{equation}
+\begin{equation}
+  d_x = 0: \quad \theta = \tfrac\pi2 \quad\text{exactly (width } \approx 14.1\,\text{mm)}
+\end{equation}
+\begin{equation}
+  d_x < 0: \quad |\theta| > \tfrac\pi2
+  \quad\text{(hand tilted past horizontal, clip activates)}
+\end{equation}
+
+The old normalization $\theta \mathrel{-}= \pi$ when $\theta > \pi/2$ creates a
+\emph{discontinuous} 155° jump.  The correct fix is to \textbf{clip}:
+\begin{equation}
+  \theta_\text{applied} = \operatorname{clip}\!\bigl(\theta,\;-\tfrac\pi2,\;\tfrac\pi2\bigr).
+  \label{eq:clip}
+\end{equation}
+This produces a smooth \textbf{modal shift}: for $d_x \leq 0$, the hand holds a fixed
+90° side-approach orientation and the residual world-$Z$ spread of the tips is
+$|d_x| \lesssim 5$~mm, which is acceptable.  Tilt increases monotonically toward 90°
+as width decreases to $\approx14.1$~mm (index), then freezes there for
+the remaining $8.7$–$14.1$~mm range.
+
+% ---------------------------------------------------------------------------
+\section{Attempted Improvements and Why They Failed}
+
+The narrow-width regime produces a large, fixed tilt ($\theta = 90°$) and causes the
+thumb's kinematic links to drop below the grasp plane in the base frame.
+Three strategies were explored to improve this.
+
+\subsection{Blend Ramp}
+
+\paragraph{Idea.}
+Precompute $s_{d_0}$ (where $d_x = 0$) and $s_{\min}$ (XZ minimum).
+For $s \in [s_{d_0}, s_{\min}]$ blend tilt linearly from $\pi/2$ to a precomputed
+$\theta_\text{target} \approx -35°$ while keeping ctrl values proportional.
+
+\paragraph{Failure.}
+The tilt ramp traverses $90° \to -35°$ in $\approx5$~mm of width change, causing a
+visible orientation flip as the slider moves.  The root cause is that the
+\emph{exact} coplanarity tilt in the narrow regime lives on the upper branch
+$\theta \in (90°, 148°)$, which is physically inaccessible for a top-down grasp.
+Any smooth approximation must traverse a large angular distance.
+
+\subsection{2-D Minimum-Tilt Search}
+
+\paragraph{Idea.}
+At each target width, sweep \texttt{ctrl\_pitch} over 50 values; for each, use Brent's
+method to find the \texttt{ctrl\_ref} achieving the target width; select the pair
+minimising $|\theta|$.  Ctrl values are decoupled from the proportional line.
+
+\paragraph{Failure.}
+Severe jitter: large discontinuous jumps in \texttt{ctrl\_pitch} and \texttt{ctrl\_ref}
+at adjacent widths.  The root cause is that the argmin of the tilt landscape over the
+2-D ctrl space is a non-convex, wide-flat function whose global minimiser jumps
+discontinuously as the width constraint changes by even 1~mm.
+Searching independently at each width destroys the global smoothness that the
+proportional parameterisation provides.
+
+\subsection{Precomputed Coplanar Table}
+
+\paragraph{Idea.}
+Sweep \texttt{ctrl\_ref} monotonically; for each, find the coplanar \texttt{ctrl\_pitch}
+such that $T_z = I_z$ (zero tilt) via \texttt{thumb\_tip\_at\_z}.  Store as
+\texttt{interp1d} tables; replace the runtime search with an $O(1)$ lookup.
+
+\paragraph{Failure (anticipated).}
+The coplanar trajectory replaces the full proportional trajectory for \emph{all} widths,
+fundamentally changing hand pose even at wide widths where the original was already good.
+Continuity at the wide-to-narrow transition was not guaranteed.
+
+\subsection{Key Lesson}
+
+The proportional parameterisation
+\begin{equation}
+  c_\text{pitch}(s) = s\,c_\text{pitch}^{\max},\qquad
+  c_\text{ref}(s) = s\,c_\text{ref}^{\max}
+\end{equation}
+works because it is a \emph{global} 1-D smooth curve through a well-behaved region
+of the 2-D ctrl space.  Any strategy that re-optimises the 2-D ctrl pair independently
+at each width will encounter the non-convex, discontinuous landscape and reproduce
+the jitter.  The only safe improvement strategy is a small, smooth, globally-defined
+perturbation of the proportional trajectory that activates only when $d_x < \varepsilon$.
+
+% ---------------------------------------------------------------------------
+\section{Closure Solver}
+
+\subsection{Uniform Closure Parameter}
+
+For precision grasps a single scalar $s \in [0,1]$ parameterises both the thumb and
+reference-finger motion proportionally to their respective maximum control values:
+\begin{equation}
+  c_\text{pitch}(s) = s\,c_\text{pitch}^{\max}, \qquad
+  c_\text{ref}(s)   = s\,c_\text{ref}^{\max}.
+  \label{eq:s}
+\end{equation}
+The XZ-plane distance at closure $s$ is
+\begin{equation}
+  D(s) = \bigl\|\bigl(\T(s) - \mathbf{I}(s)\bigr)_{\{x,z\}}\bigr\|_2
+       = \sqrt{\bigl(T_x - I_x\bigr)^2 + \bigl(T_z - I_z\bigr)^2}.
+\end{equation}
+$D(s)$ is monotone-decreasing on $[0, s_{\min}]$ where $s_{\min} = \arg\min_s D(s)$.
+The target width $W$ is achieved by solving
+\begin{equation}
+  D(s) - W = 0
+  \label{eq:brentq}
+\end{equation}
+on $[0, s_{\min}]$ using Brent's method (\texttt{scipy.optimize.brentq}).
+
+\subsection{Coplanarity Correction}
+
+After the joint solve, the reference finger's base-frame $Z$ is
+$z^* = I_z(c_\text{ref})$.  Each active non-reference finger $f$ is independently
+corrected by finding $c_f$ such that
+\begin{equation}
+  z_f(c_f) = z^*.
+\end{equation}
+This is a 1-D root-find on the monotone-decreasing function $z_f(c)$, also solved with
+\texttt{brentq}.
+
+If $z^*$ is outside finger $f$'s achievable range $[z_f^{\min},\,z_f^{\max}]$:
+\begin{equation}
+  c_f = \begin{cases}
+    0 & \text{if } z^* \geq z_f^{\max} \quad\text{(target too high, use full extension)}\\
+    c_f^{\max} & \text{if } z^* < z_f^{\min} \quad\text{(target too low, use full flex)}
+  \end{cases}
+\end{equation}
+Using the wrong direction (e.g.\ always falling back to $c_f^{\max}$) causes
+some fingers to fully close when the reference is near-extended at large widths.
+
+\subsection{Residual World-$Z$ Spread}
+
+Even after coplanar correction, the non-thumb tips show a residual world-$Z$ spread of
+$\approx5$~mm.  This arises because coplanarity enforces equal base-frame $Z$, but not
+equal base-frame $X$.  With the rotation \eqref{eq:Rmat}:
+\begin{equation}
+  w_z = -\sin\theta\,p_x - \cos\theta\,p_z.
+\end{equation}
+Fingers with the same $p_z$ but different $p_x$ land at different $w_z$ after tilt.
+This is a fundamental hardware constraint (different finger lengths) and is accepted.
+
+% ---------------------------------------------------------------------------
+\section{Cylinder / Power Grasp}
+
+\subsection{Diameter Model}
+
+Power grasps are modelled at the \emph{proximal-intermediate joint} rather than the
+fingertip, because the object contacts the proximal links:
+\begin{equation}
+  D_\text{cyl}(c) = \bigl\|\T_\text{prox}(c) - \bar{\mathbf{p}}_\text{prox}(c)\bigr\|_2,
+  \qquad
+  \bar{\mathbf{p}}_\text{prox}(c) = \frac{1}{4}\sum_{f} \mathbf{p}_f^{\text{prox}}(c).
+\end{equation}
+Both the thumb proximal-intermediate joint and the non-thumb centroid are computed via
+live \texttt{mj\_kinematics} calls (not interpolated, since they require the full
+kinematic chain including body translations).
+
+\subsection{Thumb Yaw Transition}
+
+At large diameters (fingers less closed), the thumb opposes the fingers at
+$y = y^{\max} = 1.308\,\text{rad}$.  At small diameters the thumb tip would collide
+with the finger tips; below the transition diameter $D^* \approx 71.6\,\text{mm}$ the
+thumb switches to palm mode ($y = 0$, $\theta = 0$):
+\begin{equation}
+  y^* = \begin{cases}
+    y^{\max} & D_\text{cyl} \geq D^*\\
+    0 & D_\text{cyl} < D^*
+  \end{cases}
+\end{equation}
+$D^*$ is pre-computed at init by sweeping $c$ and finding the first configuration where
+the thumb tip approaches within 20~mm of any non-thumb tip.
+
+% ---------------------------------------------------------------------------
+\section{World Frame Conversion}
+
+Given a \texttt{ClosureResult} (all positions in base frame, tilt $\theta$):
+\begin{align}
+  \R &= R_y(\theta)\,R_x(\pi) \\[4pt]
+  \bm{m}_w &= \R\,\bm{m}_b \qquad (\text{rotated midpoint}) \\[4pt]
+  \bm{b}_w &= \begin{pmatrix}-m_{w,x}\\-m_{w,y}\\g_z - m_{w,z}\end{pmatrix}
+  \qquad (\text{hand base in world, midpoint at }g_z) \\[4pt]
+  \p_w(f) &= \R\,\p_b(f) + \bm{b}_w \qquad (\text{each tip in world})
+\end{align}
+$\bm{b}_w$ is always above $g_z$ because $m_{w,z} = -\sin\theta\,m_{b,x} -
+\cos\theta\,m_{b,z} \leq 0$ for the achievable closure configurations (the midpoint's
+extension-direction component dominates).
+
+% ---------------------------------------------------------------------------
+\section{MuJoCo Viewer Rotation Convention}
+
+MuJoCo's free-body rotation joints apply $R_x(r_x)\,R_y(r_y)$ (axes in parent/world
+frame).  The FK model uses $\R = R_y(\theta)\,R_x(\pi)$.  Matching these:
+\begin{equation}
+  R_x(\pi)\,R_y(-\theta) = R_y(\theta)\,R_x(\pi)
+  \quad\Longleftrightarrow\quad
+  r_x = \pi,\quad r_y = -\theta.
+\end{equation}
+The negation of $\theta$ for \texttt{rot\_y} is therefore mandatory.
+
+% ---------------------------------------------------------------------------
+\section{Verified Width Ranges}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrp{7cm}}
+\toprule
+Mode & Min (mm) & Max (mm) & Notes \\
+\midrule
+2-finger line & 8.7 & 122 & Tilt $\to90°$ (side-approach) below $\approx15.5$~mm \\
+3-finger plane & 15.6 & 130 & \\
+4-finger plane & 15.6 & 130 & $\approx5$~mm inherent Z-spread at all widths \\
+5-finger plane & 15.6 & 130 & \\
+cylinder (diameter) & 28.6 & 103 & Palm mode below 71.6~mm \\
+\bottomrule
+\end{tabular}
+\caption{Width/diameter ranges achievable without geometric degeneracy.}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\section{Key Numerical Values}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrl}
+\toprule
+Quantity & Value & Source \\
+\midrule
+$c_\text{pinky}^{\max}$, $c_\text{ring}^{\max}$ & 1.57~rad & XML actuator range \\
+$c_\text{middle}^{\max}$, $c_\text{index}^{\max}$ & 1.50~rad & XML actuator range \\
+$c_\text{pitch}^{\max}$ & 0.60~rad & XML actuator range \\
+$c_\text{yaw}^{\max}$ & 1.308~rad & XML actuator range \\
+Coupling preload & 0.15~rad ($\approx8.6°$) & polycoef $a_0$ \\
+Finger $Z$-shift (open$\to$closed) & $\approx75$~mm & FK sweep \\
+Cylinder yaw transition & 71.6~mm diameter & tip-clearance sweep \\
+FK samples (non-thumb) & 200 per finger & \texttt{N\_SAMPLES\_1D} \\
+FK samples (thumb) & $50\times50$ & \texttt{N\_SAMPLES\_2D} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

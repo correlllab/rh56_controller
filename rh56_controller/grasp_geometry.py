@@ -32,7 +32,7 @@ from scipy.optimize import brentq
 # Paths
 # ---------------------------------------------------------------------------
 _HERE = pathlib.Path(__file__).parent.parent   # repo root
-_DEFAULT_XML = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
+_DEFAULT_XML = str(_HERE / "h1_mujoco" / "inspire" / "inspire_right.xml")
 _CACHE_PATH  = str(_HERE / "h1_mujoco" / "inspire" / ".fk_cache.npz")
 
 
@@ -566,88 +566,27 @@ class ClosureGeometry:
     def _solve_joint_closure(self, ref_finger: str,
                               target_width: float) -> Tuple[float, float, float]:
         """
-        Find (ctrl_pitch, ctrl_ref) that achieves target XZ-width between thumb
-        and ref_finger tip, chosen to minimise |tilt_y| = |atan2(-d[2], d[0])|.
+        Find closure parameter s such that |T(s) - finger_tip(s)| = target_width,
+        where both thumb pitch and finger ctrl scale linearly with s.
 
-        Strategy: sweep ctrl_pitch over [0, CTRL_MAX["thumb_proximal"]]; for each
-        pitch, sample XZ distance over ctrl_ref to locate the monotone-decreasing
-        region, then brentq to find the exact crossing.  The pair with minimum
-        |tilt| is returned — this allows the thumb to "back off" at small widths
-        while the finger continues to close, producing smooth pitch-up behaviour
-        as target_width decreases instead of the severe pitch-down caused by
-        proportional scaling.
-
-        Returns (s_dummy=0, ctrl_pitch, ctrl_ref); s_dummy is unused by callers.
-        Falls back to proportional s-scaling if no valid config is found.
+        Returns (s, ctrl_pitch, ctrl_ref).
+        Clamps to achievable range silently.
         """
-        N_PITCH = 50   # ctrl_pitch sweep resolution
-        N_SAMP  = 30   # samples to locate XZ minimum over ctrl_ref
-        pitch_grid = np.linspace(0.0, CTRL_MAX["thumb_proximal"], N_PITCH)
-        cr_full    = np.linspace(0.0, CTRL_MAX[ref_finger], N_SAMP)
+        s_min, d_min, d_open = self._joint_closure_range(ref_finger)
 
-        best_tilt_abs: float = np.inf
-        best_cp: Optional[float] = None
-        best_cr: Optional[float] = None
-
-        for cp in pitch_grid:
-            T = self.fk.thumb_tip(float(cp), CTRL_MAX["thumb_yaw"])
-
-            # Sample XZ distance over ctrl_ref to find the minimum.
-            xz_samp = np.array([
-                float(np.hypot(
-                    T[0] - self.fk.finger_tip(ref_finger, float(cr))[0],
-                    T[2] - self.fk.finger_tip(ref_finger, float(cr))[2],
-                ))
-                for cr in cr_full
-            ])
-            i_min   = int(np.argmin(xz_samp))
-            xz_min  = float(xz_samp[i_min])
-            xz_open = float(xz_samp[0])   # XZ at ctrl_ref = 0
-
-            if target_width < xz_min:
-                continue   # Target narrower than achievable at this thumb pitch.
-            if target_width > xz_open:
-                continue   # Target wider than open configuration at this pitch.
-
-            # Root-find in the monotone-decreasing region [0, cr_full[i_min]].
-            def _w_err(cr, _T=T):
-                ftip = self.fk.finger_tip(ref_finger, float(cr))
-                return float(np.hypot(_T[0] - ftip[0], _T[2] - ftip[2])) - target_width
-
-            cr_upper = float(cr_full[i_min]) + 1e-6   # small margin for brentq
+        if target_width >= d_open:
+            return 0.0, 0.0, 0.0
+        if target_width <= d_min:
+            s = s_min
+        else:
+            def _err(s):
+                return self._joint_dist(ref_finger, s) - target_width
             try:
-                cr_sol = float(brentq(_w_err, 0.0, cr_upper, xtol=1e-5))
+                s = float(brentq(_err, 0.0, s_min, xtol=1e-5))
             except ValueError:
-                # Sampling placed i_min slightly off; try full range as fallback.
-                try:
-                    cr_sol = float(brentq(_w_err, 0.0, CTRL_MAX[ref_finger],
-                                          xtol=1e-5))
-                except ValueError:
-                    continue
-
-            I        = self.fk.finger_tip(ref_finger, cr_sol)
-            d        = T - I
-            tilt_abs = abs(float(np.arctan2(-d[2], d[0])))
-            if tilt_abs < best_tilt_abs:
-                best_tilt_abs = tilt_abs
-                best_cp = float(cp)
-                best_cr = float(cr_sol)
-
-        if best_cp is None:
-            # Fallback: proportional s-scaling (original behaviour).
-            s_min, d_min, _ = self._joint_closure_range(ref_finger)
-            if target_width <= d_min:
                 s = s_min
-            else:
-                def _err(sv):
-                    return self._joint_dist(ref_finger, sv) - target_width
-                try:
-                    s = float(brentq(_err, 0.0, s_min, xtol=1e-5))
-                except ValueError:
-                    s = s_min
-            return s, s * CTRL_MAX["thumb_proximal"], s * CTRL_MAX[ref_finger]
 
-        return 0.0, best_cp, best_cr   # s_dummy=0.0 (unused by callers)
+        return s, s * CTRL_MAX["thumb_proximal"], s * CTRL_MAX[ref_finger]
 
     # ------------------------------------------------------------------
     # Cylinder helpers: proximal-intermediate joint distance model
@@ -694,22 +633,6 @@ class ClosureGeometry:
         print(f"[ClosureGeometry] Cylinder thumb-yaw transition: "
               f"ctrl={c_trans:.3f}  prox_diam={d_trans*1000:.1f} mm")
 
-    def _compute_tilt(self, d: np.ndarray) -> float:
-        """
-        Tilt angle (rad) that makes the thumb→finger direction horizontal in
-        world frame: atan2(−d[2], d[0]), wrapped to (−π/2, π/2).
-
-        The old blend ramp is no longer needed: _solve_joint_closure now selects
-        the minimum-tilt configuration via a 2D search, so d[0] ≤ 0 cases are
-        rare and handled correctly by the wrap below.
-        """
-        tilt = float(np.arctan2(-d[2], d[0]))
-        if tilt > np.pi / 2:
-            tilt -= np.pi
-        elif tilt < -np.pi / 2:
-            tilt += np.pi
-        return tilt
-
     # ------------------------------------------------------------------
     # Width/radius range query
     # ------------------------------------------------------------------
@@ -736,23 +659,29 @@ class ClosureGeometry:
         """
         2-finger index-thumb line closure.
 
-        Thumb pitch and index ctrl are jointly optimised to minimise |tilt_y|
-        for the given target width (see _solve_joint_closure).  Thumb yaw is
-        fixed at maximum.  base_tilt_y makes the thumb→index direction horizontal.
+        Both index ctrl and thumb pitch scale proportionally with a single closure
+        parameter s ∈ [0, 1].  Thumb yaw is fixed at maximum.  The base_tilt_y
+        angle makes the thumb→index direction horizontal in world frame.
         """
         _, ctrl_pitch, c_idx = self._solve_joint_closure("index", target_width)
-        idx_tip = self.fk.finger_tip("index", c_idx)
+        I = self.fk.finger_tip("index", c_idx)
         T = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
 
-        d = T - idx_tip
-        tilt_y = self._compute_tilt(d)
+        d = T - I
+        # With R = Ry(θ)@Rx(π): (R@d)[2] = -sin(θ)*d[0]-cos(θ)*d[2] = 0
+        # → θ = atan2(-d[2], d[0]), normalised to (-π/2, π/2)
+        # Clip to ±π/2.  For d[0] > 0 the result is already in (−π/2, π/2).
+        # For d[0] ≤ 0 (thumb has passed the finger in X after full closure), capping
+        # at ±π/2 keeps the hand in a "side-approach" orientation and avoids the
+        # 155° discontinuity that the old wrap (+= π) produced.
+        tilt_y = float(np.clip(np.arctan2(-d[2], d[0]), -np.pi / 2, np.pi / 2))
 
-        midpoint = (T + idx_tip) / 2.0
+        midpoint = (T + I) / 2.0
         # width = XZ distance = world-frame X separation after tilt correction
         # (algebraic identity: (R@d)[0] = hypot(d[0], d[2]))
         width    = float(np.hypot(d[0], d[2]))
 
-        tips: Dict[str, np.ndarray] = {"index": idx_tip, "thumb": T}
+        tips: Dict[str, np.ndarray] = {"index": I, "thumb": T}
         ctrl: Dict[str, float] = {
             "index":           float(c_idx),
             "middle": 0.0, "ring": 0.0, "pinky": 0.0,
@@ -779,13 +708,14 @@ class ClosureGeometry:
         ref_finger = "middle" if "middle" in fingers else fingers[0]
 
         _, ctrl_pitch, c_ref = self._solve_joint_closure(ref_finger, target_width)
-        T = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
+        I_ref = self.fk.finger_tip(ref_finger, c_ref)
+        T     = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
 
         # Coplanar corrections: bring all active fingers to reference finger's base-frame Z.
         # Direction-aware fallback: Z decreases as ctrl increases (finger curls).
         #   target_z > z_max → finger can't reach (too extended) → use ctrl=0 (highest Z)
         #   target_z < z_min → finger can't reach (too curled)   → use CTRL_MAX (lowest Z)
-        target_z = float(self.fk.finger_tip(ref_finger, c_ref)[2])
+        target_z = float(I_ref[2])
         coplanar = self.fk.coplanar_ctrls(target_z, fingers=fingers)
         for f in fingers:
             if coplanar.get(f) is None:
@@ -803,7 +733,11 @@ class ClosureGeometry:
         all_nonthumb = np.array([tips[f] for f in fingers])
         centroid = all_nonthumb.mean(axis=0)
         d = T - centroid
-        tilt_y = self._compute_tilt(d)
+        # Clip to ±π/2.  For d[0] > 0 the result is already in (−π/2, π/2).
+        # For d[0] ≤ 0 (thumb has passed the finger in X after full closure), capping
+        # at ±π/2 keeps the hand in a "side-approach" orientation and avoids the
+        # 155° discontinuity that the old wrap (+= π) produced.
+        tilt_y = float(np.clip(np.arctan2(-d[2], d[0]), -np.pi / 2, np.pi / 2))
 
         midpoint = np.vstack([all_nonthumb, T]).mean(axis=0)
         # width = XZ distance = world-frame separation after tilt (hypot identity)
