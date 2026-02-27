@@ -488,6 +488,15 @@ class ClosureGeometry:
         self._cyl_transition_ctrl: float = CTRL_MAX["index"]
         self._cyl_transition_diameter: float = 0.0
         self._compute_cyl_transition()
+        # Smooth-ramp blend parameters for small-width tilt transitions.
+        # Keyed by ref_finger ("index" or "middle").
+        self._blend_params: Dict[str, Tuple[float, float, float]] = {}
+        for ref in ["index", "middle"]:
+            bp = self._compute_blend_params(ref)
+            self._blend_params[ref] = bp
+            print(f"[ClosureGeometry] Blend params for {ref}: "
+                  f"s_d0={bp[0]:.3f}  s_min={bp[1]:.3f}  "
+                  f"tilt_target={np.degrees(bp[2]):.1f}°")
 
     # ------------------------------------------------------------------
     # Thumb yaw threshold for power grasp
@@ -634,6 +643,79 @@ class ClosureGeometry:
               f"ctrl={c_trans:.3f}  prox_diam={d_trans*1000:.1f} mm")
 
     # ------------------------------------------------------------------
+    # Small-width tilt ramp helpers
+    # ------------------------------------------------------------------
+    def _compute_blend_params(self, ref_finger: str) -> Tuple[float, float, float]:
+        """
+        Precompute smooth-ramp parameters for the small-width tilt transition.
+
+        At s_d0 the XZ-closure parameter crosses the point where d[0] = thumb_x −
+        finger_x reaches zero.  For s > s_d0 the standard atan2 formula gives
+        angles > π/2 whose naive wrap produces a 155° discontinuity.
+
+        Instead, we blend tilt linearly from π/2 (at s=s_d0) to tilt_target
+        (at s=s_min), where tilt_target is the coplanarity angle at maximum
+        closure — the hand "pitches back up" smoothly as the fingers close.
+
+        Returns (s_d0, s_min, tilt_target).
+        """
+        s_vals = np.linspace(0.0, 1.0, self._N_S)
+
+        # Find s_d0: first s where thumb_x - finger_x drops to ≤ 0.
+        s_d0 = 1.0
+        for sv in s_vals:
+            sv = float(sv)
+            T = self.fk.thumb_tip(sv * CTRL_MAX["thumb_proximal"],
+                                   CTRL_MAX["thumb_yaw"])
+            I = self.fk.finger_tip(ref_finger, sv * CTRL_MAX[ref_finger])
+            if T[0] - I[0] <= 0.0:
+                s_d0 = sv
+                break
+
+        # s_min from the pre-computed XZ minimum.
+        s_min, _, _ = self._joint_closure_range(ref_finger)
+
+        # tilt_target: coplanarity angle at s_min, wrapped to (−π/2, π/2).
+        # The coplanarity condition (R@d)[2]=0 has two solutions: atan2(-d[2], d[0])
+        # and atan2(d[2], -d[0]).  We want the one in (−π/2, π/2).
+        T_min = self.fk.thumb_tip(s_min * CTRL_MAX["thumb_proximal"],
+                                    CTRL_MAX["thumb_yaw"])
+        I_min = self.fk.finger_tip(ref_finger, s_min * CTRL_MAX[ref_finger])
+        d_min = T_min - I_min
+        raw = float(np.arctan2(-d_min[2], d_min[0]))
+        tilt_target = (raw - np.pi * np.sign(raw)
+                       if abs(raw) > np.pi / 2 else raw)
+
+        return float(s_d0), float(s_min), float(tilt_target)
+
+    def _compute_tilt(self, d: np.ndarray, s: float,
+                      ref_finger: str) -> float:
+        """
+        Tilt angle (rad) that makes the thumb→finger direction horizontal in
+        world frame, with a smooth ramp for small-width configurations.
+
+        - d[0] > 0  (normal range): standard atan2(−d[2], d[0]) ∈ (−π/2, π/2).
+        - d[0] ≤ 0  (very small widths): linear blend from π/2 at s_d0 to
+          tilt_target at s_min.  The hand "pitches back up" continuously,
+          keeping both fingertips coplanar at the grasp plane without the
+          155° discontinuity that a naive wrap would produce.
+        """
+        if d[0] > 0.0:
+            # Standard formula: result is already in (−π/2, π/2).
+            return float(np.arctan2(-d[2], d[0]))
+
+        params = self._blend_params.get(ref_finger)
+        if params is None:
+            # Fallback: clip (side-approach, old behaviour).
+            return float(np.clip(np.arctan2(-d[2], d[0]), -np.pi / 2, np.pi / 2))
+
+        s_d0, s_min, tilt_target = params
+        if s_min <= s_d0:
+            return np.pi / 2
+        alpha = float(np.clip((s - s_d0) / (s_min - s_d0), 0.0, 1.0))
+        return float((1.0 - alpha) * (np.pi / 2) + alpha * tilt_target)
+
+    # ------------------------------------------------------------------
     # Width/radius range query
     # ------------------------------------------------------------------
     def width_range(self, mode: str, n_fingers: int = 4) -> Tuple[float, float]:
@@ -663,18 +745,17 @@ class ClosureGeometry:
         parameter s ∈ [0, 1].  Thumb yaw is fixed at maximum.  The base_tilt_y
         angle makes the thumb→index direction horizontal in world frame.
         """
-        _, ctrl_pitch, c_idx = self._solve_joint_closure("index", target_width)
+        s, ctrl_pitch, c_idx = self._solve_joint_closure("index", target_width)
         I = self.fk.finger_tip("index", c_idx)
         T = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
 
         d = T - I
-        # With R = Ry(θ)@Rx(π): (R@d)[2] = -sin(θ)*d[0]-cos(θ)*d[2] = 0
-        # → θ = atan2(-d[2], d[0]), normalised to (-π/2, π/2)
-        # Clip to ±π/2.  For d[0] > 0 the result is already in (−π/2, π/2).
-        # For d[0] ≤ 0 (thumb has passed the finger in X after full closure), capping
-        # at ±π/2 keeps the hand in a "side-approach" orientation and avoids the
-        # 155° discontinuity that the old wrap (+= π) produced.
-        tilt_y = float(np.clip(np.arctan2(-d[2], d[0]), -np.pi / 2, np.pi / 2))
+        # With R = Ry(θ)@Rx(π): (R@d)[2] = 0 → θ = atan2(-d[2], d[0]).
+        # For d[0] > 0 (normal range) this is already in (−π/2, π/2).
+        # For d[0] ≤ 0 (very small widths), use a smooth linear ramp from π/2
+        # (at s_d0) to the coplanarity angle at minimum width (tilt_target < 0),
+        # so the hand "pitches back up" without discontinuities.
+        tilt_y = self._compute_tilt(d, s, "index")
 
         midpoint = (T + I) / 2.0
         # width = XZ distance = world-frame X separation after tilt correction
@@ -707,7 +788,7 @@ class ClosureGeometry:
         fingers    = GRASP_FINGER_SETS[n_fingers]
         ref_finger = "middle" if "middle" in fingers else fingers[0]
 
-        _, ctrl_pitch, c_ref = self._solve_joint_closure(ref_finger, target_width)
+        s, ctrl_pitch, c_ref = self._solve_joint_closure(ref_finger, target_width)
         I_ref = self.fk.finger_tip(ref_finger, c_ref)
         T     = self.fk.thumb_tip(ctrl_pitch, CTRL_MAX["thumb_yaw"])
 
@@ -733,11 +814,9 @@ class ClosureGeometry:
         all_nonthumb = np.array([tips[f] for f in fingers])
         centroid = all_nonthumb.mean(axis=0)
         d = T - centroid
-        # Clip to ±π/2.  For d[0] > 0 the result is already in (−π/2, π/2).
-        # For d[0] ≤ 0 (thumb has passed the finger in X after full closure), capping
-        # at ±π/2 keeps the hand in a "side-approach" orientation and avoids the
-        # 155° discontinuity that the old wrap (+= π) produced.
-        tilt_y = float(np.clip(np.arctan2(-d[2], d[0]), -np.pi / 2, np.pi / 2))
+        # For d[0] > 0: standard atan2(-d[2], d[0]) in (−π/2, π/2).
+        # For d[0] ≤ 0: smooth ramp via _compute_tilt (same s from joint solver).
+        tilt_y = self._compute_tilt(d, s, ref_finger)
 
         midpoint = np.vstack([all_nonthumb, T]).mean(axis=0)
         # width = XZ distance = world-frame separation after tilt (hypot identity)
