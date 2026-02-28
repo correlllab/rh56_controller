@@ -66,8 +66,9 @@ spread axis to level the grasp plane.
 
 \subsection{Joint Coupling}
 
-Equality constraints in \texttt{inspire\_right.xml} use MuJoCo's \texttt{polycoef}
-convention: \texttt{polycoef="$a_0\;a_1$"} enforces $q_1 = a_0 + a_1\,q_2$.
+Equality constraints in \texttt{inspire\_grasp\_scene.xml} (and identically in
+\texttt{inspire\_right.xml}) use MuJoCo's \texttt{polycoef} convention:
+\texttt{polycoef="$a_0\;a_1$"} enforces $q_1 = a_0 + a_1\,q_2$.
 
 \begin{table}[h]
 \centering
@@ -75,15 +76,18 @@ convention: \texttt{polycoef="$a_0\;a_1$"} enforces $q_1 = a_0 + a_1\,q_2$.
 \toprule
 Joint pair & Coupling equation & Source \\
 \midrule
-pinky / ring / middle intermediate & $q_\text{inter} = q_\text{prox}$ & \texttt{polycoef="0 1 0 0 0"} \\
-index intermediate & $q_\text{inter} = 0.15 + q_\text{prox}$ & \texttt{polycoef="0.15 1 0 0 0"} \\
-thumb intermediate & $q_\text{inter} = 0.15 + 1.25\,q_\text{pitch}$ & \texttt{polycoef="0.15 1.25 0 0"} \\
-thumb distal & $q_\text{dist}   = 0.15 + 0.75\,q_\text{pitch}$ & \texttt{polycoef="0.15 0.75 0 0 0"} \\
+pinky / ring / middle intermediate & $q_\text{inter} = -0.15 + 1.1169\,q_\text{prox}$ & \texttt{polycoef="-0.15 1.1169 0 0 0"} \\
+index intermediate & $q_\text{inter} = -0.05 + 1.1169\,q_\text{prox}$ & \texttt{polycoef="-0.05 1.1169 0 0 0"} \\
+thumb intermediate & $q_\text{inter} = 0.15 + 1.33\,q_\text{pitch}$ & \texttt{polycoef="0.15 1.33 0 0"} \\
+thumb distal & $q_\text{dist}   = 0.15 + 0.66\,q_\text{pitch}$ & \texttt{polycoef="0.15 0.66 0 0 0"} \\
 \bottomrule
 \end{tabular}
-\caption{Joint coupling equations. The 0.15~rad preload means all coupled joints are
-pre-bent $\approx8.6°$ at zero proximal angle, shifting fingertip positions relative
-to a na\"ive rigid-link model.}
+\caption{Joint coupling equations from the calibrated XML models.
+The thumb coupled joints have a $+0.15$~rad ($\approx8.6°$) preload at zero pitch.
+The non-thumb offsets are negative (enforcing a slight initial curl); the equality
+solver clamps to joint limits at zero proximal angle.
+The FK sweep must replicate these equations manually when writing \texttt{data.qpos}
+directly, since \texttt{mj\_kinematics} does not enforce equality constraints.}
 \end{table}
 
 \subsection{FK Sweep}
@@ -92,8 +96,8 @@ Because the 3-D body quaternions in the XML make analytical FK intractable, all
 fingertip positions are computed numerically via MuJoCo's \texttt{mj\_kinematics}.
 
 \paragraph{Non-thumb fingers.}
-For finger $f$ with maximum control $c_f^{\max}$, sweep 200 uniformly-spaced
-control values $c \in [0, c_f^{\max}]$:
+For finger $f$ with control range $[c_f^{\min}, c_f^{\max}]$, sweep 200 uniformly-spaced
+control values $c \in [c_f^{\min}, c_f^{\max}]$ (for all non-thumb fingers $c_f^{\min}=0$):
 \begin{enumerate}
   \item Zero all \texttt{qpos}.
   \item Set $q_\text{prox}(f) = c$ and coupled joint(s) per Table~1.
@@ -104,7 +108,7 @@ The result is a table $\{c_i, \p_f(c_i)\}_{i=1}^{200}$ interpolated with
 \texttt{scipy.interpolate.interp1d} (linear, extrapolation to boundary).
 
 \paragraph{Thumb.}
-The thumb has two independent DOF (pitch $p \in [0,\,0.6]$ and yaw
+The thumb has two independent DOF (pitch $p \in [0.1,\,0.57]$ and yaw
 $y \in [0,\,1.308]$).  A $50 \times 50$ grid sweep produces
 $\T(p, y) \in \mathbb{R}^{50\times50\times3}$, interpolated with
 \texttt{RegularGridInterpolator}.
@@ -386,11 +390,12 @@ cylinder (diameter) & 28.6 & 103 & Palm mode below 71.6~mm \\
 \toprule
 Quantity & Value & Source \\
 \midrule
-$c_\text{pinky}^{\max}$, $c_\text{ring}^{\max}$ & 1.57~rad & XML actuator range \\
-$c_\text{middle}^{\max}$, $c_\text{index}^{\max}$ & 1.50~rad & XML actuator range \\
-$c_\text{pitch}^{\max}$ & 0.60~rad & XML actuator range \\
-$c_\text{yaw}^{\max}$ & 1.308~rad & XML actuator range \\
-Coupling preload & 0.15~rad ($\approx8.6°$) & polycoef $a_0$ \\
+$c_\text{pinky}^{\max}$, $c_\text{ring}^{\max}$ & 1.57~rad & XML actuator ctrlrange \\
+$c_\text{middle}^{\max}$, $c_\text{index}^{\max}$ & 1.50~rad & XML actuator ctrlrange \\
+$c_\text{pitch}^{\min}$, $c_\text{pitch}^{\max}$ & 0.1, 0.57~rad & XML actuator ctrlrange \\
+$c_\text{yaw}^{\max}$ & 1.308~rad & XML actuator ctrlrange \\
+$c_\text{yaw}^{\text{line}}$ & 1.16~rad & empirical (2-finger line mode) \\
+Thumb preload & 0.15~rad ($\approx8.6°$) & polycoef $a_0$ (thumb only) \\
 Finger $Z$-shift (open$\to$closed) & $\approx75$~mm & FK sweep \\
 Cylinder yaw transition & 71.6~mm diameter & tip-clearance sweep \\
 FK samples (non-thumb) & 200 per finger & \texttt{N\_SAMPLES\_1D} \\
