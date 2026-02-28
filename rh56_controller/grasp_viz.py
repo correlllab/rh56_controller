@@ -58,6 +58,7 @@ from .grasp_geometry import (
 _HERE = pathlib.Path(__file__).parent.parent
 _GRASP_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
 _ROBOT_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "ur5_inspire.xml")
+_RIGHT_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "inspire_right.xml")
 
 # Actuator names in DOF order (same as real hand angle_set / angle_read)
 _ACTUATOR_ORDER = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
@@ -132,6 +133,7 @@ class GraspViz:
         port: Optional[str] = None,
         robot_mode: bool = False,
         send_real: bool = False,
+        mink_viz: bool = False,
     ):
         print("[GraspViz] Initialising FK model...")
         self.fk       = InspireHandFK(xml_path=xml_path, rebuild=rebuild)
@@ -174,6 +176,32 @@ class GraspViz:
             except Exception as e:
                 print(f"[GraspViz] Could not connect to real hand: {e}")
 
+        # Mink comparison viewer state
+        self._mink_enabled  = mink_viz
+        self._mink_planner  = None
+        self._mink_result   = None
+        self._mink_viewer_ctrl: Optional[np.ndarray] = None
+        self._mink_viewer_thread: Optional[threading.Thread] = None
+        self._mink_lock     = threading.Lock()
+        self._mink_solve_event = threading.Event()
+        self._mink_solve_thread: Optional[threading.Thread] = None
+
+        if mink_viz:
+            try:
+                from .mink_grasp_planner import MinkGraspPlanner
+                print("[GraspViz] Loading mink comparison planner...")
+                self._mink_planner = MinkGraspPlanner(
+                    _RIGHT_SCENE, dt=0.005, max_iters=150, conv_thr=5e-3,
+                )
+                self._mink_solve_thread = threading.Thread(
+                    target=self._mink_solve_loop, daemon=True, name="mink-solve",
+                )
+                self._mink_solve_thread.start()
+                print("[GraspViz] Mink planner ready.")
+            except Exception as e:
+                print(f"[GraspViz] Could not load mink planner: {e}")
+                self._mink_enabled = False
+
         # Compute initial result
         self._recompute()
 
@@ -194,6 +222,8 @@ class GraspViz:
         if self._result is not None:
             self._push_viewer_ctrl()
             self._send_real_hand()
+            if self._mink_enabled:
+                self._mink_solve_event.set()
 
     # ------------------------------------------------------------------
     # Sim2Real: send computed grasp pose to real hand
@@ -510,6 +540,201 @@ class GraspViz:
             import traceback; traceback.print_exc()
 
     # ------------------------------------------------------------------
+    # Mink comparison viewer
+    # ------------------------------------------------------------------
+
+    def _mink_solve_loop(self):
+        """Background thread: re-solve with mink whenever mode/width changes."""
+        while not self._viewer_stop.is_set():
+            triggered = self._mink_solve_event.wait(timeout=0.1)
+            if not triggered:
+                continue
+            self._mink_solve_event.clear()
+            with self._viewer_lock:
+                result = self._result
+            if result is None or self._mink_planner is None:
+                continue
+            try:
+                m_res = self._run_mink_for_result(result)
+                with self._mink_lock:
+                    self._mink_result = m_res
+                self._push_mink_viewer_ctrl()
+            except Exception as e:
+                print(f"[Mink] Solve error: {e}")
+
+    def _run_mink_for_result(self, result):
+        """Run mink planner targeting the same tip positions as the custom result."""
+        from .grasp_geometry import GRASP_FINGER_SETS, NON_THUMB_FINGERS
+        mode = result.mode
+        tips = result.tip_positions
+        if mode == "2-finger line":
+            return self._mink_planner.solve_line(
+                result.width,
+                thumb_target=tips["thumb"],
+                index_target=tips["index"],
+            )
+        elif "plane" in mode:
+            n = int(mode[0])
+            fingers = GRASP_FINGER_SETS[n] + ["thumb"]
+            targets = {f: tips[f] for f in fingers if f in tips}
+            return self._mink_planner.solve_plane(result.width, targets)
+        elif mode == "cylinder":
+            fingers = NON_THUMB_FINGERS + ["thumb"]
+            targets = {f: tips[f] for f in fingers if f in tips}
+            return self._mink_planner.solve_cylinder(result.width, targets)
+        raise ValueError(f"Unknown mode: {mode}")
+
+    def _push_mink_viewer_ctrl(self):
+        """Package mink finger ctrls + custom base pose for the mink viewer thread."""
+        with self._viewer_lock:
+            result = self._result
+            gz     = self._grasp_z
+        with self._mink_lock:
+            m_res = self._mink_result
+        if result is None or m_res is None:
+            return
+        wbase = result.world_base(gz)
+        if self._robot_mode:
+            wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
+        ctrl = np.array([
+            wbase[0], wbase[1], wbase[2],
+            np.pi, -result.base_tilt_y, 0.0,
+            m_res.ctrl[0],   # pinky
+            m_res.ctrl[1],   # ring
+            m_res.ctrl[2],   # middle
+            m_res.ctrl[3],   # index
+            m_res.ctrl[4],   # thumb_proximal
+            m_res.ctrl[5],   # thumb_yaw
+        ], dtype=float)
+        with self._mink_lock:
+            self._mink_viewer_ctrl = ctrl
+
+    def _launch_mink_viewer(self):
+        """Launch the mink comparison viewer in a background thread."""
+        if self._mink_viewer_thread is not None and self._mink_viewer_thread.is_alive():
+            print("[GraspViz] Mink viewer already open.")
+            return
+        self._push_mink_viewer_ctrl()
+        t = threading.Thread(
+            target=self._mink_viewer_loop, daemon=True, name="mink-viewer",
+        )
+        self._mink_viewer_thread = t
+        t.start()
+
+    def _mink_viewer_loop(self):
+        """Background thread: mink comparison floating-hand viewer.
+
+        Uses the same inspire_grasp_scene.xml and hand pose as the custom viewer,
+        but with finger joint angles from the mink IK solution.
+
+        Overlay shows:
+          • Translucent finger-coloured spheres  — custom planner targets
+          • Cyan spheres                         — mink achieved tip positions
+          • Yellow capsule lines                 — per-finger tip error vectors
+        """
+        try:
+            model = mujoco.MjModel.from_xml_path(_GRASP_SCENE)
+            data  = mujoco.MjData(model)
+            mujoco.mj_resetData(model, data)
+            jm = self._setup_jnt_map(model)
+
+            # Seed initial pose
+            self._push_mink_viewer_ctrl()
+            with self._mink_lock:
+                seed_ctrl = self._mink_viewer_ctrl
+            if seed_ctrl is not None:
+                self._apply_qpos(jm, data, seed_ctrl, model)
+
+            with mujoco.viewer.launch_passive(model, data) as v:
+                while v.is_running() and not self._viewer_stop.is_set():
+                    with self._viewer_lock:
+                        result = self._result
+                        gz     = self._grasp_z
+                    with self._mink_lock:
+                        ctrl  = (self._mink_viewer_ctrl.copy()
+                                 if self._mink_viewer_ctrl is not None else None)
+                        m_res = self._mink_result
+                    if ctrl is not None:
+                        self._apply_qpos(jm, data, ctrl, model)
+                    # First: draw standard overlay (custom target tips + mode geometry)
+                    self._add_viewer_geoms(v, result, gz)
+                    # Then: draw mink achieved tips on top
+                    self._add_mink_overlay(v, result, gz, m_res)
+                    v.sync()
+                    time.sleep(0.033)
+        except Exception as e:
+            print(f"[GraspViz/Mink] Viewer error: {e}")
+
+    def _add_mink_overlay(self, viewer, result, gz, m_res):
+        """Append mink achieved-tip markers to the already-populated user_scn.
+
+        Call AFTER _add_viewer_geoms (which resets ngeom).  Adds to the existing
+        geom list without clearing it.
+
+        Cyan spheres   = mink achieved tip positions (in world frame)
+        Yellow lines   = error vectors from achieved → custom target (only if > 2 mm)
+        """
+        if result is None or m_res is None:
+            return
+        scn = viewer.user_scn
+
+        def add_sphere(pos, radius, rgba):
+            if scn.ngeom >= scn.maxgeom:
+                return
+            g = scn.geoms[scn.ngeom]
+            mujoco.mjv_initGeom(
+                g, mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([radius, radius, radius]),
+                np.asarray(pos, dtype=np.float64),
+                np.eye(3).flatten(),
+                np.asarray(rgba, dtype=np.float32),
+            )
+            scn.ngeom += 1
+
+        def add_line(p0, p1, rgba, width=0.0015):
+            if scn.ngeom >= scn.maxgeom:
+                return
+            g = scn.geoms[scn.ngeom]
+            mujoco.mjv_initGeom(
+                g, mujoco.mjtGeom.mjGEOM_CAPSULE,
+                np.zeros(3), np.zeros(3), np.zeros(9),
+                np.asarray(rgba, dtype=np.float32),
+            )
+            mujoco.mjv_connector(
+                g, mujoco.mjtGeom.mjGEOM_CAPSULE, width,
+                np.asarray(p0, dtype=np.float64),
+                np.asarray(p1, dtype=np.float64),
+            )
+            scn.ngeom += 1
+
+        # World transform: same tilt as custom planner, same base position.
+        # Mink tip_positions are in hand base frame (same coord system as FK tables).
+        from .grasp_geometry import ClosureResult as _CR
+        R     = _CR._rot_matrix(result.base_tilt_y)
+        mid_w = R @ result.midpoint
+        base_w = np.array([-mid_w[0], -mid_w[1], gz - mid_w[2]])
+        if self._robot_mode:
+            base_w += np.array([self._grasp_x, self._grasp_y, 0.0])
+
+        # Custom target world tips (same transform used by _add_viewer_geoms)
+        wtips_custom = result.world_tips(gz)
+        if self._robot_mode:
+            xy_off = np.array([self._grasp_x, self._grasp_y, 0.0])
+            wtips_custom = {f: p + xy_off for f, p in wtips_custom.items()}
+
+        _CYAN = np.array([0.0, 0.9, 0.9, 1.0], dtype=np.float32)
+        _YELLOW = np.array([1.0, 1.0, 0.0, 0.8], dtype=np.float32)
+
+        for fname, pos_base in m_res.tip_positions.items():
+            world_pos = R @ pos_base + base_w
+            add_sphere(world_pos, radius=0.004, rgba=_CYAN)
+            # Error line to custom target
+            if fname in wtips_custom:
+                err = float(np.linalg.norm(world_pos - wtips_custom[fname]))
+                if err > 0.002:
+                    add_line(world_pos, wtips_custom[fname], rgba=_YELLOW)
+
+    # ------------------------------------------------------------------
     # MuJoCo viewer geometry overlay
     # ------------------------------------------------------------------
     def _add_viewer_geoms(
@@ -735,6 +960,12 @@ class GraspViz:
         self._btn_mujoco = Button(ax_btn, viewer_label)
         self._btn_mujoco.on_clicked(self._on_open_viewer)
 
+        # ---- Mink comparison viewer button ----
+        if self._mink_enabled:
+            ax_btn_mink = fig.add_axes([0.72, btn_y + 0.07, 0.20, 0.05])
+            self._btn_mink = Button(ax_btn_mink, "Open Mink Viewer")
+            self._btn_mink.on_clicked(lambda _e: self._launch_mink_viewer())
+
         # ---- Send-to-real checkbox (only if hand is connected) ----
         if self._hand is not None:
             ax_real = fig.add_axes([0.65, btn_y, 0.06, 0.06])
@@ -820,6 +1051,30 @@ class GraspViz:
             ax.text(pos[0]+0.003, pos[1], pos[2]+0.003, fname[:3],
                     fontsize=7, color=col)
 
+        # ---------- Mink comparison dots (cyan) ----------
+        if self._mink_enabled:
+            with self._mink_lock:
+                m_res = self._mink_result
+            if m_res is not None:
+                from .grasp_geometry import ClosureResult as _CR
+                R      = _CR._rot_matrix(r.base_tilt_y)
+                mid_w  = R @ r.midpoint
+                base_w = np.array([-mid_w[0], -mid_w[1], gz - mid_w[2]])
+                for fname, pos_base in m_res.tip_positions.items():
+                    wpos = R @ pos_base + base_w
+                    ax.scatter(*wpos, color="cyan", s=30, marker="D",
+                               zorder=6, alpha=0.85)
+                    # Dashed error line to custom target
+                    if fname in wtips:
+                        err = float(np.linalg.norm(wpos - wtips[fname]))
+                        if err > 0.002:
+                            ax.plot(
+                                [wpos[0], wtips[fname][0]],
+                                [wpos[1], wtips[fname][1]],
+                                [wpos[2], wtips[fname][2]],
+                                "--", color="gold", lw=0.8, alpha=0.7,
+                            )
+
         # ---------- Hand base origin ----------
         ax.scatter(*wbase, color="black", s=80, marker="x", zorder=6)
         ax.text(wbase[0]+0.003, wbase[1], wbase[2]+0.003, "base", fontsize=7)
@@ -862,6 +1117,18 @@ class GraspViz:
             v = r.ctrl_values.get(k, 0.0)
             if v > 0.001:
                 lines.append(f"  {k[:12]:12s}: {v:.3f}")
+
+        if self._mink_enabled:
+            with self._mink_lock:
+                m_res = self._mink_result
+            if m_res is None:
+                lines.append("\nMink: solving…")
+            else:
+                status = "✓" if m_res.converged else "✗"
+                mean_err = float(np.mean(list(m_res.position_errors_m.values()))) * 1000
+                lines.append(f"\nMink: {status} {m_res.n_iters} iters"
+                             f" | err {mean_err:.1f} mm")
+
         self._info_text.set_text("\n".join(lines))
 
         # Axis limits
@@ -969,6 +1236,8 @@ def main():
                         help="Use UR5+hand robot viewer instead of floating hand")
     parser.add_argument("--send-real", action="store_true",
                         help="Start with Send-to-Real enabled (requires --port)")
+    parser.add_argument("--mink", action="store_true",
+                        help="Enable mink IK comparison viewer (second MuJoCo window)")
     args = parser.parse_args()
 
     viz = GraspViz(
@@ -977,6 +1246,7 @@ def main():
         port=args.port,
         robot_mode=args.robot,
         send_real=args.send_real,
+        mink_viz=args.mink,
     )
     viz.run()
 
