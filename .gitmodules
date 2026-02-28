@@ -1,3 +1,6 @@
 [submodule "h1_mujoco"]
 	path = h1_mujoco
 	url = git@github.com:correlllab/h1_mujoco.git
+[submodule "mink"]
+	path = mink
+	url = https://github.com/kevinzakka/mink/
