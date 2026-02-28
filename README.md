@@ -24,6 +24,38 @@ It includes calibrated force mapping, dynamic step-response characterization, hi
 | <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4"><img src="resource/video/2finger_pinch_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/2finger_pinch_long_obj.mp4) |
 | <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4"><img src="resource/video/4finger_grab_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4) |
 ---
+
+## Installation (uv)
+
+This repository uses [uv](https://docs.astral.sh/uv/) as the package manager.  `uv` automatically manages a virtual environment and resolves the vendored `mink` dependency (differential IK library) from the local `mink/` subdirectory.
+
+```bash
+# Install uv (one-time, if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and set up the environment
+git clone https://github.com/correlllab/rh56_controller.git
+cd rh56_controller
+uv sync          # creates .venv and installs all dependencies
+
+# Run any module through the managed environment
+uv run python -m rh56_controller.grasp_viz
+uv run python -m rh56_controller.grasp_viz --robot
+```
+
+`uv sync` installs:
+- `numpy`, `scipy`, `matplotlib` — numerical + plotting stack
+- `mujoco >= 3.3.6` — physics simulation and passive viewers
+- `mink` (from `./mink/`) — differential IK for arm + hand planning
+- `pyserial` — real-hand USB/serial communication
+
+To run without the mink planner (e.g., hardware-only use without simulation):
+```bash
+uv run python -m rh56_controller.grasp_viz --no-mink
+```
+
+---
+
 ## Force Mapping to Newtons
 
 > This repository currently exposes finger forces in **raw 0–1000 units**.  

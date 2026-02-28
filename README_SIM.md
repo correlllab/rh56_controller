@@ -3,14 +3,17 @@
 ## Quick Reference
 
 ```bash
-# Grasp planner (no hardware)
-python -m rh56_controller.grasp_viz
+# Grasp planner (no hardware); mink IK comparison loaded by default
+uv run python -m rh56_controller.grasp_viz
 
 # Grasp planner + real hand ("Send to Real" checkbox)
-python -m rh56_controller.grasp_viz --port /dev/ttyUSB0
+uv run python -m rh56_controller.grasp_viz --port /dev/ttyUSB0
 
-# Grasp planner + UR5 robot arm
-python -m rh56_controller.grasp_viz --robot
+# Grasp planner + UR5 robot arm (enables Robot: Ours / Robot: Mink buttons)
+uv run python -m rh56_controller.grasp_viz --robot
+
+# Skip mink planner for faster startup (no mink comparison)
+uv run python -m rh56_controller.grasp_viz --no-mink
 
 # Force visualizer, sim-only
 python -m rh56_controller.real2sim_viz --sim-only
@@ -60,19 +63,28 @@ Solve antipodal grasp geometry for a target width/height, show results in a matp
 - Radio buttons: `line` (2-finger), `plane` (3–5 finger), `cylinder` (power)
 - Width slider: object width / cylinder diameter in mm
 - Z slider: grasp height in world frame (mm)
-- MuJoCo button: open passive viewer (floating hand or UR5)
+- X / Y sliders: grasp position in UR5 world frame (robot mode only)
+- **Hand: Ours** — open floating-hand viewer with custom planner angles
+- **Hand: Mink** — open floating-hand viewer with mink IK planner angles
+- **Robot: Ours** — open UR5+hand viewer, arm driven by mink IK, fingers from custom planner (robot mode only)
+- **Robot: Mink** — open UR5+hand viewer, arm driven by mink IK, fingers from mink planner (robot mode only)
 - Send to Real checkbox: mirror current joint solution to hardware at ~20 Hz
 
+**Multiple viewers:** Each viewer runs in its own subprocess (via `multiprocessing.Process` with the `fork` start method).  This avoids GLFW multi-thread crashes so all four viewer windows can be open simultaneously.
+
+**Mink comparison (matplotlib 3D view):** When mink is loaded, cyan diamond markers show the mink-planner tip positions alongside the orange/blue custom-planner tips.  Gold dashed lines connect mismatched pairs when the position error exceeds 2 mm.
+
 **Viewer conventions:**
-- Floating hand (`inspire_grasp_scene.xml`): direct `qpos` write + `mj_kinematics`; equality constraints bypassed and manually reproduced
-- Robot mode (`ur5_inspire.xml`): PD Cartesian control on eeff site; finger actuators `[6:11]`
+- Floating hand (`inspire_grasp_scene.xml`): direct `qpos` write + `mj_kinematics`; equality constraints manually replicated (polycoef coupling)
+- Robot mode (`ur5_inspire.xml`): mink differential IK drives arm joints each frame; finger actuator values come from the selected planner
 
 **CLI:**
 ```
 --port /dev/ttyUSB0   connect real hand (enables Send-to-Real)
---robot               launch UR5+inspire instead of floating hand
+--robot               enable UR5 robot viewer buttons
 --send-real           start with Send-to-Real enabled
---xml PATH            override default inspire_grasp_scene.xml
+--no-mink             skip loading mink planner (faster startup)
+--xml PATH            override default inspire_right.xml
 --rebuild             force FK table rebuild
 ```
 

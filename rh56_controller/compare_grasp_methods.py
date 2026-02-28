@@ -68,9 +68,42 @@ def _custom_pos_error(result: ClosureResult, target_tips: Dict) -> float:
 
 
 def _custom_coplan_err(result: ClosureResult, active_fingers: List[str]) -> float:
-    """Std-dev of active fingertip Z values for the custom planner [mm]."""
-    zvals = [result.tip_positions[f][2] for f in active_fingers if f != "thumb"]
-    return float(np.std(zvals)) * 1000.0 if len(zvals) > 1 else 0.0
+    """Mean absolute world-frame Z deviation of non-thumb tips from their mean Z [mm].
+
+    The custom planner enforces equal *base-frame* Z for non-thumb fingers via
+    sequential brentq root-finding, making base-frame Z std exactly zero.  However,
+    after the hand-tilt rotation is applied, fingers with different base-frame X
+    positions land at different world-frame Z values (different finger lengths).
+    This metric captures that residual world-frame coplanarity error honestly.
+    """
+    non_thumb = [f for f in active_fingers if f != "thumb"]
+    if len(non_thumb) < 2:
+        return 0.0
+    wtips = result.world_tips(world_grasp_z=0.0)
+    zvals = np.array([wtips[f][2] for f in non_thumb if f in wtips])
+    if len(zvals) < 2:
+        return 0.0
+    return float(np.mean(np.abs(zvals - zvals.mean()))) * 1000.0
+
+
+def _mink_coplan_err(mink_r: MinkGraspResult, result: ClosureResult,
+                     active_fingers: List[str]) -> float:
+    """Mean absolute world-frame Z deviation of mink non-thumb tips from mean Z [mm].
+
+    Mink tip positions are in base frame.  We apply the same hand-tilt rotation as
+    the custom planner (result.base_tilt_y) to convert to world frame and compute
+    the same metric as _custom_coplan_err for a fair comparison.
+    """
+    non_thumb = [f for f in active_fingers
+                 if f != "thumb" and f in mink_r.tip_positions]
+    if len(non_thumb) < 2:
+        return 0.0
+    R     = ClosureResult._rot_matrix(result.base_tilt_y)
+    mid_w = R @ result.midpoint
+    base_w = np.array([-mid_w[0], -mid_w[1], -mid_w[2]])  # gz=0
+    zvals = np.array([(R @ mink_r.tip_positions[f] + base_w)[2]
+                      for f in non_thumb])
+    return float(np.mean(np.abs(zvals - zvals.mean()))) * 1000.0
 
 
 def _mink_mean_pos_error(mink_r: MinkGraspResult) -> float:
@@ -136,7 +169,7 @@ def sweep_line(
 
         mink_pos_errs_mean.append(_mink_mean_pos_error(m_res))
         mink_pos_errs_max.append(_mink_max_pos_error(m_res))
-        mink_coplan.append(m_res.coplanarity_err_m * 1000)
+        mink_coplan.append(_mink_coplan_err(m_res, c_res, ["index"]))
         mink_iters.append(m_res.n_iters)
         mink_times.append(m_res.wall_time_s * 1000)
         mink_conv.append(m_res.converged)
@@ -198,7 +231,7 @@ def sweep_plane(
 
         mink_pos_errs_mean.append(_mink_mean_pos_error(m_res))
         mink_pos_errs_max.append(_mink_max_pos_error(m_res))
-        mink_coplan.append(m_res.coplanarity_err_m * 1000)
+        mink_coplan.append(_mink_coplan_err(m_res, c_res, fingers))
         mink_iters.append(m_res.n_iters)
         mink_times.append(m_res.wall_time_s * 1000)
         mink_conv.append(m_res.converged)
@@ -261,7 +294,7 @@ def sweep_cylinder(
 
         mink_pos_errs_mean.append(_mink_mean_pos_error(m_res))
         mink_pos_errs_max.append(_mink_max_pos_error(m_res))
-        mink_coplan.append(m_res.coplanarity_err_m * 1000)
+        mink_coplan.append(_mink_coplan_err(m_res, c_res, NON_THUMB_FINGERS))
         mink_iters.append(m_res.n_iters)
         mink_times.append(m_res.wall_time_s * 1000)
         mink_conv.append(m_res.converged)
@@ -365,9 +398,10 @@ def _plot_mode(
 
     # --- Coplanarity error ---
     if has_coplan and "custom_coplan" in data:
-        ax_cop.axhline(0, color=_C_CUSTOM, lw=1.5, label="Custom")
-        ax_cop.plot(w, data["mink_coplan"], color=_C_MINK, lw=1.5, label="Mink IK")
-        ax_cop.set_title("Fingertip coplanarity error")
+        ax_cop.plot(w, data["custom_coplan"], color=_C_CUSTOM, lw=1.5, label="Custom")
+        ax_cop.plot(w, data["mink_coplan"],   color=_C_MINK,   lw=1.5, label="Mink IK")
+        ax_cop.set_title("World-frame Z spread (non-thumb tips)")
+        ax_cop.set_ylabel("Mean |ΔZ| [mm]")
     else:
         # Line grasp: only 2 tips, coplanarity not meaningful — show timing instead
         ax_cop.semilogy(w, data["custom_times"], color=_C_CUSTOM, lw=1.5,
@@ -524,22 +558,28 @@ def run_comparison(n_widths: int = 25, show: bool = True) -> None:
     summary_lines = [
         "Summary (mean over width range)",
         "",
-        f"{'Mode':<16} {'Conv%':>6} {'Iters':>6} {'TipErr[mm]':>10} {'CoplanErr[mm]':>14}",
-        "-" * 54,
+        f"{'Mode':<16} {'Conv%':>6} {'Iters':>6} {'TipErr[mm]':>10} {'ZSpread[mm]':>12}",
+        "-" * 56,
         f"{'Line (2f)':<16} {_pct(line_data['mink_conv']):>6} "
         f"{_mean(line_data['mink_iters']):>6} "
-        f"{_mean(line_data['mink_pos_errs_mean']):>10} {'n/a':>14}",
-        f"{'Plane (4f)':<16} {_pct(plane_data['mink_conv']):>6} "
+        f"{_mean(line_data['mink_pos_errs_mean']):>10} {'n/a':>12}",
+        f"{'Plane (4f, mink)':<16} {_pct(plane_data['mink_conv']):>6} "
         f"{_mean(plane_data['mink_iters']):>6} "
         f"{_mean(plane_data['mink_pos_errs_mean']):>10} "
-        f"{_mean(plane_data['mink_coplan']):>14}",
-        f"{'Cylinder':<16} {_pct(cyl_data['mink_conv']):>6} "
+        f"{_mean(plane_data['mink_coplan']):>12}",
+        f"{'Plane (4f, ours)':<16} {'—':>6} {'—':>6} {'0.0':>10} "
+        f"{_mean(plane_data['custom_coplan']):>12}",
+        f"{'Cylinder, mink':<16} {_pct(cyl_data['mink_conv']):>6} "
         f"{_mean(cyl_data['mink_iters']):>6} "
         f"{_mean(cyl_data['mink_pos_errs_mean']):>10} "
-        f"{_mean(cyl_data['mink_coplan']):>14}",
+        f"{_mean(cyl_data['mink_coplan']):>12}",
+        f"{'Cylinder, ours':<16} {'—':>6} {'—':>6} {'0.0':>10} "
+        f"{_mean(cyl_data['custom_coplan']):>12}",
         "",
-        "Custom planner: 0 mm tip error (by design)",
-        "Custom planner: 0 mm coplanarity error (by design)",
+        "ZSpread = mean|ΔZ| in world frame (non-thumb tips).",
+        "Custom tip error = 0 by construction (brentq solver).",
+        "Custom ZSpread > 0 due to per-finger length differences",
+        "after tilt rotation (irreducible hardware constraint).",
         f"Custom mean time: {line_data['custom_times'].mean():.2f} ms",
         f"Mink line mean time: {line_data['mink_times'].mean():.1f} ms",
         f"Mink plane mean time: {plane_data['mink_times'].mean():.1f} ms",
@@ -559,17 +599,21 @@ def run_comparison(n_widths: int = 25, show: bool = True) -> None:
         " + Analytical: zero tip error by design\n"
         " + Guaranteed smooth ctrl trajectory\n"
         " + Sub-millisecond per grasp\n"
-        " - Fixed proportional parameterization\n"
-        " - Sequential coplanarity correction\n\n"
+        " + Proportional parameterization\n"
+        " ~ ZSpread non-zero due to finger-length\n"
+        "   differences after tilt (hardware limit)\n\n"
         "Mink IK (MinkGraspPlanner):\n"
         " + No FK table pre-computation needed\n"
-        " + Joint coupling enforced automatically\n"
-        "   via EqualityConstraintTask\n"
+        " + Joint coupling via EqualityConstraintTask\n"
         " + Simultaneous multi-finger optimisation\n"
-        " + Flexible: any cost structure\n"
+        " + Flexible cost structure\n"
         " - Iterative (slower at runtime)\n"
         " - May not converge at all widths\n"
-        " - Solution smoothness depends on init",
+        " - Smoothness depends on initialization\n\n"
+        "Coplanarity metric: mean|Z_i - Z_mean|\n"
+        "of non-thumb tips in world frame (gz=0).\n"
+        "Both planners show residual spread due to\n"
+        "the tilt × finger-length interaction.",
         transform=axs[3][4].transAxes,
         fontsize=8,
         va="top", ha="left",
