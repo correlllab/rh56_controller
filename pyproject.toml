@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rh56_controller"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy",
+    "matplotlib",
+    "mujoco>=3.3.6",
+    "pyserial",
+    "mink",
+]
+
+[tool.uv.sources]
+mink = { path = "mink" }

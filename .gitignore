@@ -1,1 +1,8 @@
 .vscode
+.archive
+__pycache__/
+*.pyc
+*.pyo
+tests/logs/
+tools/sysid.ipynb
+tools/sysid_readme.md
