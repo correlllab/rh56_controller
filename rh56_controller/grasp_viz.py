@@ -4,13 +4,18 @@ grasp_viz.py — Interactive antipodal grasp geometry visualizer for Inspire RH5
 Usage:
     python -m rh56_controller.grasp_viz [--xml path/to/inspire_right.xml] [--rebuild]
     python -m rh56_controller.grasp_viz --port /dev/ttyUSB0       # sim2real
-    python -m rh56_controller.grasp_viz --robot                   # UR5+hand viewer
+    python -m rh56_controller.grasp_viz --robot                   # UR5+hand viewer (IK)
     python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0
+
+    Run via uv to get mink IK support:
+        uv run python -m rh56_controller.grasp_viz --robot
 
 Controls:
     Radio buttons : select grasp mode (2-finger line / 3/4/5-finger plane / cylinder)
     Width slider  : target object width or diameter (mm)
     Z slider      : world-frame height of the grasp midplane (mm)
+    X slider      : grasp X position in UR5 world frame (mm) [robot mode only]
+    Y slider      : grasp Y position in UR5 world frame (mm) [robot mode only]
     MuJoCo button : open floating-hand viewer synced to current settings
     Send to Real  : checkbox — mirrors computed grasp pose to real hand
 
@@ -18,6 +23,13 @@ World frame convention (matplotlib):
     +Z up  (world gravity down)
     Hand hangs fingers-down above the grasp plane.
     The hand base origin appears above the fingertips.
+
+Robot mode (--robot):
+    Uses mink differential IK to drive a simulated UR5e arm.
+    X/Y sliders position the grasp centroid in the UR5 world XY plane.
+    UR5e workspace radius ≈ 850 mm; avoid XY near origin (base cylinder).
+    The wrist_3_link TCP transform is stored in _wrist3_pos/_wrist3_mat
+    for future real-robot deployment.
 """
 
 import argparse
@@ -47,18 +59,28 @@ _HERE = pathlib.Path(__file__).parent.parent
 _GRASP_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
 _ROBOT_SCENE  = str(_HERE / "h1_mujoco" / "inspire" / "ur5_inspire.xml")
 
-# Finger actuator ctrl maxima (rad) — matches inspire_right.xml
-# Order: [pinky, ring, middle, index, thumb_proximal, thumb_yaw]
-_SIM_CTRL_MAX = np.array([1.57, 1.57, 1.57, 1.57, 0.60, 1.308])
+# Actuator names in DOF order (same as real hand angle_set / angle_read)
+_ACTUATOR_ORDER = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
 
 # eeff site local position in hand base body frame (from inspire_right_ur5.xml)
 _EEFF_LOCAL = np.array([0.070, 0.016, 0.155])
 
-# PD controller gains for eeff Cartesian control
-_KP_POS  = 5.0   # → ctrl ≈ Kp * err, clamped to [-1,1], force = 10 * ctrl
-_KD_POS  = 0.8
-_KP_ROT  = 3.0   # → ctrl ≈ Kp * rot_err, clamped to [-1,1], torque = 1 * ctrl
-_KD_ROT  = 0.4
+# TCP transform: wrist_3_link frame → hand base body
+#   from ur5_inspire.xml: <body name="gripper_attachment" pos="0 0.156 0"
+#                                quat="-0.707108 0.707108 0 0">
+# Rotation: Rx(-90°)  Translation: [0, 0.156, 0] in wrist_3_link frame
+_WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])       # metres
+_WRIST3_TO_HAND_QUAT = np.array([-0.707108, 0.707108, 0.0, 0.0])  # [w,x,y,z]
+
+# Default grasp XY position in robot mode (UR5 world frame, metres)
+_DEFAULT_ROBOT_X = 0.40   # 400 mm forward from base
+_DEFAULT_ROBOT_Y = 0.00   # centred laterally
+
+# mink IK settings for robot viewer
+_IK_DT        = 0.05   # IK integration step [s]
+_IK_MAX_ITERS = 5      # IK iterations per visual frame
+_IK_POS_THR   = 5e-3   # position convergence threshold [m]
+_IK_ORI_THR   = 0.05   # orientation convergence threshold [rad]
 
 # Colour palette per finger
 FINGER_COLORS = {
@@ -133,6 +155,14 @@ class GraspViz:
         # Robot mode flag
         self._robot_mode = robot_mode
 
+        # Grasp XY position in robot world frame (metres); Z is _grasp_z
+        self._grasp_x = _DEFAULT_ROBOT_X if robot_mode else 0.0
+        self._grasp_y = _DEFAULT_ROBOT_Y if robot_mode else 0.0
+
+        # Wrist-3 TCP pose (updated by robot viewer thread for future real deployment)
+        self._wrist3_pos: Optional[np.ndarray] = None
+        self._wrist3_mat: Optional[np.ndarray] = None
+
         # Real hand connection
         self._hand = None
         self._send_real = send_real
@@ -181,9 +211,12 @@ class GraspViz:
             r.ctrl_values.get("thumb_proximal",  0.0),
             r.ctrl_values.get("thumb_yaw",       0.0),
         ])
-        # Inverted convention: real = 1000 - round(ctrl/ctrl_max * 1000)
+        # Inverted convention: real = 1000 - round((ctrl-min)/(max-min) * 1000)
+        ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+        ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])
+        rng = ctrl_max - ctrl_min
         real_cmd = np.round(
-            (1.0 - np.clip(finger_ctrl / _SIM_CTRL_MAX, 0.0, 1.0)) * 1000
+            (1.0 - np.clip((finger_ctrl - ctrl_min) / np.where(rng > 0, rng, 1.0), 0.0, 1.0)) * 1000
         ).astype(int)
         try:
             self._hand.angle_set(real_cmd.tolist())
@@ -202,6 +235,9 @@ class GraspViz:
 
         # World-frame position of the hand base, accounting for tilt.
         wbase = r.world_base(gz)
+        if self._robot_mode:
+            # Translate grasp to configured XY position in UR5 world frame
+            wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
 
         # Build 12-element ctrl vector:
         # [pos_x, pos_y, pos_z, rot_x, rot_y, rot_z,
@@ -287,24 +323,21 @@ class GraspViz:
         data.qpos[jm["rot_y"]] = rot_y
         data.qpos[jm["rot_z"]] = rot_z
 
-        # Non-thumb fingers (1:1 coupling except index)
-        data.qpos[jm["pinky"]]       = pinky
-        data.qpos[jm["pinky_inter"]] = pinky
-        data.qpos[jm["ring"]]        = ring
-        data.qpos[jm["ring_inter"]]  = ring
-        data.qpos[jm["middle"]]      = middle
-        data.qpos[jm["middle_inter"]] = middle
-        data.qpos[jm["index"]]       = index
-        # polycoef="0.15 1 0 0 0": index_intermediate = 0.15 + 1.0 * index_proximal
-        data.qpos[jm["index_inter"]] = index + 0.15
+        # Non-thumb fingers — coupling from inspire_grasp_scene.xml <equality> polycoefs
+        data.qpos[jm["pinky"]]        = pinky
+        data.qpos[jm["pinky_inter"]]  = -0.15 + 1.1169 * pinky   # polycoef="-0.15 1.1169"
+        data.qpos[jm["ring"]]         = ring
+        data.qpos[jm["ring_inter"]]   = -0.15 + 1.1169 * ring
+        data.qpos[jm["middle"]]       = middle
+        data.qpos[jm["middle_inter"]] = -0.15 + 1.1169 * middle
+        data.qpos[jm["index"]]        = index
+        data.qpos[jm["index_inter"]]  = -0.05 + 1.1169 * index   # polycoef="-0.05 1.1169"
 
-        # Thumb
-        data.qpos[jm["thumb_yaw"]]   = yaw
-        data.qpos[jm["thumb_pitch"]] = pitch
-        # polycoef="0.15 1.25 0 0": thumb_intermediate = 0.15 + 1.25 * pitch
-        data.qpos[jm["thumb_inter"]] = 0.15 + 1.25 * pitch
-        # polycoef="0.15 0.75 0 0 0": thumb_distal = 0.15 + 0.75 * pitch
-        data.qpos[jm["thumb_distal"]] = 0.15 + 0.75 * pitch
+        # Thumb — coupling from inspire_grasp_scene.xml <equality> polycoefs
+        data.qpos[jm["thumb_yaw"]]    = yaw
+        data.qpos[jm["thumb_pitch"]]  = pitch
+        data.qpos[jm["thumb_inter"]]  = 0.15 + 1.33 * pitch      # polycoef="0.15 1.33"
+        data.qpos[jm["thumb_distal"]] = 0.15 + 0.66 * pitch      # polycoef="0.15 0.66"
 
         mujoco.mj_kinematics(model, data)
 
@@ -337,22 +370,83 @@ class GraspViz:
             print(f"[GraspViz] Viewer error: {e}")
 
     # ------------------------------------------------------------------
-    # Robot viewer (ur5_inspire.xml — PD eeff Cartesian control)
+    # Robot viewer (ur5_inspire.xml — mink differential IK)
     # ------------------------------------------------------------------
     def _robot_viewer_loop(self):
-        """Background thread: UR5+hand viewer with PD eeff control."""
+        """Background thread: UR5+hand viewer driven by mink differential IK.
+
+        mink solves differential IK each visual frame to track the target eeff
+        SE3 pose derived from the grasp geometry.  Joint position servos in the
+        MuJoCo model then track the IK-computed joint angles.
+
+        Only arm joints [shoulder_pan … wrist_3] are moved by IK.  Finger joints
+        are set directly from the grasp geometry ctrl values.
+        """
+        try:
+            import mink  # available via uv environment (pyproject.toml)
+        except ImportError:
+            print("[GraspViz] mink not found — run with 'uv run python -m rh56_controller.grasp_viz --robot'")
+            return
         try:
             model = mujoco.MjModel.from_xml_path(_ROBOT_SCENE)
             data  = mujoco.MjData(model)
             mujoco.mj_resetData(model, data)
 
+            # --- mink Configuration (IK state, separate from sim data) ---
+            configuration = mink.Configuration(model)
+
             eeff_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "eeff")
             if eeff_id < 0:
                 print("[GraspViz] WARNING: 'eeff' site not found in robot scene.")
 
-            # Sim timestep and steps per visual frame (~30 Hz visual)
-            dt        = model.opt.timestep
-            n_steps   = max(1, round(0.033 / dt))  # ~33 ms of sim per frame
+            # IK tasks
+            eeff_task = mink.FrameTask(
+                frame_name="eeff",
+                frame_type="site",
+                position_cost=1.0,
+                orientation_cost=0.5,
+                lm_damping=1e-6,
+            )
+            posture_task = mink.PostureTask(model, cost=1e-4)
+            tasks = [eeff_task, posture_task]
+
+            # Arm actuator / joint names
+            _ARM_JNT = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+                        "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
+            _ARM_ACT = ["shoulder_pan", "shoulder_lift", "elbow",
+                        "wrist_1", "wrist_2", "wrist_3"]
+            _FNG_ACT = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
+
+            arm_jnt_qposadr = [model.jnt_qposadr[model.joint(n).id] for n in _ARM_JNT]
+            arm_ctrl_ids    = [model.actuator(n).id for n in _ARM_ACT]
+            finger_ctrl_ids = [model.actuator(n).id for n in _FNG_ACT]
+
+            # IK limits
+            limits = [
+                mink.ConfigurationLimit(model),
+                mink.VelocityLimit(model, {n: np.pi for n in _ARM_JNT}),
+            ]
+
+            # Initialise arm to a sensible home pose (elbow-up reaching forward)
+            data.qpos[model.jnt_qposadr[model.joint("shoulder_lift_joint").id]] = -np.pi / 2
+            data.qpos[model.jnt_qposadr[model.joint("elbow_joint").id]]         =  np.pi / 2
+            data.qpos[model.jnt_qposadr[model.joint("wrist_1_joint").id]]       = -np.pi / 2
+            mujoco.mj_forward(model, data)
+
+            # Set arm ctrl to match initial qpos (no startup jerk)
+            for ctrl_id, qadr in zip(arm_ctrl_ids, arm_jnt_qposadr):
+                data.ctrl[ctrl_id] = data.qpos[qadr]
+
+            # Sync mink configuration from simulation state
+            configuration.update(data.qpos)
+            posture_task.set_target_from_configuration(configuration)
+
+            # Wrist-3 force/torque site for TCP tracking (future real-robot use)
+            wrist3_site_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_SITE, "wrist_ft")
+
+            dt      = model.opt.timestep
+            n_steps = max(1, round(0.033 / dt))  # physics steps per visual frame
 
             with mujoco.viewer.launch_passive(model, data) as v:
                 while v.is_running() and not self._viewer_stop.is_set():
@@ -363,47 +457,50 @@ class GraspViz:
                         gz     = self._grasp_z
 
                     if ctrl is not None and eeff_id >= 0:
-                        # --- Finger position targets (direct) ---
-                        data.ctrl[6:12] = ctrl[6:12]
-
-                        # --- Compute target eeff world pose from hand base ctrl ---
-                        # ctrl[3:6] = [rot_x, rot_y, rot_z] where rot_x=π, rot_y=-tilt
-                        # MuJoCo applies joint rotations as: R = Rz @ Ry @ Rx
-                        # (see grasp_viz._push_viewer_ctrl comment)
-                        R_hand = _Rx(ctrl[3]) @ _Ry(ctrl[4])
+                        # --- Target SE3 for eeff site ---
+                        # ctrl[0:3] = hand base world pos (already includes XY offset)
+                        # ctrl[3:6] = [rot_x=π, rot_y=-tilt, rot_z=0]
+                        R_hand     = _Rx(ctrl[3]) @ _Ry(ctrl[4])
                         target_pos = ctrl[0:3] + R_hand @ _EEFF_LOCAL
-                        target_mat = R_hand   # eeff has same orientation as base
+                        T_target   = np.eye(4)
+                        T_target[:3, :3] = R_hand
+                        T_target[:3,  3] = target_pos
+                        eeff_task.set_target(mink.SE3.from_matrix(T_target))
 
-                        # --- PD translation + rotation control ---
-                        cur_pos = data.site_xpos[eeff_id].copy()
-                        # mj_objectVelocity: vel[:3]=angular, vel[3:]=linear (world frame)
-                        vel6 = np.zeros(6)
-                        mujoco.mj_objectVelocity(
-                            model, data, mujoco.mjtObj.mjOBJ_SITE, eeff_id, vel6, 0)
-                        cur_velp = vel6[3:]   # linear velocity
-                        cur_velr = vel6[:3]   # angular velocity
-                        pos_err = target_pos - cur_pos
-                        data.ctrl[0:3] = np.clip(
-                            _KP_POS * pos_err - _KD_POS * cur_velp, -1.0, 1.0)
+                        # --- Differential IK iterations ---
+                        for _ in range(_IK_MAX_ITERS):
+                            try:
+                                vel = mink.solve_ik(
+                                    configuration, tasks, _IK_DT, "daqp",
+                                    limits=limits)
+                            except mink.NoSolutionFound:
+                                break
+                            configuration.integrate_inplace(vel, _IK_DT)
+                            err = eeff_task.compute_error(configuration)
+                            if (np.linalg.norm(err[:3]) < _IK_POS_THR and
+                                    np.linalg.norm(err[3:]) < _IK_ORI_THR):
+                                break
 
-                        # --- Rotation error (axis-angle) ---
-                        cur_mat  = data.site_xmat[eeff_id].reshape(3, 3).copy()
-                        R_err    = target_mat @ cur_mat.T
-                        trace_v  = float(np.clip((np.trace(R_err) - 1.0) / 2.0,
-                                                 -1.0, 1.0))
-                        angle    = np.arccos(trace_v)
-                        if abs(angle) > 1e-6:
-                            skew = (R_err - R_err.T) / (2.0 * np.sin(angle))
-                            axis = np.array([skew[2, 1], skew[0, 2], skew[1, 0]])
-                            rot_err_vec = axis * angle
-                        else:
-                            rot_err_vec = np.zeros(3)
-                        data.ctrl[3:6] = np.clip(
-                            _KP_ROT * rot_err_vec - _KD_ROT * cur_velr, -1.0, 1.0)
+                        # --- Apply IK arm joint angles as position servo targets ---
+                        for ctrl_id, qadr in zip(arm_ctrl_ids, arm_jnt_qposadr):
+                            data.ctrl[ctrl_id] = configuration.q[qadr]
 
-                    # Step simulation
+                        # --- Finger position targets (direct from grasp geometry) ---
+                        for ctrl_id, val in zip(finger_ctrl_ids, ctrl[6:12]):
+                            data.ctrl[ctrl_id] = val
+
+                    # Step physics simulation
                     for _ in range(n_steps):
                         mujoco.mj_step(model, data)
+
+                    # Sync mink IK state to actual simulation qpos
+                    configuration.update(data.qpos)
+
+                    # Store wrist-3 TCP pose for future real-robot deployment
+                    if wrist3_site_id >= 0:
+                        with self._viewer_lock:
+                            self._wrist3_pos = data.site_xpos[wrist3_site_id].copy()
+                            self._wrist3_mat = data.site_xmat[wrist3_site_id].reshape(3, 3).copy()
 
                     self._add_viewer_geoms(v, result, gz)
                     v.sync()
@@ -525,6 +622,8 @@ class GraspViz:
     # ------------------------------------------------------------------
     def run(self):
         """Build and show the interactive matplotlib figure."""
+        from matplotlib.widgets import TextBox  # local import to avoid polluting top-level
+
         fig = plt.figure(figsize=(14, 8))
         fig.suptitle("Inspire RH56 — Antipodal Grasp Geometry Planner", fontsize=12)
 
@@ -536,36 +635,94 @@ class GraspViz:
 
         self._ax3d = ax3d
 
-        # ---- Radio buttons ----
-        ax_radio = fig.add_axes([0.65, 0.60, 0.16, 0.30])
-        self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
-        self._radio.on_clicked(self._on_mode)
+        if self._robot_mode:
+            # ---- Robot mode: compact layout with 4 sliders + textboxes ----
+            # Slider axes: [left, bottom, width, height]
+            # TextBox axes: immediately right of each slider
+            _SL = 0.65   # left edge of slider
+            _SW = 0.24   # slider width
+            _TL = 0.90   # textbox left edge
+            _TW = 0.07   # textbox width
+            _SH = 0.025  # slider height
 
-        # ---- Width slider ----
-        ax_wmin_txt = fig.add_axes([0.65, 0.52, 0.16, 0.04])
-        ax_wmin_txt.axis("off")
-        ax_wmin_txt.text(0.0, 0.5, "Width / Diameter (mm):", fontsize=9)
-        ax_wslide = fig.add_axes([0.65, 0.47, 0.28, 0.03])
-        wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
-        self._slider_w = Slider(
-            ax_wslide, "", wmin_mm, wmax_mm,
-            valinit=self._width_m * 1000, valstep=1.0,
-        )
-        self._slider_w.on_changed(self._on_width)
+            # ---- Radio buttons ----
+            ax_radio = fig.add_axes([0.65, 0.68, 0.14, 0.23])
+            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
+            self._radio.on_clicked(self._on_mode)
 
-        # ---- Z slider ----
-        ax_ztxt = fig.add_axes([0.65, 0.37, 0.16, 0.04])
-        ax_ztxt.axis("off")
-        ax_ztxt.text(0.0, 0.5, "Grasp plane Z (mm):", fontsize=9)
-        ax_zslide = fig.add_axes([0.65, 0.32, 0.28, 0.03])
-        self._slider_z = Slider(
-            ax_zslide, "", -200.0, 200.0,
-            valinit=self._grasp_z * 1000, valstep=5.0,
-        )
-        self._slider_z.on_changed(self._on_z)
+            def _make_slider_row(label, y_lbl, y_sl,
+                                 vmin, vmax, vinit, vstep):
+                ax_lbl = fig.add_axes([_SL, y_lbl, 0.30, 0.03])
+                ax_lbl.axis("off")
+                ax_lbl.text(0.0, 0.5, label, fontsize=9)
+                ax_sl  = fig.add_axes([_SL, y_sl,  _SW,  _SH])
+                sl     = Slider(ax_sl, "", vmin, vmax,
+                                valinit=vinit, valstep=vstep)
+                ax_tb  = fig.add_axes([_TL, y_sl, _TW, _SH])
+                tb     = TextBox(ax_tb, "", initial=f"{vinit:.0f}")
+                return sl, tb
+
+            wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
+            self._slider_w, self._tb_w = _make_slider_row(
+                "Width / Diameter (mm):", 0.64, 0.60,
+                wmin_mm, wmax_mm, self._width_m * 1000, 1.0)
+            self._slider_z, self._tb_z = _make_slider_row(
+                "Grasp Z (mm):", 0.54, 0.50,
+                -200.0, 200.0, self._grasp_z * 1000, 5.0)
+            self._slider_x, self._tb_x = _make_slider_row(
+                "Grasp X (mm, UR5 world):", 0.44, 0.40,
+                -850.0, 850.0, self._grasp_x * 1000, 5.0)
+            self._slider_y, self._tb_y = _make_slider_row(
+                "Grasp Y (mm, UR5 world):", 0.34, 0.30,
+                -850.0, 850.0, self._grasp_y * 1000, 5.0)
+
+            # Wire slider ↔ textbox for all four sliders
+            def _wire(slider, tb, on_val_fn):
+                slider.on_changed(lambda v: (on_val_fn(v),
+                                             tb.set_val(f"{v:.0f}")))
+                tb.on_submit(lambda s: slider.set_val(
+                    float(s) if s.strip() else slider.val))
+
+            _wire(self._slider_w, self._tb_w, self._on_width)
+            _wire(self._slider_z, self._tb_z, self._on_z)
+            _wire(self._slider_x, self._tb_x, self._on_x)
+            _wire(self._slider_y, self._tb_y, self._on_y)
+
+            info_bottom = 0.12
+            btn_y       = 0.03
+
+        else:
+            # ---- Standard mode: original layout ----
+            ax_radio = fig.add_axes([0.65, 0.60, 0.16, 0.30])
+            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
+            self._radio.on_clicked(self._on_mode)
+
+            ax_wmin_txt = fig.add_axes([0.65, 0.52, 0.16, 0.04])
+            ax_wmin_txt.axis("off")
+            ax_wmin_txt.text(0.0, 0.5, "Width / Diameter (mm):", fontsize=9)
+            ax_wslide = fig.add_axes([0.65, 0.47, 0.28, 0.03])
+            wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
+            self._slider_w = Slider(
+                ax_wslide, "", wmin_mm, wmax_mm,
+                valinit=self._width_m * 1000, valstep=1.0,
+            )
+            self._slider_w.on_changed(self._on_width)
+
+            ax_ztxt = fig.add_axes([0.65, 0.37, 0.16, 0.04])
+            ax_ztxt.axis("off")
+            ax_ztxt.text(0.0, 0.5, "Grasp plane Z (mm):", fontsize=9)
+            ax_zslide = fig.add_axes([0.65, 0.32, 0.28, 0.03])
+            self._slider_z = Slider(
+                ax_zslide, "", -200.0, 200.0,
+                valinit=self._grasp_z * 1000, valstep=5.0,
+            )
+            self._slider_z.on_changed(self._on_z)
+
+            info_bottom = 0.14
+            btn_y       = 0.04
 
         # ---- Info text ----
-        self._ax_info = fig.add_axes([0.65, 0.14, 0.30, 0.16])
+        self._ax_info = fig.add_axes([0.65, info_bottom, 0.30, 0.16])
         self._ax_info.axis("off")
         self._info_text = self._ax_info.text(
             0.0, 1.0, "", fontsize=8,
@@ -574,13 +731,13 @@ class GraspViz:
 
         # ---- MuJoCo viewer button ----
         viewer_label = "Open Robot Viewer" if self._robot_mode else "Open MuJoCo Viewer"
-        ax_btn = fig.add_axes([0.72, 0.04, 0.20, 0.05])
+        ax_btn = fig.add_axes([0.72, btn_y, 0.20, 0.05])
         self._btn_mujoco = Button(ax_btn, viewer_label)
         self._btn_mujoco.on_clicked(self._on_open_viewer)
 
         # ---- Send-to-real checkbox (only if hand is connected) ----
         if self._hand is not None:
-            ax_real = fig.add_axes([0.65, 0.04, 0.06, 0.06])
+            ax_real = fig.add_axes([0.65, btn_y, 0.06, 0.06])
             self._check_real = CheckButtons(
                 ax_real, ["Send\nto Real"], [self._send_real])
             self._check_real.on_clicked(self._on_send_real)
@@ -613,6 +770,18 @@ class GraspViz:
 
     def _on_z(self, val: float):
         self._grasp_z = float(val) / 1000.0
+        self._push_viewer_ctrl()
+        self._update_plot()
+
+    def _on_x(self, val: float):
+        """Robot mode: set grasp X position in UR5 world frame."""
+        self._grasp_x = float(val) / 1000.0
+        self._push_viewer_ctrl()
+        self._update_plot()
+
+    def _on_y(self, val: float):
+        """Robot mode: set grasp Y position in UR5 world frame."""
+        self._grasp_y = float(val) / 1000.0
         self._push_viewer_ctrl()
         self._update_plot()
 
@@ -682,7 +851,7 @@ class GraspViz:
         lines.append(f"Tilt Y: {r.tilt_deg:.1f}°")
         lines.append(f"Base Z: {wbase[2]*1000:.1f} mm")
         if self._robot_mode:
-            lines.append("[ROBOT MODE]")
+            lines.append(f"[ROBOT] X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} mm")
         if self._hand is not None:
             status = "ON" if self._send_real else "off"
             lines.append(f"Real hand: {status}")

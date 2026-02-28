@@ -88,9 +88,9 @@ class SimAnalyzer:
         "pinky":  "pinky_tip_torque",
     }
 
-    # Actuator ctrlrange maxima (rad) — same DOF order as real hand angle_set()
+    # Actuator names in the same DOF order as real hand angle_set()
     # [pinky, ring, middle, index, thumb_proximal, thumb_yaw]
-    SIM_CTRL_RANGES = [1.57, 1.57, 1.57, 1.57, 0.60, 1.308]
+    _FINGER_ACTUATOR_NAMES = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
 
     # Default XML path relative to this file's grandparent directory
     _DEFAULT_XML_RELPATH = "h1_mujoco/inspire/inspire_scene.xml"
@@ -110,6 +110,9 @@ class SimAnalyzer:
         self.model = mujoco.MjModel.from_xml_path(self.xml_path)
         self.data = mujoco.MjData(self.model)
 
+        # Extract ctrl ranges from model (source of truth)
+        self._init_ctrl_ranges()
+
         # Pre-compute IDs for speed
         self.box_geom_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "box")
@@ -126,6 +129,19 @@ class SimAnalyzer:
         print(f"[SimAnalyzer] Loaded: {self.xml_path}")
         print(f"[SimAnalyzer] friction μ={self.mu:.3f}, cone edges={friction_cone_edges}")
         print(f"[SimAnalyzer] Tip sites: {self.tip_site_ids}")
+
+    # ── Ctrl range initialisation ─────────────────────────────────────────────
+
+    def _init_ctrl_ranges(self):
+        """Read per-actuator ctrl [min, max] from the loaded model."""
+        self.SIM_CTRL_MIN = []
+        self.SIM_CTRL_RANGES = []   # kept as attribute name for compatibility
+        for aname in self._FINGER_ACTUATOR_NAMES:
+            aid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, aname)
+            if aid < 0:
+                raise ValueError(f"[SimAnalyzer] Actuator '{aname}' not found in model")
+            self.SIM_CTRL_MIN.append(float(self.model.actuator_ctrlrange[aid, 0]))
+            self.SIM_CTRL_RANGES.append(float(self.model.actuator_ctrlrange[aid, 1]))
 
     # ── ID caching ───────────────────────────────────────────────────────────
 
@@ -205,18 +221,15 @@ class SimAnalyzer:
         Actuator order matches real hand angle_set() order:
           [pinky, ring, middle, index, thumb_bend, thumb_yaw]
 
-        Inversion: MuJoCo ctrl=0 means joint at 0 rad (open/extended for flexors,
-        spread-out for thumb yaw), but the real hand uses the opposite convention —
-        0 = closed/curled for flexors, 0 = yawed-in for thumb yaw.
-        So the mapping is inverted for all DOFs:
-          real = 1000 - round(ctrl / ctrl_max * 1000)
+        Inversion: ctrl=ctrl_min → real=1000 (open/abducted)
+                   ctrl=ctrl_max → real=0    (closed/adducted)
+          real = 1000 - round((ctrl - ctrl_min) / (ctrl_max - ctrl_min) * 1000)
         """
         ctrl = self.data.ctrl
         cmd = [
-            1000 - int(np.clip(c / r, 0.0, 1.0) * 1000)
-            for c, r in zip(ctrl, self.SIM_CTRL_RANGES)
+            1000 - int(np.clip((c - mn) / (mx - mn), 0.0, 1.0) * 1000)
+            for c, mn, mx in zip(ctrl, self.SIM_CTRL_MIN, self.SIM_CTRL_RANGES)
         ]
-        # print(cmd)
         return cmd
 
     # ── Contact detection ─────────────────────────────────────────────────────
