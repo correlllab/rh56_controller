@@ -37,7 +37,7 @@ IDX_INDEX = 3  # Index finger  (force_act/angle_read index) :contentReference[oa
 IDX_THUMB = 4  # Thumb bend    (force_act/angle_read index) :contentReference[oaicite:4]{index=4}
 
 # Start (open) pose (same style as your peginhole script) :contentReference[oaicite:5]{index=5}
-OPEN_ANGLES = [1000, 1000, 1000, 1000, 1000, 0]
+OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
 
 # Target angles (TBD)
 TARGET_INDEX_ANGLE = 650  # TBD: 0-1000
@@ -48,8 +48,8 @@ FAST_SPEED = 1000
 SLOW_SPEED = 25
 
 # Force thresholds in raw unit (g), 0-1000. force_set unit is gram :contentReference[oaicite:6]{index=6}
-INDEX_FORCE_G = 300  # TBD
-THUMB_FORCE_G = 300  # TBD
+INDEX_FORCE_G = 500  # TBD
+THUMB_FORCE_G = 500  # TBD
 
 # Logging rate (seconds)
 LOG_DT = 0.01
@@ -177,19 +177,13 @@ def main():
         # 0) Start open
         apply_speed_all(hand, FAST_SPEED)
         apply_angles(hand, OPEN_ANGLES)
-        time.sleep(0.3)
+        time.sleep(1)
 
         # 1) Fast move to target
         print(f"Fast move to target angles (speed={FAST_SPEED}) ...")
         apply_speed_all(hand, FAST_SPEED)
-        apply_angles(hand, target_angles)
-        _ = wait_until_angles(
-            hand,
-            target_angles,
-            [IDX_INDEX, IDX_THUMB],
-            tol=ANGLE_TOL,
-            timeout_s=ANGLE_WAIT_TIMEOUT_S,
-        )
+        apply_angles(hand, [1000, 1000, 1000, 800, 650, 0])
+        time.sleep(0.5)
 
         # 2) Slow + force threshold, then re-command same target angles
         print(
@@ -201,7 +195,7 @@ def main():
         except Exception as e:
             print(f"Warning: force_set failed: {e}")
 
-        apply_angles(hand, target_angles)
+        apply_angles(hand, [1000, 1000, 1000, 0, 650, 0])
 
         # 3) Log until Enter
         print("Logging started...")
