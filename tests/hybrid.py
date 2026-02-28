@@ -4,13 +4,11 @@
 """
 Two-finger simple controller for RH56 (Index + Thumb bend)
 
-Behavior:
-1) Start from open (index=1000, thumb=1000)
-2) Fast move to target angles with speed=1000
-3) Set speed=25, set force thresholds (user-defined), re-send the same target angles
-4) Log: timestamp_epoch, index/thumb angle, index/thumb force (raw g), plus converted N
-5) Press Enter: open hand, stop logging, save CSV
-6) Ctrl+C or any exception: open hand, stop logging, DO NOT save CSV
+Changes vs your hybrid.py:
+- Start logging immediately after connecting (before any motion commands)
+- Press Enter: open hand first, then stop logging, then save CSV
+- Ctrl+C or exceptions: open hand, stop logging, DO NOT save CSV
+- Do NOT change your existing angle commands in main()
 """
 
 import sys
@@ -19,7 +17,7 @@ import csv
 import argparse
 import threading
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 # --- Make repo import work like rh56_peginhole.py ---
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -32,38 +30,29 @@ for path in (PROJECT_ROOT, SCRIPT_DIR):
 from rh56_controller.rh56_hand import RH56Hand
 
 # ---------------- USER SETTINGS (edit these) ----------------
-# Two fingers we control
-IDX_INDEX = 3  # Index finger  (force_act/angle_read index) :contentReference[oaicite:3]{index=3}
-IDX_THUMB = 4  # Thumb bend    (force_act/angle_read index) :contentReference[oaicite:4]{index=4}
+IDX_INDEX = 3
+IDX_THUMB = 4
 
-# Start (open) pose (same style as your peginhole script) :contentReference[oaicite:5]{index=5}
 OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
 
-# Target angles (TBD)
-TARGET_INDEX_ANGLE = 650  # TBD: 0-1000
-TARGET_THUMB_ANGLE = 650  # TBD: 0-1000
+TARGET_INDEX_ANGLE = 650
+TARGET_THUMB_ANGLE = 650
 
-# Speeds
 FAST_SPEED = 1000
 SLOW_SPEED = 25
 
-# Force thresholds in raw unit (g), 0-1000. force_set unit is gram :contentReference[oaicite:6]{index=6}
-INDEX_FORCE_G = 500  # TBD
-THUMB_FORCE_G = 500  # TBD
+INDEX_FORCE_G = 500
+THUMB_FORCE_G = 500
 
-# Logging rate (seconds)
 LOG_DT = 0.01
 
-# Optional: angle settling check after fast move
 ANGLE_TOL = 8
 ANGLE_WAIT_TIMEOUT_S = 5.0
 # -----------------------------------------------------------
 
 
 def apply_speed_all(hand: RH56Hand, speed: int) -> None:
-    hand.speed_set(
-        [speed] * 6
-    )  # same pattern as your script :contentReference[oaicite:7]{index=7}
+    hand.speed_set([speed] * 6)
 
 
 def apply_angles(hand: RH56Hand, angles: List[int]) -> None:
@@ -71,11 +60,15 @@ def apply_angles(hand: RH56Hand, angles: List[int]) -> None:
 
 
 def wait_until_angles(
-    hand: RH56Hand, target: List[int], idxs: List[int], tol: int, timeout_s: float
+    read_angles_fn,
+    target: List[int],
+    idxs: List[int],
+    tol: int,
+    timeout_s: float,
 ) -> bool:
     t0 = time.time()
     while (time.time() - t0) < timeout_s:
-        cur = hand.angle_read()
+        cur = read_angles_fn()
         if cur is None:
             time.sleep(0.02)
             continue
@@ -90,7 +83,6 @@ def wait_until_angles(
     return False
 
 
-# Raw (g) -> Newton conversion (copied from your peginhole script) :contentReference[oaicite:8]{index=8}
 def index_g_to_N(raw_g: int) -> float:
     # return (raw_g * 0.007478) - 0.414
     return raw_g
@@ -157,53 +149,47 @@ def main():
     print(f"Connecting RH56 on port={args.port}, hand_id={args.hand_id}...")
     hand = RH56Hand(port=args.port, hand_id=args.hand_id)
 
+    # keep these as in your file (even if not used later)
     target_angles = build_target_angles()
     force_thr = build_force_thresholds()
 
     stop_event = threading.Event()
     save_event = threading.Event()
 
-    def wait_for_enter():
-        input("Press Enter to open hand, stop logging, and save CSV...\n")
-        save_event.set()
-        stop_event.set()
-
-    threading.Thread(target=wait_for_enter, daemon=True).start()
+    # Prevent logger reads and command writes interleaving on serial
+    io_lock = threading.Lock()
 
     records: List[dict] = []
     start_epoch = time.time()
 
-    try:
-        # 0) Start open
-        apply_speed_all(hand, FAST_SPEED)
-        apply_angles(hand, OPEN_ANGLES)
-        time.sleep(1)
+    # Locked wrappers
+    def cmd_speed_all(speed: int) -> None:
+        with io_lock:
+            apply_speed_all(hand, speed)
 
-        # 1) Fast move to target
-        print(f"Fast move to target angles (speed={FAST_SPEED}) ...")
-        apply_speed_all(hand, FAST_SPEED)
-        apply_angles(hand, [1000, 1000, 1000, 800, 650, 0])
-        time.sleep(0.5)
+    def cmd_angles(angles: List[int]) -> None:
+        with io_lock:
+            apply_angles(hand, angles)
 
-        # 2) Slow + force threshold, then re-command same target angles
-        print(
-            f"Set slow speed={SLOW_SPEED}, set force thresholds, re-send target angles ..."
-        )
-        apply_speed_all(hand, SLOW_SPEED)
-        try:
-            hand.force_set(force_thr)
-        except Exception as e:
-            print(f"Warning: force_set failed: {e}")
+    def cmd_force_set(thr: List[int]) -> None:
+        with io_lock:
+            hand.force_set(list(thr))
 
-        apply_angles(hand, [1000, 1000, 1000, 0, 650, 0])
-
-        # 3) Log until Enter
-        print("Logging started...")
-        while not stop_event.is_set():
-            ts = time.time()
-
+    def read_state() -> Tuple[Optional[List[int]], Optional[List[int]]]:
+        with io_lock:
             angles = hand.angle_read()
             forces = hand.force_act()
+        return angles, forces
+
+    def read_angles_only() -> Optional[List[int]]:
+        with io_lock:
+            return hand.angle_read()
+
+    # Logger thread starts immediately
+    def logger_loop():
+        while not stop_event.is_set():
+            ts = time.time()
+            angles, forces = read_state()
             if angles is None or forces is None:
                 time.sleep(LOG_DT)
                 continue
@@ -224,24 +210,89 @@ def main():
                     "th_N": thumb_g_to_N(th_g),
                 }
             )
-
             time.sleep(LOG_DT)
 
+    log_thread = threading.Thread(target=logger_loop, daemon=True)
+    log_thread.start()
+    print("Logging started immediately.")
+
+    # Enter handler: open first, then stop, then save
+    def wait_for_enter():
+        try:
+            input("Press Enter to open hand, stop logging, and save CSV...\n")
+        except Exception:
+            # stdin closed or non-interactive
+            stop_event.set()
+            return
+
+        # open first (so open motion is included in log)
+        try:
+            cmd_speed_all(FAST_SPEED)
+            cmd_angles(OPEN_ANGLES)
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+        save_event.set()
+        stop_event.set()
+
+    threading.Thread(target=wait_for_enter, daemon=True).start()
+
+    try:
+        # 0) Start open
+        cmd_speed_all(FAST_SPEED)
+        cmd_angles(OPEN_ANGLES)
+        time.sleep(1)
+        if stop_event.is_set():
+            raise KeyboardInterrupt()
+
+        # 1) Fast move to target (KEEP your angles unchanged here)
+        print(f"Fast move to target angles (speed={FAST_SPEED}) ...")
+        cmd_speed_all(FAST_SPEED)
+        cmd_angles([1000, 1000, 1000, 800, 650, 0])  # unchanged
+        time.sleep(0.5)
+        if stop_event.is_set():
+            raise KeyboardInterrupt()
+
+        # 2) Slow + force threshold, then re-command (KEEP your angles unchanged here)
+        print(
+            f"Set slow speed={SLOW_SPEED}, set force thresholds, re-send target angles ..."
+        )
+        cmd_speed_all(SLOW_SPEED)
+        try:
+            cmd_force_set(force_thr)
+        except Exception as e:
+            print(f"Warning: force_set failed: {e}")
+
+        cmd_angles([1000, 1000, 1000, 0, 650, 0])  # unchanged
+
+        # Main thread just waits now, logger is already running
+        while not stop_event.is_set():
+            time.sleep(0.05)
+
     except KeyboardInterrupt:
-        print("\nInterrupted by Ctrl+C. Will open hand but NOT save CSV.")
+        print("\nInterrupted. Will open hand but NOT save CSV.")
     except Exception as e:
         print(f"\nException: {e}. Will open hand but NOT save CSV.")
     finally:
-        # Always open on exit
+        # stop logger
+        stop_event.set()
         try:
-            apply_speed_all(hand, FAST_SPEED)
-            apply_angles(hand, OPEN_ANGLES)
+            log_thread.join(timeout=1.0)
+        except Exception:
+            pass
+
+        # Always open on exit (your original behavior)
+        try:
+            cmd_speed_all(FAST_SPEED)
+            cmd_angles(OPEN_ANGLES)
             time.sleep(0.3)
         except Exception:
             pass
 
         try:
-            hand.ser.close()
+            with io_lock:
+                hand.ser.close()
         except Exception:
             pass
 
