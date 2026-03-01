@@ -42,12 +42,12 @@ from rh56_controller.rh56_hand import RH56Hand
 
 
 # ---------------- USER SETTINGS (edit these) ----------------
-IDX_MIDDLE = 2  # middle finger index
+IDX_MIDDLE = 3  # middle finger index
 
 # You define these three poses. Keep length=6.
 DEFAULT_OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
-DEFAULT_PREP_ANGLES = [1000, 1000, 900, 1000, 650, 0]  # placeholder
-DEFAULT_CLOSE_ANGLES = [1000, 1000, 0, 1000, 650, 0]  # placeholder
+DEFAULT_PREP_ANGLES = [1000, 1000, 1000, 750, 650, 0]  # placeholder
+DEFAULT_CLOSE_ANGLES = [1000, 1000, 1000, 0, 650, 0]  # placeholder
 
 # Speed sweep (non-hybrid trials)
 SPEEDS = [1000, 500, 250, 100, 50, 25]
@@ -72,8 +72,8 @@ LOG_DT = 0.01
 
 # Timeouts / pauses (safety)
 RESET_SPEED = 1000
-POSE_SETTLE_S = 0.35
-STAGE_SWITCH_SLEEP_S = 0.5  # sleep on stage switch, do not record during this interval
+POSE_SETTLE_S = 0.5        # Time given to physically reach an open/reset pose
+STAGE_SWITCH_SLEEP_S = 1.0 # Sleep between stages to let force zero out (unrecorded)
 TRIAL_TIMEOUT_S = 20.0
 
 # Angle wait (only used in HYBRID to ensure prep reached before slow contact)
@@ -263,13 +263,15 @@ def main() -> None:
     print("Logging started immediately.")
 
     def go_pose(label: str, angles: List[int], speed: int) -> None:
-        # Stage switch: sleep to let force settle, and do not record during this interval
-        set_run_state(stage=label, cmd_speed=int(speed), recording=False)
+        # 1. Record the movement as it happens
+        set_run_state(stage=label, cmd_speed=int(speed), recording=True)
         cmd_speed_all(int(speed))
         cmd_angles(angles)
-        time.sleep(STAGE_SWITCH_SLEEP_S)
-        set_run_state(stage=label, cmd_speed=int(speed), recording=True)
         time.sleep(POSE_SETTLE_S)
+        
+        # 2. Pause unrecorded to let residual forces settle down to 0
+        set_run_state(stage=f"{label}_settle", cmd_speed=int(speed), recording=False)
+        time.sleep(STAGE_SWITCH_SLEEP_S)
 
     def run_contact_trial(mode: str, speed: int) -> bool:
         """
@@ -282,7 +284,7 @@ def main() -> None:
 
         set_run_state(trial=trial_name, mode=mode, stage="inter_trial", recording=False)
 
-        # Reset to OPEN between trials
+        # Reset to OPEN between trials (this will record the opening movement, then pause unrecorded)
         go_pose("open", DEFAULT_OPEN_ANGLES, RESET_SPEED)
 
         # Force threshold for this trial
@@ -291,27 +293,22 @@ def main() -> None:
             cmd_force_set(force_thr)
         except Exception as e:
             print(f"Warning: force_set failed: {e}")
+        # Unrecorded pause to ensure force is firmly at 0 before contact stage
         time.sleep(STAGE_SWITCH_SLEEP_S)
-        set_run_state(stage="force_set", recording=True)
 
         # Start contact motion
         if mode == "speed":
-            set_run_state(stage="contact", cmd_speed=int(speed), recording=False)
+            # Enable recording right BEFORE we send the command. No sleep afterwards!
+            set_run_state(stage="contact", cmd_speed=int(speed), recording=True)
             cmd_speed_all(int(speed))
             cmd_angles(DEFAULT_CLOSE_ANGLES)
-            time.sleep(STAGE_SWITCH_SLEEP_S)
-            set_run_state(stage="contact", cmd_speed=int(speed), recording=True)
         else:
             # Hybrid: 1000 to PREP, then 25 to CLOSE
             set_run_state(
-                stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED), recording=False
+                stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED), recording=True
             )
             cmd_speed_all(int(HYBRID_APPROACH_SPEED))
             cmd_angles(DEFAULT_PREP_ANGLES)
-            time.sleep(STAGE_SWITCH_SLEEP_S)
-            set_run_state(
-                stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED), recording=True
-            )
 
             ok = wait_until_angles(
                 read_angles_only,
@@ -325,15 +322,16 @@ def main() -> None:
                     "Warning: HYBRID prep pose not reached before timeout (continuing)."
                 )
 
-            set_run_state(
-                stage="contact", cmd_speed=int(HYBRID_CONTACT_SPEED), recording=False
-            )
-            cmd_speed_all(int(HYBRID_CONTACT_SPEED))
-            cmd_angles(DEFAULT_CLOSE_ANGLES)
+            # Brief unrecorded pause to let forces settle at the PREP pose
+            set_run_state(stage="prep_settle", recording=False)
             time.sleep(STAGE_SWITCH_SLEEP_S)
+
+            # Enable recording for the final slow contact phase. No sleep afterwards!
             set_run_state(
                 stage="contact", cmd_speed=int(HYBRID_CONTACT_SPEED), recording=True
             )
+            cmd_speed_all(int(HYBRID_CONTACT_SPEED))
+            cmd_angles(DEFAULT_CLOSE_ANGLES)
 
         # Peak detection: track running max after trigger, end when max stops increasing for STABLE_WINDOW_S.
         t0 = time.time()
