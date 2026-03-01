@@ -46,7 +46,7 @@ IDX_MIDDLE = 3  # middle finger index
 
 # You define these three poses. Keep length=6.
 DEFAULT_OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
-DEFAULT_PREP_ANGLES = [1000, 1000, 1000, 750, 650, 0]  # placeholder
+DEFAULT_PREP_ANGLES = [1000, 1000, 1000, 775, 650, 0]  # placeholder
 DEFAULT_CLOSE_ANGLES = [1000, 1000, 1000, 0, 650, 0]  # placeholder
 
 # Speed sweep (non-hybrid trials)
