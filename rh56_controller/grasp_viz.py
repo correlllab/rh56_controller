@@ -96,7 +96,7 @@ _EEFF_LOCAL = np.array([0.070, 0.016, 0.155])
 
 # TCP transform: wrist_3_link frame → hand base body
 _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
-_WRIST3_TO_HAND_QUAT = np.array([-0.707108, 0.707108, 0.0, 0.0])
+_WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])  # wxyz — matches gripper_attachment quat in ur5_inspire.xml
 
 # Default grasp XY position in robot mode (UR5 world frame, metres)
 _DEFAULT_ROBOT_X = 0.40
@@ -145,6 +145,10 @@ def _Rx(a: float) -> np.ndarray:
 def _Ry(a: float) -> np.ndarray:
     c, s = np.cos(a), np.sin(a)
     return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+def _Rz(a: float) -> np.ndarray:
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
 # ===========================================================================
@@ -471,7 +475,7 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                         mujoco.mj_forward(model, data)
                         configuration.update(data.qpos)
                 elif eeff_id >= 0:
-                    R_hand     = _Rx(ctrl[3]) @ _Ry(ctrl[4])
+                    R_hand     = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
                     target_pos = ctrl[0:3] + R_hand @ eeff_local_arr
                     T_target   = np.eye(4)
                     T_target[:3, :3] = R_hand
@@ -672,6 +676,10 @@ class GraspViz:
             except Exception as exc:
                 print(f"[GraspViz] GraspExecutor setup failed: {exc}")
 
+        # Start viewer monitor for teach-mode auto-disable
+        if self._real_robot_mode:
+            self._start_viewer_monitor()
+
         # Initial computation
         self._recompute()
 
@@ -800,6 +808,17 @@ class GraspViz:
                             plt.draw()
                         except Exception:
                             pass
+                elif msg == "__reset_teach_btn__":
+                    # Auto-disabled teach mode (sim viewer closed while in teach mode)
+                    self._teach_mode = False
+                    if hasattr(self, "_btn_teach"):
+                        self._btn_teach.label.set_text("Teach Mode")
+                        self._btn_teach.ax.set_facecolor("white")
+                        try:
+                            import matplotlib.pyplot as plt
+                            plt.draw()
+                        except Exception:
+                            pass
                 else:
                     self._update_status(msg)
         except queue.Empty:
@@ -808,6 +827,42 @@ class GraspViz:
         self._status_timer = threading.Timer(0.15, self._poll_status_queue)
         self._status_timer.daemon = True
         self._status_timer.start()
+
+    def _start_viewer_monitor(self):
+        """Background thread: disable teach mode when all sim viewers close."""
+        def _monitor():
+            while True:
+                time.sleep(2.0)
+                if not self._teach_mode or self._arm is None:
+                    continue
+                any_open = any(
+                    p is not None and p.is_alive()
+                    for p in [self._robot_ours_proc, self._robot_mink_proc,
+                               self._hand_ours_proc,  self._hand_mink_proc]
+                )
+                if not any_open:
+                    try:
+                        self._arm.disable_teach_mode()
+                    except Exception as e:
+                        print(f"[GraspViz] monitor teach-disable error: {e}")
+                    self._status_queue.put("Teach mode disabled (all viewers closed)")
+                    self._status_queue.put("__reset_teach_btn__")
+        t = threading.Thread(target=_monitor, daemon=True, name="viewer-monitor")
+        t.start()
+
+    def _sync_real_hand_to_ctrl(self, ctrl_arr) -> None:
+        """Override finger ctrl elements (indices 6-11) with real hand angles."""
+        if self._hand is None:
+            return
+        try:
+            angles = self._hand.angle_read()   # list of 6 ints, 0-1000
+            ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+            ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])
+            rng      = ctrl_max - ctrl_min
+            real_ctrl = ctrl_min + (1.0 - np.clip(np.array(angles, dtype=float) / 1000.0, 0.0, 1.0)) * rng
+            ctrl_arr[6:12] = real_ctrl
+        except Exception as exc:
+            print(f"[GraspViz] _sync_real_hand_to_ctrl: {exc}")
 
     def _is_cylinder_bad(self) -> bool:
         """True when cylinder mode diameter < 71 mm (power grasp disabled)."""
@@ -905,6 +960,7 @@ class GraspViz:
             return
         self._hand_ours_stop.clear()
         self._push_viewer_ctrl()
+        self._sync_real_hand_to_ctrl(self._custom_ctrl_arr)
         proc = self._mp_ctx.Process(
             target=_hand_viewer_worker,
             args=(_GRASP_SCENE, self._custom_ctrl_arr,
@@ -942,6 +998,7 @@ class GraspViz:
             return
         self._robot_ours_stop.clear()
         self._push_viewer_ctrl()
+        self._sync_real_hand_to_ctrl(self._custom_ctrl_arr)
         proc = self._mp_ctx.Process(
             target=_robot_viewer_worker,
             args=(_ROBOT_SCENE, self._custom_ctrl_arr,
@@ -1061,36 +1118,52 @@ class GraspViz:
     # matplotlib setup
     # ------------------------------------------------------------------
     def run(self):
-        """Build and show the interactive matplotlib figure."""
+        """Build and show the interactive matplotlib figure.
+
+        Layout (robot mode): 3 columns
+          Col 1 (left):   3D plot
+          Col 2 (centre): sliders (Width, Z, X, Y, Rx, Ry, Rz)
+          Col 3 (right):  grasp-mode radio, viewer buttons, real-robot panel
+
+        Layout (standard mode): 2 columns (unchanged — fits without clipping).
+        """
         matplotlib.use("TkAgg")
 
         from matplotlib.widgets import TextBox
 
-        # Expanded figure for real-robot mode to accommodate extra panel
-        _figsize = (20, 11) if self._real_robot_mode else (14, 8)
+        _figsize = (20, 11) if self._robot_mode else (14, 8)
         fig = plt.figure(figsize=_figsize)
         fig.suptitle("Inspire RH56 — Antipodal Grasp Geometry Planner", fontsize=12)
 
-        # 3D axes: left 65%
-        ax3d: Axes3D = fig.add_axes([0.02, 0.05, 0.60, 0.88], projection="3d")
+        _mink_ready = self._mink_enabled and self._mink_planner is not None
+
+        # ---- 3D axes ----
+        _ax3d_w = 0.46 if self._robot_mode else 0.60
+        ax3d: Axes3D = fig.add_axes([0.02, 0.05, _ax3d_w, 0.88], projection="3d")
         ax3d.set_xlabel("X  (closure direction)")
         ax3d.set_ylabel("Y  (finger spread)")
         ax3d.set_zlabel("Z  (world up)")
         self._ax3d = ax3d
 
-        _mink_ready = self._mink_enabled and self._mink_planner is not None
+        # ---- Column 2 geometry (sliders) ----
+        if self._robot_mode:
+            _SL, _SW, _TL, _TW = 0.51, 0.19, 0.71, 0.07
+        else:
+            _SL, _SW, _TL, _TW = 0.65, 0.22, 0.88, 0.09
+        _SH = 0.025   # slider height
+        _LH = 0.025   # label height
+        _BH = 0.032   # button height
 
-        # ---- Shared slider/textbox factory (used by both modes) ----
-        _SL  = 0.65   # left edge of label + slider
-        _SW  = 0.22   # slider width
-        _TL  = 0.88   # textbox left edge
-        _TW  = 0.09   # textbox width
-        _SH  = 0.025  # slider height
-        _LH  = 0.030  # label height
+        # ---- Column 3 geometry (robot mode only) ----
+        _x3   = 0.81    # col-3 left edge
+        _w3   = 0.17    # col-3 width
+        _BW3  = 0.077   # button width in col 3
+        _GAP3 = 0.010   # gap between paired buttons
 
         def _make_slider_row(label, y_lbl, y_sl, vmin, vmax, vinit, vstep,
                              fmt="{:.0f}"):
-            ax_lbl = fig.add_axes([_SL, y_lbl, 0.32, _LH])
+            _lbl_w = _TL + _TW - _SL
+            ax_lbl = fig.add_axes([_SL, y_lbl, _lbl_w, _LH])
             ax_lbl.axis("off")
             ax_lbl.text(0.0, 0.5, label, fontsize=8.5)
             ax_sl = fig.add_axes([_SL, y_sl, _SW, _SH])
@@ -1104,66 +1177,53 @@ class GraspViz:
             tb.on_submit(lambda s: slider.set_val(
                 float(s) if s.strip() else slider.val))
 
-        # ---- Plane orientation separator label ----
-        def _section_label(y, text):
-            ax = fig.add_axes([_SL, y, 0.32, _LH])
+        def _section_label(y, text, x=None, w=None):
+            x = x if x is not None else _SL
+            w = w if w is not None else (_TL + _TW - _SL)
+            ax = fig.add_axes([x, y, w, _LH])
             ax.axis("off")
-            ax.text(0.0, 0.5, text, fontsize=7.5, color="#555555",
-                    style="italic")
-
-        # ---- Button dimensions ----
-        _BH  = 0.032
-        _BW  = 0.135
-        _GAP = 0.015
+            ax.text(0.0, 0.5, text, fontsize=7.5, color="#555555", style="italic")
 
         wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
 
         if self._robot_mode:
-            # ---- Robot mode: Width + Z + X + Y + Rx + Ry + Rz (7 rows) ----
-            # In real-robot mode the layout is shifted up by 0.25 to make
-            # room for the real arm control panel at the bottom.
-            _Y = 0.25 if self._real_robot_mode else 0.0   # vertical offset
-
-            ax_radio = fig.add_axes([0.65, 0.71 + _Y, 0.14, 0.21])
-            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
-            self._radio.on_clicked(self._on_mode)
-
+            # ══════════════════════════════════════════════
+            # COLUMN 2 — sliders (fixed positions, no _Y)
+            # ══════════════════════════════════════════════
             self._slider_w, self._tb_w = _make_slider_row(
-                "Width / Diameter (mm):", 0.665 + _Y, 0.630 + _Y, wmin_mm, wmax_mm,
+                "Width / Diameter (mm):", 0.876, 0.845, wmin_mm, wmax_mm,
                 self._width_m * 1000, 1.0)
 
-            # Z row: narrower textbox to fit "+20cm" button on the right.
-            _Z_TB_W  = 0.050   # textbox width (was _TW=0.09)
-            _Z_BTN_W = 0.054   # button width
-            ax_lbl_z = fig.add_axes([_SL, 0.575 + _Y, 0.32, _LH])
+            # Z: narrower textbox + "+20cm" button; range [0, 400] (table-safe)
+            _Z_TB_W  = 0.040
+            _Z_BTN_W = 0.040
+            ax_lbl_z = fig.add_axes([_SL, 0.798, _TL + _TW - _SL, _LH])
             ax_lbl_z.axis("off")
             ax_lbl_z.text(0.0, 0.5, "Grasp Z (mm):", fontsize=8.5)
-            ax_sl_z = fig.add_axes([_SL, 0.540 + _Y, _SW, _SH])
-            self._slider_z = Slider(ax_sl_z, "", -200.0, 200.0,
+            ax_sl_z = fig.add_axes([_SL, 0.767, _SW, _SH])
+            self._slider_z = Slider(ax_sl_z, "", 0.0, 400.0,
                                     valinit=self._grasp_z * 1000, valstep=5.0)
-            ax_tb_z = fig.add_axes([_TL, 0.540 + _Y, _Z_TB_W, _SH])
+            ax_tb_z = fig.add_axes([_TL, 0.767, _Z_TB_W, _SH])
             self._tb_z = TextBox(ax_tb_z, "",
                                  initial="{:.0f}".format(self._grasp_z * 1000))
-            ax_btn_up = fig.add_axes([_TL + _Z_TB_W + 0.004,
-                                      0.540 + _Y, _Z_BTN_W, _SH])
+            ax_btn_up = fig.add_axes([_TL + _Z_TB_W + 0.004, 0.767, _Z_BTN_W, _SH])
             self._btn_move_up = Button(ax_btn_up, "+20cm")
             self._btn_move_up.on_clicked(self._on_move_up)
 
             self._slider_x, self._tb_x = _make_slider_row(
-                "Grasp X (mm, UR5 world):", 0.485 + _Y, 0.450 + _Y, -850.0, 850.0,
+                "Grasp X (mm, UR5 world):", 0.720, 0.689, -850.0, 850.0,
                 self._grasp_x * 1000, 5.0)
             self._slider_y, self._tb_y = _make_slider_row(
-                "Grasp Y (mm, UR5 world):", 0.395 + _Y, 0.360 + _Y, -850.0, 850.0,
+                "Grasp Y (mm, UR5 world):", 0.642, 0.611, -850.0, 850.0,
                 self._grasp_y * 1000, 5.0)
 
-            _section_label(0.325 + _Y, "── Plane orientation ──")
-
+            _section_label(0.571, "── Plane orientation ──")
             self._slider_rx, self._tb_rx = _make_slider_row(
-                "Plane Rx (°):", 0.295 + _Y, 0.260 + _Y, -180.0, 180.0, 0.0, 1.0)
+                "Plane Rx (°):", 0.541, 0.510, -180.0, 180.0, 0.0, 1.0)
             self._slider_ry, self._tb_ry = _make_slider_row(
-                "Plane Ry (°):", 0.205 + _Y, 0.170 + _Y, -180.0, 180.0, 0.0, 1.0)
+                "Plane Ry (°):", 0.463, 0.432, -180.0, 180.0, 0.0, 1.0)
             self._slider_rz, self._tb_rz = _make_slider_row(
-                "Plane Rz (°):", 0.115 + _Y, 0.080 + _Y, -180.0, 180.0, 0.0, 1.0)
+                "Plane Rz (°):", 0.385, 0.354, -180.0, 180.0, 0.0, 1.0)
 
             _wire(self._slider_w,  self._tb_w,  self._on_width)
             _wire(self._slider_z,  self._tb_z,  self._on_z)
@@ -1173,51 +1233,66 @@ class GraspViz:
             _wire(self._slider_ry, self._tb_ry, self._on_plane_ry)
             _wire(self._slider_rz, self._tb_rz, self._on_plane_rz)
 
-            btn_y = 0.010 + _Y
-            # Top row: Hand viewers
-            ax_h_ours = fig.add_axes([0.65,               btn_y + _BH + 0.006, _BW, _BH])
-            ax_h_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y + _BH + 0.006, _BW, _BH])
+            # ══════════════════════════════════════════════
+            # COLUMN 3 — radio, buttons, [real-robot panel]
+            # ══════════════════════════════════════════════
+
+            # Grasp mode radio (top of col 3)
+            ax_radio = fig.add_axes([_x3, 0.660, _w3, 0.270])
+            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
+            self._radio.on_clicked(self._on_mode)
+
+            # Hand viewer buttons
+            ax_h_ours = fig.add_axes([_x3,              0.618, _BW3, _BH])
+            ax_h_mink = fig.add_axes([_x3+_BW3+_GAP3,  0.618, _BW3, _BH])
             self._btn_h_ours = Button(ax_h_ours, "Hand: Ours")
             self._btn_h_mink = Button(ax_h_mink,
-                                      "Hand: Mink" if _mink_ready else "Hand: Mink (N/A)")
+                                      "Mink" if _mink_ready else "Mink N/A")
             self._btn_h_ours.on_clicked(lambda _e: self._launch_hand_viewer_ours())
             self._btn_h_mink.on_clicked(lambda _e: self._launch_hand_viewer_mink())
-            # Bottom row: Robot viewers
-            ax_r_ours = fig.add_axes([0.65,               btn_y, _BW, _BH])
-            ax_r_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y, _BW, _BH])
+
+            # Robot viewer buttons
+            ax_r_ours = fig.add_axes([_x3,              0.578, _BW3, _BH])
+            ax_r_mink = fig.add_axes([_x3+_BW3+_GAP3,  0.578, _BW3, _BH])
             self._btn_r_ours = Button(ax_r_ours, "Robot: Ours")
             self._btn_r_mink = Button(ax_r_mink,
-                                      "Robot: Mink" if _mink_ready else "Robot: Mink (N/A)")
+                                      "Mink" if _mink_ready else "Mink N/A")
             self._btn_r_ours.on_clicked(lambda _e: self._launch_robot_viewer_ours())
             self._btn_r_mink.on_clicked(lambda _e: self._launch_robot_viewer_mink())
+
+            # Send-to-real (if hand connected)
+            if self._hand is not None:
+                ax_real = fig.add_axes([_x3, 0.526, 0.088, 0.046])
+                self._check_real = CheckButtons(
+                    ax_real, ["Send\nto Real"], [self._send_real])
+                self._check_real.on_clicked(self._on_send_real)
 
             # ---- Real Robot Control panel (only in --real-robot mode) ----
             if self._real_robot_mode:
                 _arm_connected = self._arm is not None and self._arm.connected
 
-                _section_label(0.222, "── Real Robot Control ──")
+                _section_label(0.500, "── Real Robot Control ──", x=_x3, w=_w3)
 
                 # Row 1: Teach Mode + Set Pose from Robot
-                ax_teach   = fig.add_axes([0.65,              0.182, _BW, _BH])
-                ax_setpose = fig.add_axes([0.65 + _BW + _GAP, 0.182, _BW, _BH])
+                ax_teach   = fig.add_axes([_x3,              0.460, _BW3, _BH])
+                ax_setpose = fig.add_axes([_x3+_BW3+_GAP3,  0.460, _BW3, _BH])
                 self._btn_teach   = Button(ax_teach,   "Teach Mode")
-                self._btn_setpose = Button(ax_setpose, "Set Pose from Robot")
+                self._btn_setpose = Button(ax_setpose, "Set Pose")
                 self._btn_teach.on_clicked(self._on_teach_mode)
                 self._btn_setpose.on_clicked(self._on_set_pose_from_robot)
 
                 # Row 2: Send to Robot (Arm) + Simulate Trajectory
-                ax_sendarm = fig.add_axes([0.65,              0.144, _BW, _BH])
-                ax_simtraj = fig.add_axes([0.65 + _BW + _GAP, 0.144, _BW, _BH])
-                self._btn_sendarm = Button(ax_sendarm, "Send to Robot (Arm)")
-                self._btn_simtraj = Button(ax_simtraj, "Simulate Trajectory")
+                ax_sendarm = fig.add_axes([_x3,              0.420, _BW3, _BH])
+                ax_simtraj = fig.add_axes([_x3+_BW3+_GAP3,  0.420, _BW3, _BH])
+                self._btn_sendarm = Button(ax_sendarm, "Send Arm")
+                self._btn_simtraj = Button(ax_simtraj, "Sim Traj")
                 self._btn_sendarm.on_clicked(self._on_send_arm)
                 self._btn_simtraj.on_clicked(self._on_simulate_trajectory)
 
-                # Grasp controls label
-                _section_label(0.114, "── Grasp Controls ──")
+                _section_label(0.400, "── Grasp Controls ──", x=_x3, w=_w3)
 
-                # Grasp Strategy radio (3 items, horizontal layout via fig width)
-                ax_strategy = fig.add_axes([0.65, 0.053, 0.155, 0.058])
+                # Grasp Strategy radio
+                ax_strategy = fig.add_axes([_x3, 0.320, 0.140, 0.073])
                 self._radio_strategy = RadioButtons(
                     ax_strategy,
                     ["Naive", "Plan", "Thumb Reflex"],
@@ -1225,28 +1300,28 @@ class GraspViz:
                 )
                 self._radio_strategy.on_clicked(self._on_strategy)
 
-                # Force (N) label + textbox
-                ax_f_lbl = fig.add_axes([0.812, 0.090, 0.08, 0.022])
+                # Force (N)
+                ax_f_lbl = fig.add_axes([_x3, 0.297, _w3, 0.020])
                 ax_f_lbl.axis("off")
                 ax_f_lbl.text(0.0, 0.5, "Force (N):", fontsize=7.5)
-                ax_f_tb  = fig.add_axes([0.812, 0.065, 0.08, 0.022])
+                ax_f_tb  = fig.add_axes([_x3, 0.274, _w3, 0.020])
                 self._tb_grasp_force = TextBox(ax_f_tb, "", initial="0")
 
-                # Step (mm) label + textbox
-                ax_s_lbl = fig.add_axes([0.812, 0.042, 0.08, 0.022])
+                # Step (mm)
+                ax_s_lbl = fig.add_axes([_x3, 0.250, _w3, 0.020])
                 ax_s_lbl.axis("off")
                 ax_s_lbl.text(0.0, 0.5, "Step (mm):", fontsize=7.5)
-                ax_s_tb  = fig.add_axes([0.812, 0.018, 0.08, 0.022])
+                ax_s_tb  = fig.add_axes([_x3, 0.227, _w3, 0.020])
                 self._tb_grasp_step = TextBox(ax_s_tb, "", initial="10")
 
-                # GRASP! button (full width)
-                ax_grasp = fig.add_axes([0.65, 0.005, 0.32, 0.042])
+                # GRASP! button
+                ax_grasp = fig.add_axes([_x3, 0.183, _w3, 0.038])
                 self._btn_grasp = Button(ax_grasp, "GRASP!")
                 self._btn_grasp.ax.set_facecolor("#2ecc71")
                 self._btn_grasp.on_clicked(self._on_grasp)
 
                 # Status text area
-                ax_status = fig.add_axes([0.65, 0.050, 0.155, 0.055])
+                ax_status = fig.add_axes([_x3, 0.010, _w3, 0.165])
                 ax_status.axis("off")
                 self._ws_status_text = ax_status.text(
                     0.0, 1.0, "",
@@ -1255,19 +1330,19 @@ class GraspViz:
                     transform=ax_status.transAxes,
                 )
 
-                # Grey out arm buttons if not connected
                 if not _arm_connected:
                     for btn in [self._btn_teach, self._btn_setpose,
                                 self._btn_sendarm, self._btn_grasp]:
                         btn.ax.set_facecolor("#cccccc")
-                    self._update_status(
-                        "No UR5 connection. Use --ur5-ip to connect.")
+                    self._update_status("No UR5 connection. Use --ur5-ip to connect.")
 
-                # Start status queue polling timer
                 self._poll_status_queue()
 
         else:
-            # ---- Standard mode: Width + Z + Rx + Ry + Rz (5 rows) ----
+            # ---- Standard mode: 2-column layout (Width + Z + Rx + Ry + Rz) ----
+            _BW  = 0.135
+            _GAP = 0.015
+
             ax_radio = fig.add_axes([0.65, 0.61, 0.16, 0.29])
             self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
             self._radio.on_clicked(self._on_mode)
@@ -1280,7 +1355,6 @@ class GraspViz:
                 self._grasp_z * 1000, 5.0)
 
             _section_label(0.400, "── Plane orientation ──")
-
             self._slider_rx, self._tb_rx = _make_slider_row(
                 "Plane Rx (°):", 0.370, 0.335, -180.0, 180.0, 0.0, 1.0)
             self._slider_ry, self._tb_ry = _make_slider_row(
@@ -1295,28 +1369,23 @@ class GraspViz:
             _wire(self._slider_rz, self._tb_rz, self._on_plane_rz)
 
             btn_y = 0.080
-            # Single row: Hand viewers
-            ax_h_ours = fig.add_axes([0.65,               btn_y, _BW, _BH])
-            ax_h_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y, _BW, _BH])
+            ax_h_ours = fig.add_axes([0.65,              btn_y, _BW, _BH])
+            ax_h_mink = fig.add_axes([0.65 + _BW + _GAP, btn_y, _BW, _BH])
             self._btn_h_ours = Button(ax_h_ours, "Hand: Ours")
             self._btn_h_mink = Button(ax_h_mink,
                                       "Hand: Mink" if _mink_ready else "Hand: Mink (N/A)")
             self._btn_h_ours.on_clicked(lambda _e: self._launch_hand_viewer_ours())
             self._btn_h_mink.on_clicked(lambda _e: self._launch_hand_viewer_mink())
 
-        # ---- Send-to-real checkbox (only if hand is connected) ----
-        if self._hand is not None:
-            # In robot modes btn_y is set inside the if block above; in hand-only
-            # mode it is set further below.  Use a safe fallback if not yet defined.
-            _check_y = locals().get("btn_y", 0.080) + 2 * (_BH + 0.008)
-            ax_real = fig.add_axes([0.65, _check_y, 0.06, 0.050])
-            self._check_real = CheckButtons(
-                ax_real, ["Send\nto Real"], [self._send_real])
-            self._check_real.on_clicked(self._on_send_real)
+            if self._hand is not None:
+                _check_y = btn_y + 2 * (_BH + 0.008)
+                ax_real = fig.add_axes([0.65, _check_y, 0.06, 0.050])
+                self._check_real = CheckButtons(
+                    ax_real, ["Send\nto Real"], [self._send_real])
+                self._check_real.on_clicked(self._on_send_real)
 
         # Info text lives inside the 3D plot (redrawn each _update_plot call).
-        self._ax3d_info_text = None   # set in _update_plot via ax3d.text2D
-
+        self._ax3d_info_text = None
         self._update_plot()
         plt.show()
 
@@ -1397,7 +1466,8 @@ class GraspViz:
 
     def _on_move_up(self, _event):
         """Increment grasp Z by +20 cm and update slider/viewer."""
-        new_z_mm = min(200.0, self._grasp_z * 1000.0 + 200.0)
+        z_max_mm = 400.0 if self._robot_mode else 200.0
+        new_z_mm = min(z_max_mm, self._grasp_z * 1000.0 + 200.0)
         self._grasp_z = new_z_mm / 1000.0
         self._slider_z.set_val(new_z_mm)
         self._tb_z.set_val("{:.0f}".format(new_z_mm))
@@ -1432,7 +1502,16 @@ class GraspViz:
         plt.draw()
 
     def _on_set_pose_from_robot(self, _event):
-        """Read current UR5 TCP pose and update grasp sliders."""
+        """Read current UR5 TCP pose and update grasp sliders.
+
+        decode_tcp_to_grasp_params returns the actual hand-base world position.
+        We correct for the grasp geometry midpoint offset so that ctrl[0:3]
+        (used by both the hand-only and robot sims) equals the real hand-base
+        position, aligning both viewers with the physical robot pose.
+
+        Math: ctrl[i] = grasp_x/y/z - mid_w[i]  (from _build_ctrl_array)
+        To get ctrl == hand_pos:  grasp_x/y/z = hand_pos + mid_w
+        """
         if self._arm is None:
             self._update_status("No UR5 connected.")
             return
@@ -1443,24 +1522,40 @@ class GraspViz:
         if not params:
             self._update_status("Failed to read arm pose.")
             return
-        self._grasp_x   = params["grasp_x"]
-        self._grasp_y   = params["grasp_y"]
-        self._grasp_z   = params["grasp_z"]
+        # Update plane orientation first — needed for the R_full below.
         self._plane_rx  = params["plane_rx"]
         self._plane_ry  = params["plane_ry"]
         self._plane_rz  = params["plane_rz"]
+        # Correct hand-base world position for grasp geometry midpoint offset.
+        hand_pos = np.array([params["grasp_x"], params["grasp_y"], params["grasp_z"]])
+        if r is not None:
+            # R_full (using just-decoded plane orientation) ≈ world_T_hand[:3,:3]
+            R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
+            mid_w  = R_full @ r.midpoint
+            self._grasp_x = float(hand_pos[0] + mid_w[0])
+            self._grasp_y = float(hand_pos[1] + mid_w[1])
+            self._grasp_z = float(hand_pos[2] + mid_w[2])
+        else:
+            self._grasp_x = float(hand_pos[0])
+            self._grasp_y = float(hand_pos[1])
+            self._grasp_z = float(hand_pos[2])
         # Sync sliders
         self._slider_x.set_val(self._grasp_x * 1000)
         self._slider_y.set_val(self._grasp_y * 1000)
-        self._slider_z.set_val(self._grasp_z * 1000)
+        self._slider_z.set_val(np.clip(self._grasp_z * 1000, 0.0, 400.0))
         self._slider_rx.set_val(np.degrees(self._plane_rx))
         self._slider_ry.set_val(np.degrees(self._plane_ry))
         self._slider_rz.set_val(np.degrees(self._plane_rz))
+        # Snapshot real joint angles so robot viewer shows current arm pose.
+        q = self._arm.snapshot_joints(self._real_q_arr)
+        if q is not None:
+            self._real_tracking.value = 1
         self._push_viewer_ctrl()
         self._update_plot()
         self._update_status(
-            f"Pose set from robot: "
-            f"X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} "
+            f"Pose set: hand({params['grasp_x']*1000:.0f},"
+            f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm "
+            f"→ sliders X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} "
             f"Z={self._grasp_z*1000:.0f} mm"
         )
 

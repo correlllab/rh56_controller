@@ -35,7 +35,7 @@ import numpy as np
 # _T_TCP_IN_HAND  :  TCP (wrist3) expressed in hand_base frame  (inverse)
 # ---------------------------------------------------------------------------
 _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
-_WRIST3_TO_HAND_QUAT = np.array([-0.707108, 0.707108, 0.0, 0.0])   # wxyz
+_WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])   # wxyz — matches gripper_attachment quat in ur5_inspire.xml
 
 
 def _quat_wxyz_to_R(w: float, x: float, y: float, z: float) -> np.ndarray:
@@ -240,9 +240,14 @@ class UR5Bridge:
         spd = speed if speed is not None else self._speed
         acc = accel if accel is not None else self._accel
 
+        # Orthogonalize R before constructing SE3 to avoid floating-point
+        # det-drift that causes spatialmath's validity check to reject it.
+        U, _, Vt = np.linalg.svd(world_T_tcp[:3, :3])
+        T_clean = world_T_tcp.copy()
+        T_clean[:3, :3] = U @ Vt
         with self._lock:
             self._iface.moveL(
-                self._SE3(world_T_tcp),
+                self._SE3(T_clean),
                 linSpeed=spd, linAccel=acc, asynch=not blocking,
             )
         if blocking:
