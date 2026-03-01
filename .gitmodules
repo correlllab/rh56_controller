@@ -4,3 +4,6 @@
 [submodule "mink"]
 	path = mink
 	url = https://github.com/kevinzakka/mink/
+[submodule "magpie_control"]
+	path = magpie_control
+	url = https://github.com/correlllab/magpie_control

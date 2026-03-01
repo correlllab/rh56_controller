@@ -465,20 +465,38 @@ class ClosureResult:
         Rx_pi = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=float)
         return Ry @ Rx_pi
 
-    def world_tips(self, world_grasp_z: float = 0.0) -> Dict[str, np.ndarray]:
+    @staticmethod
+    def _plane_rot(plane_rx: float, plane_ry: float, plane_rz: float) -> np.ndarray:
+        """Rx(plane_rx) @ Ry(plane_ry) @ Rz(plane_rz) — user-specified plane orientation."""
+        cx, sx = np.cos(plane_rx), np.sin(plane_rx)
+        cy, sy = np.cos(plane_ry), np.sin(plane_ry)
+        cz, sz = np.cos(plane_rz), np.sin(plane_rz)
+        Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=float)
+        Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=float)
+        Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=float)
+        return Rx @ Ry @ Rz
+
+    def world_tips(self, world_grasp_z: float = 0.0,
+                   plane_rx: float = 0.0, plane_ry: float = 0.0,
+                   plane_rz: float = 0.0) -> Dict[str, np.ndarray]:
         """
-        Convert tip positions to world frame with tilt correction.
-        The midpoint is placed at (0, 0, world_grasp_z).
+        Convert tip positions to world frame with tilt correction and optional
+        plane orientation.  The grasp midpoint is placed at (0, 0, world_grasp_z).
+
+        plane_rx/ry/rz (radians): additional rotation applied in world frame on top
+        of the auto-computed tilt, allowing arbitrary contact-plane orientations.
         """
-        R = self._rot_matrix(self.base_tilt_y)
+        R = self._plane_rot(plane_rx, plane_ry, plane_rz) @ self._rot_matrix(self.base_tilt_y)
         mid_w = R @ self.midpoint
         # base offset: shift so that rotated midpoint lands at world_grasp_z on Z
         base_w = np.array([-mid_w[0], -mid_w[1], world_grasp_z - mid_w[2]])
         return {fname: R @ pos + base_w for fname, pos in self.tip_positions.items()}
 
-    def world_base(self, world_grasp_z: float = 0.0) -> np.ndarray:
+    def world_base(self, world_grasp_z: float = 0.0,
+                   plane_rx: float = 0.0, plane_ry: float = 0.0,
+                   plane_rz: float = 0.0) -> np.ndarray:
         """World-frame position of hand base origin (= [0,0,0] in base frame)."""
-        R = self._rot_matrix(self.base_tilt_y)
+        R = self._plane_rot(plane_rx, plane_ry, plane_rz) @ self._rot_matrix(self.base_tilt_y)
         mid_w = R @ self.midpoint
         return np.array([-mid_w[0], -mid_w[1], world_grasp_z - mid_w[2]])
 

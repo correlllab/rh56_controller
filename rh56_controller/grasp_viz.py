@@ -482,6 +482,11 @@ class GraspViz:
         self._grasp_x = _DEFAULT_ROBOT_X if robot_mode else 0.0
         self._grasp_y = _DEFAULT_ROBOT_Y if robot_mode else 0.0
 
+        # Plane orientation (radians); applied on top of auto-computed tilt
+        self._plane_rx = 0.0
+        self._plane_ry = 0.0
+        self._plane_rz = 0.0
+
         # Wrist-3 TCP pose (stored by robot viewer for future real deployment)
         self._wrist3_pos: Optional[np.ndarray] = None
         self._wrist3_mat: Optional[np.ndarray] = None
@@ -600,6 +605,27 @@ class GraspViz:
             print(f"[GraspViz] angle_set failed: {exc}")
 
     # ------------------------------------------------------------------
+    # Plane orientation helpers
+    # ------------------------------------------------------------------
+    def _plane_R_matrix(self) -> np.ndarray:
+        """Extra world-frame rotation from the plane Rx/Ry/Rz sliders."""
+        return ClosureResult._plane_rot(self._plane_rx, self._plane_ry, self._plane_rz)
+
+    @staticmethod
+    def _mat_to_xyz_euler(R: np.ndarray):
+        """Extract (a, b, c) s.t. Rx(a) @ Ry(b) @ Rz(c) = R (XYZ intrinsic Euler)."""
+        b = float(np.arcsin(np.clip(R[0, 2], -1.0, 1.0)))
+        cb = np.cos(b)
+        if abs(cb) > 1e-6:
+            a = float(np.arctan2(-R[1, 2], R[2, 2]))
+            c = float(np.arctan2(-R[0, 1], R[0, 0]))
+        else:
+            # Gimbal lock: b = ±π/2
+            a = float(np.arctan2(R[2, 1], R[1, 1]))
+            c = 0.0
+        return a, b, c
+
+    # ------------------------------------------------------------------
     # Shared-memory state update helpers
     # ------------------------------------------------------------------
     def _build_ctrl_array(self, r: ClosureResult,
@@ -607,15 +633,20 @@ class GraspViz:
         """Build 12-element ctrl array from a ClosureResult.
 
         finger_ctrl overrides the finger angles (used for mink planner output).
+        Plane orientation (rx/ry/rz) is incorporated via XYZ Euler decomposition.
         """
         gz    = self._grasp_z
-        wbase = r.world_base(gz)
+        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
         if self._robot_mode:
             wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
         fc = finger_ctrl if finger_ctrl is not None else r.ctrl_values
+        # Combine auto-tilt with user plane rotation, then extract MuJoCo XYZ Euler.
+        # MuJoCo joint hierarchy applies Rx(rot_x) @ Ry(rot_y) @ Rz(rot_z).
+        R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
+        rot_x, rot_y, rot_z = self._mat_to_xyz_euler(R_full)
         return np.array([
             wbase[0], wbase[1], wbase[2],
-            np.pi, -r.base_tilt_y, 0.0,
+            rot_x, rot_y, rot_z,
             fc.get("pinky",          0.0),
             fc.get("ring",           0.0),
             fc.get("middle",         0.0),
@@ -628,7 +659,7 @@ class GraspViz:
         """Build 20-element state array with world-frame tip positions."""
         gz   = self._grasp_z
         mode_idx = MODES.index(r.mode) if r.mode in MODES else 0
-        wtips = r.world_tips(gz)
+        wtips = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz)
         if self._robot_mode:
             xy_off = np.array([self._grasp_x, self._grasp_y, 0.0])
             wtips  = {f: p + xy_off for f, p in wtips.items()}
@@ -851,105 +882,90 @@ class GraspViz:
 
         _mink_ready = self._mink_enabled and self._mink_planner is not None
 
-        if self._robot_mode:
-            # ---- Robot mode: 4 sliders + textboxes ----
-            _SL = 0.65   # left edge of slider
-            _SW = 0.24   # slider width
-            _TL = 0.90   # textbox left edge
-            _TW = 0.07   # textbox width
-            _SH = 0.025  # slider height
+        # ---- Shared slider/textbox factory (used by both modes) ----
+        _SL  = 0.65   # left edge of label + slider
+        _SW  = 0.22   # slider width
+        _TL  = 0.88   # textbox left edge
+        _TW  = 0.09   # textbox width
+        _SH  = 0.025  # slider height
+        _LH  = 0.030  # label height
 
-            ax_radio = fig.add_axes([0.65, 0.68, 0.14, 0.23])
+        def _make_slider_row(label, y_lbl, y_sl, vmin, vmax, vinit, vstep,
+                             fmt="{:.0f}"):
+            ax_lbl = fig.add_axes([_SL, y_lbl, 0.32, _LH])
+            ax_lbl.axis("off")
+            ax_lbl.text(0.0, 0.5, label, fontsize=8.5)
+            ax_sl = fig.add_axes([_SL, y_sl, _SW, _SH])
+            sl    = Slider(ax_sl, "", vmin, vmax, valinit=vinit, valstep=vstep)
+            ax_tb = fig.add_axes([_TL, y_sl, _TW, _SH])
+            tb    = TextBox(ax_tb, "", initial=fmt.format(vinit))
+            return sl, tb
+
+        def _wire(slider, tb, on_val_fn, fmt="{:.0f}"):
+            slider.on_changed(lambda v: (on_val_fn(v), tb.set_val(fmt.format(v))))
+            tb.on_submit(lambda s: slider.set_val(
+                float(s) if s.strip() else slider.val))
+
+        # ---- Plane orientation separator label ----
+        def _section_label(y, text):
+            ax = fig.add_axes([_SL, y, 0.32, _LH])
+            ax.axis("off")
+            ax.text(0.0, 0.5, text, fontsize=7.5, color="#555555",
+                    style="italic")
+
+        # ---- Button dimensions ----
+        _BH  = 0.032
+        _BW  = 0.135
+        _GAP = 0.015
+
+        wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
+
+        if self._robot_mode:
+            # ---- Robot mode: Width + Z + X + Y + Rx + Ry + Rz (7 rows) ----
+            # Row spacing: 0.09 each.  Radio at top.
+            ax_radio = fig.add_axes([0.65, 0.71, 0.14, 0.21])
             self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
             self._radio.on_clicked(self._on_mode)
 
-            def _make_slider_row(label, y_lbl, y_sl, vmin, vmax, vinit, vstep):
-                ax_lbl = fig.add_axes([_SL, y_lbl, 0.30, 0.03])
-                ax_lbl.axis("off")
-                ax_lbl.text(0.0, 0.5, label, fontsize=9)
-                ax_sl = fig.add_axes([_SL, y_sl, _SW, _SH])
-                sl    = Slider(ax_sl, "", vmin, vmax, valinit=vinit, valstep=vstep)
-                ax_tb = fig.add_axes([_TL, y_sl, _TW, _SH])
-                tb    = TextBox(ax_tb, "", initial=f"{vinit:.0f}")
-                return sl, tb
-
-            wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
             self._slider_w, self._tb_w = _make_slider_row(
-                "Width / Diameter (mm):", 0.64, 0.60, wmin_mm, wmax_mm,
+                "Width / Diameter (mm):", 0.665, 0.630, wmin_mm, wmax_mm,
                 self._width_m * 1000, 1.0)
             self._slider_z, self._tb_z = _make_slider_row(
-                "Grasp Z (mm):", 0.54, 0.50, -200.0, 200.0,
+                "Grasp Z (mm):", 0.575, 0.540, -200.0, 200.0,
                 self._grasp_z * 1000, 5.0)
             self._slider_x, self._tb_x = _make_slider_row(
-                "Grasp X (mm, UR5 world):", 0.44, 0.40, -850.0, 850.0,
+                "Grasp X (mm, UR5 world):", 0.485, 0.450, -850.0, 850.0,
                 self._grasp_x * 1000, 5.0)
             self._slider_y, self._tb_y = _make_slider_row(
-                "Grasp Y (mm, UR5 world):", 0.34, 0.30, -850.0, 850.0,
+                "Grasp Y (mm, UR5 world):", 0.395, 0.360, -850.0, 850.0,
                 self._grasp_y * 1000, 5.0)
 
-            def _wire(slider, tb, on_val_fn):
-                slider.on_changed(lambda v: (on_val_fn(v), tb.set_val(f"{v:.0f}")))
-                tb.on_submit(lambda s: slider.set_val(
-                    float(s) if s.strip() else slider.val))
+            _section_label(0.325, "── Plane orientation ──")
 
-            _wire(self._slider_w, self._tb_w, self._on_width)
-            _wire(self._slider_z, self._tb_z, self._on_z)
-            _wire(self._slider_x, self._tb_x, self._on_x)
-            _wire(self._slider_y, self._tb_y, self._on_y)
+            self._slider_rx, self._tb_rx = _make_slider_row(
+                "Plane Rx (°):", 0.295, 0.260, -180.0, 180.0, 0.0, 1.0)
+            self._slider_ry, self._tb_ry = _make_slider_row(
+                "Plane Ry (°):", 0.205, 0.170, -180.0, 180.0, 0.0, 1.0)
+            self._slider_rz, self._tb_rz = _make_slider_row(
+                "Plane Rz (°):", 0.115, 0.080, -180.0, 180.0, 0.0, 1.0)
 
-            info_bottom = 0.18
-            btn_y       = 0.05
+            _wire(self._slider_w,  self._tb_w,  self._on_width)
+            _wire(self._slider_z,  self._tb_z,  self._on_z)
+            _wire(self._slider_x,  self._tb_x,  self._on_x)
+            _wire(self._slider_y,  self._tb_y,  self._on_y)
+            _wire(self._slider_rx, self._tb_rx, self._on_plane_rx)
+            _wire(self._slider_ry, self._tb_ry, self._on_plane_ry)
+            _wire(self._slider_rz, self._tb_rz, self._on_plane_rz)
 
-        else:
-            # ---- Standard mode: 2 sliders ----
-            ax_radio = fig.add_axes([0.65, 0.60, 0.16, 0.30])
-            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
-            self._radio.on_clicked(self._on_mode)
-
-            ax_wmin_txt = fig.add_axes([0.65, 0.52, 0.16, 0.04])
-            ax_wmin_txt.axis("off")
-            ax_wmin_txt.text(0.0, 0.5, "Width / Diameter (mm):", fontsize=9)
-            ax_wslide = fig.add_axes([0.65, 0.47, 0.28, 0.03])
-            wmin_mm, wmax_mm = (x * 1000 for x in self._width_range)
-            self._slider_w = Slider(ax_wslide, "", wmin_mm, wmax_mm,
-                                    valinit=self._width_m * 1000, valstep=1.0)
-            self._slider_w.on_changed(self._on_width)
-
-            ax_ztxt = fig.add_axes([0.65, 0.37, 0.16, 0.04])
-            ax_ztxt.axis("off")
-            ax_ztxt.text(0.0, 0.5, "Grasp plane Z (mm):", fontsize=9)
-            ax_zslide = fig.add_axes([0.65, 0.32, 0.28, 0.03])
-            self._slider_z = Slider(ax_zslide, "", -200.0, 200.0,
-                                    valinit=self._grasp_z * 1000, valstep=5.0)
-            self._slider_z.on_changed(self._on_z)
-
-            info_bottom = 0.18
-            btn_y       = 0.05
-
-        # ---- Info text (above buttons) ----
-        self._ax_info = fig.add_axes([0.65, info_bottom, 0.32, 0.12])
-        self._ax_info.axis("off")
-        self._info_text = self._ax_info.text(
-            0.0, 1.0, "", fontsize=7.5,
-            verticalalignment="top", family="monospace",
-        )
-
-        # ---- Viewer buttons — two side-by-side pairs, smaller height ----
-        # Button dimensions: height=0.032, width=0.135
-        _BH  = 0.032   # button height
-        _BW  = 0.135   # button width
-        _GAP = 0.015   # gap between left/right buttons
-
-        if self._robot_mode:
+            btn_y = 0.010
             # Top row: Hand viewers
-            ax_h_ours = fig.add_axes([0.65,          btn_y + _BH + 0.008, _BW, _BH])
-            ax_h_mink = fig.add_axes([0.65 + _BW + _GAP, btn_y + _BH + 0.008, _BW, _BH])
+            ax_h_ours = fig.add_axes([0.65,               btn_y + _BH + 0.006, _BW, _BH])
+            ax_h_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y + _BH + 0.006, _BW, _BH])
             self._btn_h_ours = Button(ax_h_ours, "Hand: Ours")
             self._btn_h_mink = Button(ax_h_mink,
                                       "Hand: Mink" if _mink_ready else "Hand: Mink (N/A)")
             self._btn_h_ours.on_clicked(lambda _e: self._launch_hand_viewer_ours())
             self._btn_h_mink.on_clicked(lambda _e: self._launch_hand_viewer_mink())
-
             # Bottom row: Robot viewers
             ax_r_ours = fig.add_axes([0.65,               btn_y, _BW, _BH])
             ax_r_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y, _BW, _BH])
@@ -958,7 +974,36 @@ class GraspViz:
                                       "Robot: Mink" if _mink_ready else "Robot: Mink (N/A)")
             self._btn_r_ours.on_clicked(lambda _e: self._launch_robot_viewer_ours())
             self._btn_r_mink.on_clicked(lambda _e: self._launch_robot_viewer_mink())
+
         else:
+            # ---- Standard mode: Width + Z + Rx + Ry + Rz (5 rows) ----
+            ax_radio = fig.add_axes([0.65, 0.61, 0.16, 0.29])
+            self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
+            self._radio.on_clicked(self._on_mode)
+
+            self._slider_w, self._tb_w = _make_slider_row(
+                "Width / Diameter (mm):", 0.560, 0.525, wmin_mm, wmax_mm,
+                self._width_m * 1000, 1.0)
+            self._slider_z, self._tb_z = _make_slider_row(
+                "Grasp Z (mm):", 0.470, 0.435, -200.0, 200.0,
+                self._grasp_z * 1000, 5.0)
+
+            _section_label(0.400, "── Plane orientation ──")
+
+            self._slider_rx, self._tb_rx = _make_slider_row(
+                "Plane Rx (°):", 0.370, 0.335, -180.0, 180.0, 0.0, 1.0)
+            self._slider_ry, self._tb_ry = _make_slider_row(
+                "Plane Ry (°):", 0.280, 0.245, -180.0, 180.0, 0.0, 1.0)
+            self._slider_rz, self._tb_rz = _make_slider_row(
+                "Plane Rz (°):", 0.190, 0.155, -180.0, 180.0, 0.0, 1.0)
+
+            _wire(self._slider_w,  self._tb_w,  self._on_width)
+            _wire(self._slider_z,  self._tb_z,  self._on_z)
+            _wire(self._slider_rx, self._tb_rx, self._on_plane_rx)
+            _wire(self._slider_ry, self._tb_ry, self._on_plane_ry)
+            _wire(self._slider_rz, self._tb_rz, self._on_plane_rz)
+
+            btn_y = 0.080
             # Single row: Hand viewers
             ax_h_ours = fig.add_axes([0.65,               btn_y, _BW, _BH])
             ax_h_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y, _BW, _BH])
@@ -974,6 +1019,9 @@ class GraspViz:
             self._check_real = CheckButtons(
                 ax_real, ["Send\nto Real"], [self._send_real])
             self._check_real.on_clicked(self._on_send_real)
+
+        # Info text lives inside the 3D plot (redrawn each _update_plot call).
+        self._ax3d_info_text = None   # set in _update_plot via ax3d.text2D
 
         self._update_plot()
         plt.show()
@@ -1015,6 +1063,21 @@ class GraspViz:
         self._push_viewer_ctrl()
         self._update_plot()
 
+    def _on_plane_rx(self, val: float):
+        self._plane_rx = float(val) * np.pi / 180.0
+        self._push_viewer_ctrl()
+        self._update_plot()
+
+    def _on_plane_ry(self, val: float):
+        self._plane_ry = float(val) * np.pi / 180.0
+        self._push_viewer_ctrl()
+        self._update_plot()
+
+    def _on_plane_rz(self, val: float):
+        self._plane_rz = float(val) * np.pi / 180.0
+        self._push_viewer_ctrl()
+        self._update_plot()
+
     def _on_send_real(self, label: str):
         self._send_real = not self._send_real
         if self._send_real:
@@ -1039,8 +1102,8 @@ class GraspViz:
             plt.draw()
             return
 
-        wtips = r.world_tips(gz)
-        wbase = r.world_base(gz)
+        wtips = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
 
         # Fingertip dots
         for fname, pos in wtips.items():
@@ -1054,7 +1117,8 @@ class GraspViz:
             with self._mink_lock:
                 m_res = self._mink_result
             if m_res is not None:
-                R      = ClosureResult._rot_matrix(r.base_tilt_y)
+                R_base = ClosureResult._rot_matrix(r.base_tilt_y)
+                R      = self._plane_R_matrix() @ R_base
                 mid_w  = R @ r.midpoint
                 base_w = np.array([-mid_w[0], -mid_w[1], gz - mid_w[2]])
                 for fname, pos_base in m_res.tip_positions.items():
@@ -1091,7 +1155,10 @@ class GraspViz:
         elif mode == "cylinder":
             self._draw_cylinder_closure(ax, wtips, gz, r)
 
-        # Info text
+        # Info text — rendered inside the 3D plot axes (bottom-left corner).
+        prx_deg = np.degrees(self._plane_rx)
+        pry_deg = np.degrees(self._plane_ry)
+        prz_deg = np.degrees(self._plane_rz)
         lines = [
             f"Mode:   {r.mode}",
             f"Width:  {r.width * 1000:.1f} mm",
@@ -1101,6 +1168,8 @@ class GraspViz:
             lines.append(f"Radius: {r.cylinder_radius * 1000:.1f} mm")
         lines.append(f"Tilt Y: {r.tilt_deg:.1f}°")
         lines.append(f"Base Z: {wbase[2] * 1000:.1f} mm")
+        if any(abs(v) > 0.1 for v in (prx_deg, pry_deg, prz_deg)):
+            lines.append(f"Plane:  Rx={prx_deg:.0f}° Ry={pry_deg:.0f}° Rz={prz_deg:.0f}°")
         if self._robot_mode:
             lines.append(f"[ROBOT] X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} mm")
         if self._hand is not None:
@@ -1114,14 +1183,16 @@ class GraspViz:
             with self._mink_lock:
                 m_res = self._mink_result
             if m_res is None:
-                lines.append("Mink: solving…")
+                lines.append("Mink: solving\u2026")
             else:
-                status   = "✓" if m_res.converged else "✗"
+                status   = "\u2713" if m_res.converged else "\u2717"
                 mean_err = float(np.mean(list(m_res.position_errors_m.values()))) * 1000
                 lines.append(f"Mink: {status} {m_res.n_iters} iters"
                              f" | err {mean_err:.1f} mm")
 
-        self._info_text.set_text("\n".join(lines))
+        ax.text2D(0.02, 0.02, "\n".join(lines), transform=ax.transAxes,
+                  fontsize=7.0, family="monospace", verticalalignment="bottom",
+                  bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.75))
 
         all_pts = np.array(list(wtips.values()) + [wbase])
         margin  = 0.025
