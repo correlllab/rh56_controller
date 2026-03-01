@@ -4,15 +4,13 @@
 """
 RH56 middle-finger contact experiment (speed sweep + hybrid)
 
-What this script does:
-- Use ONLY the middle finger (index=2) for both command + logging
-- Run contact trials at speeds: 1000, 500, 250, 100, 50, 25, and HYBRID
+Summary:
+- Use ONLY the middle finger (index=2) for command + logging
+- Run trials at speeds: 1000, 500, 250, 100, 50, 25, and HYBRID
   - HYBRID: speed=1000 to PREP, then speed=25 to CLOSE
 - Auto-finish each trial when:
-  - force threshold is set to FORCE_TARGET_G (default 500g)
-  - after force reading first exceeds FORCE_TRIGGER_G (default 300g),
-    within a rolling STABLE_WINDOW_S (default 0.5s), the force stays
-    "roughly stable" around FORCE_TARGET_G (default 500 ± 25g)
+  - after force first exceeds FORCE_TRIGGER_G (default 300g), track a running MAX force
+  - if the MAX force does not increase for STABLE_WINDOW_S seconds (default 0.5s), the trial ends
 - After the last (HYBRID) trial finishes:
   - open hand
   - stop logging
@@ -28,11 +26,11 @@ import time
 import csv
 import argparse
 import threading
-from collections import deque
 from pathlib import Path
-from typing import Optional, List, Tuple, Deque, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any
 
-# --- Make repo import work like your hybrid.py ---
+
+# --- Make repo import work like your original scripts ---
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 for path in (PROJECT_ROOT, SCRIPT_DIR):
@@ -42,14 +40,14 @@ for path in (PROJECT_ROOT, SCRIPT_DIR):
 
 from rh56_controller.rh56_hand import RH56Hand
 
+
 # ---------------- USER SETTINGS (edit these) ----------------
-IDX_MIDDLE = 2  # middle finger is "2" per your note
+IDX_MIDDLE = 2  # middle finger index
 
 # You define these three poses. Keep length=6.
-# Convention in your repo seems to use 0..1000 scale per finger.
 DEFAULT_OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
-DEFAULT_PREP_ANGLES = [1000, 1000, 890, 1000, 650, 0]  # example placeholder 878 + 12
-DEFAULT_CLOSE_ANGLES = [1000, 1000, 0, 1000, 650, 0]  # example placeholder
+DEFAULT_PREP_ANGLES = [1000, 1000, 900, 1000, 650, 0]  # placeholder
+DEFAULT_CLOSE_ANGLES = [1000, 1000, 0, 1000, 650, 0]  # placeholder
 
 # Speed sweep (non-hybrid trials)
 SPEEDS = [1000, 500, 250, 100, 50, 25]
@@ -58,14 +56,16 @@ SPEEDS = [1000, 500, 250, 100, 50, 25]
 HYBRID_APPROACH_SPEED = 1000
 HYBRID_CONTACT_SPEED = 25
 
-# Force threshold for middle finger (raw g units in your current script)
+# Force threshold for the hand (raw g units from intrinsic sensor)
 FORCE_TARGET_G = 500
 FORCE_TRIGGER_G = 300
 
-# "Stable" detection parameters (edit if needed)
-STABLE_WINDOW_S = 0.5
-STABLE_BAND_G = 25
-STABLE_FRAC_IN_BAND = 0.80  # fraction of samples inside [target±band] over the window
+# Peak completion detection
+STABLE_WINDOW_S = 0.5  # end if max does not increase for this long after trigger
+MAX_REFRESH_EPS_G = 2  # ignore tiny max increases <= this value (g)
+
+# Optional: require peak to reach at least this value before allowing end (set to None to disable)
+MIN_PEAK_G_TO_END: Optional[int] = None  # e.g., FORCE_TARGET_G - 25
 
 # Logging
 LOG_DT = 0.01
@@ -73,6 +73,7 @@ LOG_DT = 0.01
 # Timeouts / pauses (safety)
 RESET_SPEED = 1000
 POSE_SETTLE_S = 0.35
+STAGE_SWITCH_SLEEP_S = 0.5  # sleep on stage switch, do not record during this interval
 TRIAL_TIMEOUT_S = 20.0
 
 # Angle wait (only used in HYBRID to ensure prep reached before slow contact)
@@ -114,7 +115,7 @@ def wait_until_angles(
 
 
 def middle_g_to_N(raw_g: int) -> float:
-    # Put your calibration here if you want N; keep raw by default.
+    # Keep raw by default. Put calibration here if you want Newtons.
     return float(raw_g)
 
 
@@ -159,21 +160,7 @@ def save_csv(records: List[Dict[str, Any]], start_epoch: float) -> str:
     return filename
 
 
-def force_is_stable_over_window(
-    window_forces: List[int],
-    target: int,
-    band: int,
-    frac_in_band: float,
-) -> bool:
-    if not window_forces:
-        return False
-    lo = target - band
-    hi = target + band
-    inside = sum(1 for f in window_forces if lo <= f <= hi)
-    return (inside / max(1, len(window_forces))) >= frac_in_band
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="/dev/ttyUSB0", help="Hand serial port")
     parser.add_argument("--hand-id", type=int, default=1, help="Hand ID")
@@ -202,6 +189,7 @@ def main():
         "mode": "init",
         "cmd_speed": -1,
         "stage": "init",
+        "recording": True,
     }
 
     records: List[Dict[str, Any]] = []
@@ -240,7 +228,7 @@ def main():
             return dict(run_state)
 
     # Logger thread starts immediately
-    def logger_loop():
+    def logger_loop() -> None:
         while not stop_event.is_set():
             ts = time.time()
             angles, forces = read_state()
@@ -252,6 +240,10 @@ def main():
             mid_g = int(forces[IDX_MIDDLE])
 
             s = get_run_state_copy()
+            if not s.get("recording", True):
+                time.sleep(LOG_DT)
+                continue
+
             records.append(
                 {
                     "ts": ts,
@@ -271,42 +263,55 @@ def main():
     print("Logging started immediately.")
 
     def go_pose(label: str, angles: List[int], speed: int) -> None:
-        set_run_state(stage=label, cmd_speed=int(speed))
+        # Stage switch: sleep to let force settle, and do not record during this interval
+        set_run_state(stage=label, cmd_speed=int(speed), recording=False)
         cmd_speed_all(int(speed))
         cmd_angles(angles)
+        time.sleep(STAGE_SWITCH_SLEEP_S)
+        set_run_state(stage=label, cmd_speed=int(speed), recording=True)
         time.sleep(POSE_SETTLE_S)
 
     def run_contact_trial(mode: str, speed: int) -> bool:
         """
-        Returns True if stable criterion met before timeout; else False.
+        Returns True if peak plateau criterion met before timeout; else False.
         """
         if mode == "speed":
             trial_name = f"speed_{speed}"
         else:
             trial_name = "hybrid"
 
-        set_run_state(trial=trial_name, mode=mode)
+        set_run_state(trial=trial_name, mode=mode, stage="inter_trial", recording=False)
 
-        # Always reset to OPEN between trials
+        # Reset to OPEN between trials
         go_pose("open", DEFAULT_OPEN_ANGLES, RESET_SPEED)
 
         # Force threshold for this trial
-        set_run_state(stage="force_set")
+        set_run_state(stage="force_set", recording=False)
         try:
             cmd_force_set(force_thr)
         except Exception as e:
             print(f"Warning: force_set failed: {e}")
+        time.sleep(STAGE_SWITCH_SLEEP_S)
+        set_run_state(stage="force_set", recording=True)
 
         # Start contact motion
         if mode == "speed":
-            set_run_state(stage="contact", cmd_speed=int(speed))
+            set_run_state(stage="contact", cmd_speed=int(speed), recording=False)
             cmd_speed_all(int(speed))
             cmd_angles(DEFAULT_CLOSE_ANGLES)
+            time.sleep(STAGE_SWITCH_SLEEP_S)
+            set_run_state(stage="contact", cmd_speed=int(speed), recording=True)
         else:
             # Hybrid: 1000 to PREP, then 25 to CLOSE
-            set_run_state(stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED))
+            set_run_state(
+                stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED), recording=False
+            )
             cmd_speed_all(int(HYBRID_APPROACH_SPEED))
             cmd_angles(DEFAULT_PREP_ANGLES)
+            time.sleep(STAGE_SWITCH_SLEEP_S)
+            set_run_state(
+                stage="approach", cmd_speed=int(HYBRID_APPROACH_SPEED), recording=True
+            )
 
             ok = wait_until_angles(
                 read_angles_only,
@@ -320,9 +325,15 @@ def main():
                     "Warning: HYBRID prep pose not reached before timeout (continuing)."
                 )
 
-            set_run_state(stage="contact", cmd_speed=int(HYBRID_CONTACT_SPEED))
+            set_run_state(
+                stage="contact", cmd_speed=int(HYBRID_CONTACT_SPEED), recording=False
+            )
             cmd_speed_all(int(HYBRID_CONTACT_SPEED))
             cmd_angles(DEFAULT_CLOSE_ANGLES)
+            time.sleep(STAGE_SWITCH_SLEEP_S)
+            set_run_state(
+                stage="contact", cmd_speed=int(HYBRID_CONTACT_SPEED), recording=True
+            )
 
         # Peak detection: track running max after trigger, end when max stops increasing for STABLE_WINDOW_S.
         t0 = time.time()
@@ -354,14 +365,14 @@ def main():
 
             if seen_trigger and (t_last_new_max is not None):
                 if (now - t_last_new_max) >= STABLE_WINDOW_S:
-                    return True
+                    if (MIN_PEAK_G_TO_END is None) or (max_g >= MIN_PEAK_G_TO_END):
+                        return True
 
             time.sleep(0.01)
 
         return False
 
     try:
-        # Trial plan: speeds then hybrid at the end
         plan: List[Tuple[str, int]] = [("speed", s) for s in SPEEDS] + [("hybrid", -1)]
         print("Trial plan:", ", ".join([f"{m}:{v}" for m, v in plan]))
 
@@ -374,9 +385,13 @@ def main():
                 label = "hybrid"
 
             if ok:
-                print(f"[DONE] {label}: stable force detected.")
+                print(
+                    f"[DONE] {label}: peak plateau detected (max stopped increasing)."
+                )
             else:
-                print(f"[FAIL] {label}: timeout or interrupted before stable force.")
+                print(
+                    f"[FAIL] {label}: timeout or interrupted before peak plateau detected."
+                )
                 raise RuntimeError(f"Trial failed: {label}")
 
         completed_all_trials = True
@@ -386,7 +401,6 @@ def main():
     except Exception as e:
         print(f"\nException: {e}")
     finally:
-        # stop logger
         stop_event.set()
         try:
             log_thread.join(timeout=1.0)
@@ -408,7 +422,6 @@ def main():
         except Exception:
             pass
 
-    # Save policy
     if (completed_all_trials or args.save_partial) and len(records) > 0:
         filename = save_csv(records, start_epoch)
         if completed_all_trials:
