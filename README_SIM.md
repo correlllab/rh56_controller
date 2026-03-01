@@ -3,6 +3,7 @@
 ## Quick Reference
 
 ```bash
+## the below four uv-run commands also work gracefully without uv installation, mink just won't be enabled
 # Grasp planner (no hardware); mink IK comparison loaded by default
 uv run python -m rh56_controller.grasp_viz
 

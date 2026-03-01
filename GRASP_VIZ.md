@@ -26,18 +26,21 @@ compensates for this, so that the grasp midplane stays at the target world heigh
 
 ---
 
-## Joint Coupling (from `inspire_right.xml` equality constraints)
+## Joint Coupling (from `inspire_grasp_scene.xml` equality constraints)
 
 The XML `polycoef="a0 a1"` convention defines `joint1 = a0 + a1 * joint2`.
+Both `inspire_grasp_scene.xml` and `inspire_right.xml` use identical values.
 
-| Joint pair | Equation |
-|---|---|
-| pinky/ring/middle intermediate = proximal | `intermediate = proximal` (1:1) |
-| index intermediate | `intermediate = 0.15 + 1.0 × proximal` |
-| thumb intermediate | `intermediate = 0.15 + 1.25 × pitch` |
-| thumb distal | `distal = 0.15 + 0.75 × pitch` |
+| Joint pair | Equation | polycoef |
+|---|---|---|
+| pinky/ring/middle intermediate | `intermediate = −0.15 + 1.1169 × proximal` | `"-0.15 1.1169 0 0 0"` |
+| index intermediate | `intermediate = −0.05 + 1.1169 × proximal` | `"-0.05 1.1169 0 0 0"` |
+| thumb intermediate | `intermediate = 0.15 + 1.33 × pitch` | `"0.15 1.33 0 0"` |
+| thumb distal | `distal = 0.15 + 0.66 × pitch` | `"0.15 0.66 0 0 0"` |
 
-The 0.15 rad preload means all coupled joints are bent ~8.6° even at zero proximal angle.
+The thumb coupled joints have a +0.15 rad (~8.6°) preload at zero pitch. Non-thumb
+offsets are negative; the MuJoCo equality solver clamps to joint limits at zero proximal
+angle, but the FK sweep must handle this manually when writing `data.qpos` directly.
 
 ---
 
@@ -298,7 +301,11 @@ jitter observed in Attempt 2.
 ## Running
 
 ```bash
-python -m rh56_controller.grasp_viz            # interactive visualizer
-python -m rh56_controller.grasp_geometry       # self-test (rebuild cache if needed)
+python -m rh56_controller.grasp_viz                  # interactive visualizer
+python -m rh56_controller.grasp_viz --port /dev/ttyUSB0  # with real hand
+python -m rh56_controller.grasp_viz --robot          # with UR5 arm
+python -m rh56_controller.grasp_geometry             # self-test (rebuild cache if needed)
 python -m rh56_controller.grasp_geometry --rebuild   # force FK table rebuild
 ```
+
+See [README_SIM.md](README_SIM.md) for all sim/viz script quick-reference commands.

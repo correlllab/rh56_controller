@@ -337,6 +337,7 @@ the thumb tip approaches within 20~mm of any non-thumb tip.
 
 % ---------------------------------------------------------------------------
 \section{World Frame Conversion}
+\label{sec:world}
 
 Given a \texttt{ClosureResult} (all positions in base frame, tilt $\theta$):
 \begin{align}
@@ -351,16 +352,77 @@ $\bm{b}_w$ is always above $g_z$ because $m_{w,z} = -\sin\theta\,m_{b,x} -
 extension-direction component dominates).
 
 % ---------------------------------------------------------------------------
+\section{Arbitrary Plane Orientation}
+
+\subsection{Motivation}
+
+The default world-frame conversion (Section~\ref{sec:world}) always approaches the
+grasp plane from directly above (world $-Z$), tilted by $\theta$ only in the spread axis.
+To grasp objects on inclined surfaces, from the side, or at an arbitrary angle, a
+user-specified \emph{plane rotation} is applied on top of the auto-tilt.
+
+\subsection{Extended Rotation}
+
+Let $(\phi_x, \phi_y, \phi_z) \in [-\pi, \pi]^3$ be user-controlled plane orientation
+angles (in radians; sliders in the UI provide degrees).  Define the plane rotation
+\begin{equation}
+  \mathbf{R}_\text{plane}(\phi_x, \phi_y, \phi_z)
+  = R_x(\phi_x)\,R_y(\phi_y)\,R_z(\phi_z),
+\end{equation}
+where
+\begin{align}
+  R_x(\phi) &= \begin{pmatrix}1&0&0\\0&\cos\phi&-\sin\phi\\0&\sin\phi&\cos\phi\end{pmatrix},&
+  R_y(\phi) &= \begin{pmatrix}\cos\phi&0&\sin\phi\\0&1&0\\-\sin\phi&0&\cos\phi\end{pmatrix},&
+  R_z(\phi) &= \begin{pmatrix}\cos\phi&-\sin\phi&0\\\sin\phi&\cos\phi&0\\0&0&1\end{pmatrix}.
+\end{align}
+The full base-to-world rotation becomes
+\begin{equation}
+  \boxed{\R_\text{full} = \mathbf{R}_\text{plane}(\phi_x,\phi_y,\phi_z)\,R_y(\theta)\,R_x(\pi).}
+  \label{eq:Rfull}
+\end{equation}
+The world-frame conversion uses $\R_\text{full}$ in place of $\R(\theta)$:
+\begin{align}
+  \bm{m}_w &= \R_\text{full}\,\bm{m}_b,\\
+  \bm{b}_w &= \begin{pmatrix}-m_{w,x}\\-m_{w,y}\\g_z-m_{w,z}\end{pmatrix},\\
+  \p_w(f)  &= \R_\text{full}\,\p_b(f) + \bm{b}_w.
+\end{align}
+The grasp midpoint continues to land at $(0,0,g_z)$ in world frame regardless of
+plane orientation.
+
+\subsection{MuJoCo Viewer Euler Angles}
+
+The floating-hand viewer applies $R_x(r_x)\,R_y(r_y)\,R_z(r_z)$ via three nested
+hinge joints (\texttt{right\_rot\_x}, \texttt{right\_rot\_y}, \texttt{right\_rot\_z}).
+Given $\R_\text{full}$ from \eqref{eq:Rfull}, the required angles are extracted via
+the \emph{intrinsic XYZ Euler decomposition}:
+\begin{align}
+  r_y &= \arcsin\!\bigl([\R_\text{full}]_{0,2}\bigr), \\
+  r_x &= \operatorname{atan2}\!\bigl(-[\R_\text{full}]_{1,2},\;[\R_\text{full}]_{2,2}\bigr), \\
+  r_z &= \operatorname{atan2}\!\bigl(-[\R_\text{full}]_{0,1},\;[\R_\text{full}]_{0,0}\bigr),
+\end{align}
+(with the standard gimbal-lock fallback when $\cos r_y \approx 0$).
+This replaces the previous closed-form $r_x=\pi$, $r_y=-\theta$, $r_z=0$, which is
+recovered exactly when $\mathbf{R}_\text{plane} = \mathbf{I}$.
+
+\subsection{Default Behaviour}
+
+At $\phi_x = \phi_y = \phi_z = 0$, $\mathbf{R}_\text{plane} = \mathbf{I}$ and all
+previous results are reproduced identically.  The coplanarity constraint (equal
+base-frame $Z$) continues to hold; with a non-zero plane rotation the fingertips
+remain coplanar in a tilted plane whose normal is
+$\mathbf{R}_\text{plane}\,\hat{z}_w$.
+
+% ---------------------------------------------------------------------------
 \section{MuJoCo Viewer Rotation Convention}
 
-MuJoCo's free-body rotation joints apply $R_x(r_x)\,R_y(r_y)$ (axes in parent/world
-frame).  The FK model uses $\R = R_y(\theta)\,R_x(\pi)$.  Matching these:
+MuJoCo's free-body rotation joints apply $R_x(r_x)\,R_y(r_y)\,R_z(r_z)$ (axes in
+parent/world frame).  For the default top-down approach ($\mathbf{R}_\text{plane}=\mathbf{I}$)
+the FK model uses $\R = R_y(\theta)\,R_x(\pi)$.  The XYZ Euler extraction gives:
 \begin{equation}
-  R_x(\pi)\,R_y(-\theta) = R_y(\theta)\,R_x(\pi)
-  \quad\Longleftrightarrow\quad
-  r_x = \pi,\quad r_y = -\theta.
+  r_x = \pi,\quad r_y = -\theta,\quad r_z = 0.
 \end{equation}
-The negation of $\theta$ for \texttt{rot\_y} is therefore mandatory.
+The negation of $\theta$ for \texttt{rot\_y} is therefore mandatory.  For non-zero
+plane orientations the full extraction from~\eqref{eq:Rfull} is used instead.
 
 % ---------------------------------------------------------------------------
 \section{Verified Width Ranges}
@@ -403,5 +465,129 @@ FK samples (thumb) & $50\times50$ & \texttt{N\_SAMPLES\_2D} \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+% ---------------------------------------------------------------------------
+\section{Mink Differential IK Grasp Planner}
+
+\subsection{Motivation and Architecture}
+
+\texttt{MinkGraspPlanner} provides an alternative grasp synthesis path based on
+iterative differential inverse kinematics (IK) using the \texttt{mink} library
+(quadratic-programming IK for MuJoCo models).  It serves as a research baseline
+for comparing against the analytical \texttt{ClosureGeometry} solver.
+
+The planner operates on \texttt{inspire\_right.xml} (fixed-base hand, 12 DOF:
+6 proximal + 6 coupled intermediate joints) in the same hand-base coordinate
+frame as the FK tables.
+
+\subsection{Quadratic Programme}
+
+At each IK iteration the following constrained least-squares problem is solved
+for the joint velocity $\dot{\bm{q}} \in \mathbb{R}^{12}$:
+\begin{equation}
+  \min_{\dot{\bm{q}}} \;\;
+    \underbrace{\sum_{f \in \mathcal{A}} \bigl\|J_f \dot{\bm{q}} - v_f^*\bigr\|_2^2}_{\text{fingertip tasks}}
+    + \underbrace{w_c \bigl\|C\dot{\bm{q}}\bigr\|_2^2}_{\text{coupling}}
+    + \underbrace{w_d \bigl\|\dot{\bm{q}}\bigr\|_2^2}_{\text{damping}}
+  \quad \text{subject to} \quad
+  \dot{\bm{q}}_{\min} \le \dot{\bm{q}} \le \dot{\bm{q}}_{\max}
+\end{equation}
+where:
+\begin{itemize}
+  \item $\mathcal{A}$ is the set of active fingers (depends on grasp mode).
+  \item $J_f \in \mathbb{R}^{3\times12}$ is the translational Jacobian of finger~$f$'s
+        tip site w.r.t.\ all joints.
+  \item $v_f^* = (p_f^* - p_f^{\text{cur}}) / \Delta t$ is the target tip velocity,
+        where $p_f^* \in \mathbb{R}^3$ is the desired tip position derived from
+        \texttt{ClosureGeometry}'s FK output and $\Delta t = 0.005\,\text{s}$.
+  \item $C\dot{\bm{q}} = 0$ encodes the six polycoef equality constraints
+        (Table~1) via mink's \texttt{EqualityConstraintTask} at cost $w_c = 50$.
+  \item $w_d = 10^{-2}$ is the isotropic damping (velocity regulariser,
+        \texttt{DampingTask}).
+  \item Joint limits $[\dot{\bm{q}}_{\min}, \dot{\bm{q}}_{\max}]$ are enforced as
+        linear inequality constraints via \texttt{ConfigurationLimit} and
+        \texttt{VelocityLimit} (max angular speed $\pi\,\text{rad/s}$).
+\end{itemize}
+The QP is solved with \texttt{daqp} (active-set dual method).  After each step
+the configuration is integrated: $\bm{q} \leftarrow \bm{q} + \dot{\bm{q}}\,\Delta t$.
+
+\subsection{Task Weights per Grasp Mode}
+
+\paragraph{2-finger line.}
+Thumb yaw is frozen at $c_\text{yaw}^{\text{line}} = 1.16$~rad by adding a
+heavy yaw-damping term ($100\times$ standard weight) to prevent the QP from
+moving it.  Only the thumb-tip and index-tip \texttt{FrameTask}s are active.
+
+\paragraph{3/4/5-finger plane.}
+Thumb yaw is fixed at $c_\text{yaw}^{\max} = 1.308$~rad.  One \texttt{FrameTask}
+per active finger tip, all with equal weight.  Coplanarity emerges implicitly
+because all non-thumb tips share the same target $Z$ value (derived from the
+custom solver's coplanar configuration).
+
+\paragraph{Cylinder (power grasp).}
+Same as plane mode: all five fingers active, equal weights, thumb at max yaw.
+Targets are the tip sites (not proximal intermediate bodies), for consistency
+with the comparison metric.
+
+\subsection{Convergence Criterion}
+
+Iteration terminates when the total per-finger tip error satisfies
+\begin{equation}
+  \sum_{f \in \mathcal{A}} \|p_f - p_f^*\| < \varepsilon \cdot |\mathcal{A}|
+  \qquad \varepsilon = 5\,\text{mm (default)}
+\end{equation}
+or when the iteration limit (150 default; 500 in \texttt{compare\_grasp\_methods}) is
+reached.  Non-converged results are flagged in the comparison plots with red markers.
+
+\subsection{Coplanarity Metric (World-Frame)}
+
+Both planners are evaluated on the same metric: the \emph{mean absolute world-frame
+$Z$ deviation} of non-thumb fingertips from their mean world-$Z$:
+\begin{equation}
+  \varepsilon_{\text{coplan}} = \frac{1}{N}\sum_{i=1}^{N}
+    \bigl| w_{z,i} - \overline{w}_z \bigr|
+  \qquad
+  w_{z,i} = \bigl(\mathbf{R}(\theta)\,\mathbf{p}_i + \mathbf{b}_w\bigr)_z
+  \label{eq:coplan_metric}
+\end{equation}
+where $\mathbf{R}(\theta)$ is the tilt rotation \eqref{eq:Rmat}, $\mathbf{p}_i$
+is the base-frame tip position, and $\mathbf{b}_w$ is the world-frame hand base
+offset with $g_z = 0$.
+
+\textit{Note on the custom solver}: the custom planner enforces \emph{equal
+base-frame $Z$} for non-thumb fingers (sequential \texttt{brentq} root-finding),
+giving $\text{std}(p_{z,i}) = 0$ in base frame.  However, after the tilt
+rotation, fingers with different base-frame $X$ (different anatomical lengths)
+land at different world-frame $Z$.  The world-frame spread is therefore
+\emph{not} zero and is given by~\eqref{eq:width}:
+\begin{equation}
+  \varepsilon_{\text{coplan}}^{\text{custom}}
+  \approx \frac{1}{2}\,\text{range}(\,\sin\theta\,(p_{x,i}^* - \bar{p}_x)\,)
+  \;\approx 2\text{--}5\,\text{mm (hardware constraint)}
+\end{equation}
+
+\subsection{UR5 Robot Viewer Integration}
+
+When the \textbf{Robot: Ours} or \textbf{Robot: Mink} viewer is opened, a
+dedicated subprocess loads \texttt{ur5\_inspire.xml} and runs:
+\begin{enumerate}
+  \item \textbf{Arm IK} (always mink): a \texttt{FrameTask} targets the \texttt{eeff}
+        site at the desired SE(3) pose derived from the current grasp base position
+        and tilt angle.  Five iterations of $\Delta t = 0.05\,\text{s}$ mink IK
+        per visual frame drive the six UR5 arm joints.
+  \item \textbf{Finger actuators}: set directly from the selected planner's
+        $\bm{c} \in \mathbb{R}^6$ (custom or mink), bypassing the arm IK.
+\end{enumerate}
+The two robot viewers (\textit{Ours} vs.\ \textit{Mink}) therefore differ only
+in the finger control values; the arm motion is identical for both.
+
+The eeff site is located at
+$\mathbf{p}_\text{eeff}^{\text{local}} = [70,\,16,\,155]\,\text{mm}$ in the
+hand-base body frame, and the target SE(3) is:
+\begin{equation}
+  T_{\text{eeff}}^* =
+  \begin{pmatrix} \mathbf{R}(\theta) & \mathbf{p}_\text{base} + \mathbf{R}(\theta)\,\mathbf{p}_\text{eeff}^{\text{local}} \\
+  \mathbf{0}^\top & 1 \end{pmatrix}
+\end{equation}
 
 \end{document}
