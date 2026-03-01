@@ -15,5 +15,12 @@ dependencies = [
     "mink",
 ]
 
+[project.optional-dependencies]
+real-robot = [
+    "magpie_control",
+    "spatialmath",
+]
+
 [tool.uv.sources]
 mink = { path = "mink" }
+magpie_control = { path = "magpie_control", editable = true }
