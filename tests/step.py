@@ -36,8 +36,8 @@ from rh56_controller.rh56_hand import RH56Hand
 IDX_MIDDLE = 3  # middle finger index
 
 # You define these poses. Keep length=6.
-DEFAULT_OPEN_ANGLES = [1000, 1000, 1000, 1000, 650, 0]
-DEFAULT_CLOSE_ANGLES = [1000, 1000, 1000, 0, 650, 0]
+DEFAULT_OPEN_ANGLES = [1000, 1000, 1000, 1000, 1000, 1000]
+DEFAULT_CLOSE_ANGLES = [1000, 1000, 1000, 0, 1000, 1000]
 
 # Motion settings
 SPEED = 1000
