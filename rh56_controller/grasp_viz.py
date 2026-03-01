@@ -375,7 +375,9 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                           ik_ori_thr: float = 0.05,
                           eeff_local: tuple = (0.070, 0.016, 0.155),
                           real_q_arr=None,
-                          real_tracking=None) -> None:
+                          real_tracking=None,
+                          sim_grasp_t=None,
+                          ctrl_open_fingers=None) -> None:
     """Subprocess entry: UR5+hand robot viewer with mink differential arm IK.
 
     ctrl_arr[0:6]  = world position + rotation of hand base (updated by main process)
@@ -437,9 +439,19 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
         dt      = model.opt.timestep
         n_steps = max(1, round(0.033 / dt))
 
+        _ctrl_open = (np.array(ctrl_open_fingers)
+                      if ctrl_open_fingers is not None else None)
+
         with mujoco.viewer.launch_passive(model, data) as v:
             while v.is_running() and not stop_event.is_set():
                 ctrl = np.array(ctrl_arr[:])
+
+                # Compute effective finger ctrl (may be mid-animation: open → target).
+                t_grasp = sim_grasp_t.value if sim_grasp_t is not None else 1.0
+                if _ctrl_open is not None and 0.0 <= t_grasp < 1.0:
+                    eff_finger = _ctrl_open + t_grasp * (ctrl[6:12] - _ctrl_open)
+                else:
+                    eff_finger = ctrl[6:12]
 
                 # Real-robot tracking: display actual joint angles instead of IK
                 use_real = (
@@ -454,7 +466,7 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                             data.ctrl[ctrl_id] = q_real[i]
                             data.qpos[qadr]    = q_real[i]
                         # Still update finger ctrl from shared array
-                        for ctrl_id, val in zip(finger_ctrl_ids, ctrl[6:12]):
+                        for ctrl_id, val in zip(finger_ctrl_ids, eff_finger):
                             data.ctrl[ctrl_id] = val
                         mujoco.mj_forward(model, data)
                         configuration.update(data.qpos)
@@ -480,7 +492,7 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
 
                     for ctrl_id, qadr in zip(arm_ctrl_ids, arm_jnt_qposadr):
                         data.ctrl[ctrl_id] = configuration.q[qadr]
-                    for ctrl_id, val in zip(finger_ctrl_ids, ctrl[6:12]):
+                    for ctrl_id, val in zip(finger_ctrl_ids, eff_finger):
                         data.ctrl[ctrl_id] = val
 
                 if not use_real:
@@ -567,6 +579,12 @@ class GraspViz:
         self._mink_ctrl_arr   = _mp.Array("d", _VIEWER_CTRL_LEN)
         # Shared state (world-frame tip positions, mode, etc.)
         self._viewer_state_arr = _mp.Array("d", _VIEWER_STATE_LEN)
+
+        # Open-hand ctrl values (ctrl_min per actuator) and grasp animation progress.
+        # sim_grasp_t: 0.0 = fingers fully open, 1.0 = fingers at target (default).
+        self._ctrl_open_fingers = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+        self._sim_grasp_t       = _mp.Value("d", 1.0)
+        self._sim_grasp_gen     = 0   # incremented each time a new animation starts
 
         # Per-viewer stop events
         self._hand_ours_stop  = _mp.Event()
@@ -932,7 +950,9 @@ class GraspViz:
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
                         eeff_local=tuple(_EEFF_LOCAL),
                         real_q_arr=self._real_q_arr,
-                        real_tracking=self._real_tracking),
+                        real_tracking=self._real_tracking,
+                        sim_grasp_t=self._sim_grasp_t,
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
             daemon=True,
         )
         proc.start()
@@ -957,7 +977,9 @@ class GraspViz:
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
                         eeff_local=tuple(_EEFF_LOCAL),
                         real_q_arr=self._real_q_arr,
-                        real_tracking=self._real_tracking),
+                        real_tracking=self._real_tracking,
+                        sim_grasp_t=self._sim_grasp_t,
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
             daemon=True,
         )
         proc.start()
@@ -1109,9 +1131,24 @@ class GraspViz:
             self._slider_w, self._tb_w = _make_slider_row(
                 "Width / Diameter (mm):", 0.665 + _Y, 0.630 + _Y, wmin_mm, wmax_mm,
                 self._width_m * 1000, 1.0)
-            self._slider_z, self._tb_z = _make_slider_row(
-                "Grasp Z (mm):", 0.575 + _Y, 0.540 + _Y, -200.0, 200.0,
-                self._grasp_z * 1000, 5.0)
+
+            # Z row: narrower textbox to fit "+20cm" button on the right.
+            _Z_TB_W  = 0.050   # textbox width (was _TW=0.09)
+            _Z_BTN_W = 0.054   # button width
+            ax_lbl_z = fig.add_axes([_SL, 0.575 + _Y, 0.32, _LH])
+            ax_lbl_z.axis("off")
+            ax_lbl_z.text(0.0, 0.5, "Grasp Z (mm):", fontsize=8.5)
+            ax_sl_z = fig.add_axes([_SL, 0.540 + _Y, _SW, _SH])
+            self._slider_z = Slider(ax_sl_z, "", -200.0, 200.0,
+                                    valinit=self._grasp_z * 1000, valstep=5.0)
+            ax_tb_z = fig.add_axes([_TL, 0.540 + _Y, _Z_TB_W, _SH])
+            self._tb_z = TextBox(ax_tb_z, "",
+                                 initial="{:.0f}".format(self._grasp_z * 1000))
+            ax_btn_up = fig.add_axes([_TL + _Z_TB_W + 0.004,
+                                      0.540 + _Y, _Z_BTN_W, _SH])
+            self._btn_move_up = Button(ax_btn_up, "+20cm")
+            self._btn_move_up.on_clicked(self._on_move_up)
+
             self._slider_x, self._tb_x = _make_slider_row(
                 "Grasp X (mm, UR5 world):", 0.485 + _Y, 0.450 + _Y, -850.0, 850.0,
                 self._grasp_x * 1000, 5.0)
@@ -1358,6 +1395,15 @@ class GraspViz:
         self._push_viewer_ctrl()
         self._update_plot()
 
+    def _on_move_up(self, _event):
+        """Increment grasp Z by +20 cm and update slider/viewer."""
+        new_z_mm = min(200.0, self._grasp_z * 1000.0 + 200.0)
+        self._grasp_z = new_z_mm / 1000.0
+        self._slider_z.set_val(new_z_mm)
+        self._tb_z.set_val("{:.0f}".format(new_z_mm))
+        self._push_viewer_ctrl()
+        self._update_plot()
+
     def _on_send_real(self, label: str):
         self._send_real = not self._send_real
         if self._send_real:
@@ -1453,11 +1499,30 @@ class GraspViz:
         t.start()
 
     def _on_simulate_trajectory(self, _event):
-        """Show planned grasp pose in the robot sim viewer (mink IK mode)."""
+        """Show planned grasp pose in the robot sim viewer and animate finger closure."""
         self._real_tracking.value = 0   # viewer uses mink IK (planned pose)
+        # Start with fingers open so we can animate the grasp.
+        self._sim_grasp_t.value = 0.0
         self._launch_robot_viewer_ours()
         self._push_viewer_ctrl()
-        self._update_status("Sim viewer open — showing planned trajectory.")
+        self._update_status("Sim: arm moving to pose, fingers will close...")
+
+        # Animate fingers from open → target in a background thread.
+        # Generation token ensures a superseded animation exits early.
+        self._sim_grasp_gen += 1
+        gen = self._sim_grasp_gen
+
+        def _animate():
+            time.sleep(2.0)   # allow mink IK to converge on the target arm pose
+            n_steps = 40
+            for i in range(n_steps + 1):
+                if self._sim_grasp_gen != gen:
+                    return   # superseded by a newer click
+                self._sim_grasp_t.value = i / n_steps
+                time.sleep(0.05)   # 2 s total ramp
+            self._status_queue.put("Sim grasp complete.")
+
+        threading.Thread(target=_animate, daemon=True, name="sim-grasp").start()
 
     def _on_grasp(self, _event):
         """Execute the selected grasp strategy on the real robot."""
