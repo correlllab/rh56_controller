@@ -3,46 +3,66 @@ grasp_viz.py — Interactive antipodal grasp geometry visualizer for Inspire RH5
 
 Usage:
     python -m rh56_controller.grasp_viz [--xml path/to/inspire_right.xml] [--rebuild]
-    python -m rh56_controller.grasp_viz --port /dev/ttyUSB0       # sim2real
-    python -m rh56_controller.grasp_viz --robot                   # UR5+hand viewer (IK)
-    python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0
+    python -m rh56_controller.grasp_viz --port /dev/ttyUSB0            # sim2real (hand only)
+    python -m rh56_controller.grasp_viz --robot                         # UR5+hand sim viewer (IK)
+    python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0    # sim + real hand
+    python -m rh56_controller.grasp_viz --real-robot --ur5-ip 192.168.0.4 \\
+                                         --port /dev/ttyUSB0            # full real robot control
 
     Run via uv to get mink IK support:
         uv run python -m rh56_controller.grasp_viz
         uv run python -m rh56_controller.grasp_viz --robot
+        uv run python -m rh56_controller.grasp_viz --real-robot --ur5-ip 192.168.0.4
 
-Controls:
+Controls (common):
     Radio buttons : select grasp mode (2-finger line / 3/4/5-finger plane / cylinder)
     Width slider  : target object width or diameter (mm)
     Z slider      : world-frame height of the grasp midplane (mm)
-    X slider      : grasp X position in UR5 world frame (mm) [robot mode only]
-    Y slider      : grasp Y position in UR5 world frame (mm) [robot mode only]
+    Plane Rx/Ry/Rz: extra plane orientation (degrees)
     Hand: Ours    : open floating-hand viewer (custom planner)
     Hand: Mink    : open floating-hand viewer (mink IK planner)
-    Robot: Ours   : open UR5+hand viewer, custom finger angles [robot mode only]
-    Robot: Mink   : open UR5+hand viewer, mink finger angles   [robot mode only]
     Send to Real  : checkbox — mirrors computed grasp pose to real hand
 
-World frame convention (matplotlib):
-    +Z up  (world gravity down)
-    Hand hangs fingers-down above the grasp plane.
-    The hand base origin appears above the fingertips.
-
-Robot mode (--robot):
+Robot sim mode (--robot):
     Uses mink differential IK to drive a simulated UR5e arm.
     X/Y sliders position the grasp centroid in the UR5 world XY plane.
+    Robot: Ours / Robot: Mink — open UR5+hand sim viewer.
     UR5e workspace radius ≈ 850 mm; avoid XY near origin (base cylinder).
+
+Real robot mode (--real-robot):
+    Implies --robot.  Adds real UR5 arm control panel below sim viewer buttons.
+    Requires magpie_control (installed separately; see README_REAL.md).
+
+    Real Robot Control panel:
+        Teach Mode          — toggle teach mode (robot guidable by hand);
+                              red indicator; all arm commands blocked in teach mode.
+        Set Pose from Robot — read current TCP pose → update X/Y/Z/plane sliders.
+        Send to Robot (Arm) — moveL to current planned TCP pose.
+        Simulate Trajectory — (re)launch the robot sim viewer showing planned pose.
+        Grasp Strategy      — Naive / Plan / Thumb Reflex (radio selector).
+        Force (N)           — target grasp force (0 = disabled).
+        Step (mm)           — chunk size for synchronized arm+finger trajectory.
+        GRASP!              — execute the selected grasp strategy.
+
+    Cylinder mode < 71 mm diameter: power grasp disabled (large discontinuity
+    at the thumb-yaw switch point); GRASP! button greyed out with warning.
 
 Viewer architecture:
     Each MuJoCo viewer (hand or robot) runs in its own subprocess via
     multiprocessing.Process, avoiding GLFW multi-thread crashes.  State is
     communicated through shared multiprocessing.Array objects updated from
     the main process each time the grasp parameters change.
+
+    In real-robot mode, a separate _real_q_arr (6-element shared array) holds
+    the last-known UR5 joint angles.  After each arm move the executor calls
+    arm.snapshot_joints(_real_q_arr) to update it, and the robot viewer
+    subprocess reads it (when _real_tracking=1) to show the real robot state.
 """
 
 import argparse
 import multiprocessing
 import pathlib
+import queue
 import threading
 import time
 from typing import Optional, Dict
@@ -353,7 +373,9 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                           ik_max_iters: int = 5,
                           ik_pos_thr: float = 5e-3,
                           ik_ori_thr: float = 0.05,
-                          eeff_local: tuple = (0.070, 0.016, 0.155)) -> None:
+                          eeff_local: tuple = (0.070, 0.016, 0.155),
+                          real_q_arr=None,
+                          real_tracking=None) -> None:
     """Subprocess entry: UR5+hand robot viewer with mink differential arm IK.
 
     ctrl_arr[0:6]  = world position + rotation of hand base (updated by main process)
@@ -362,6 +384,10 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
     The arm joints are solved online via mink FrameTask targeting the eeff site.
     The finger joints are set directly from ctrl_arr[6:12], so 'ours' and 'mink'
     robot viewers differ only in which finger ctrl values are written to ctrl_arr.
+
+    real_q_arr    : multiprocessing.Array('d', 6) — real UR5 joint angles snapshot.
+    real_tracking : multiprocessing.Value('b')    — when 1, viewer displays real
+                    joint angles instead of running mink IK (shows actual robot state).
     """
     try:
         import mink
@@ -415,7 +441,24 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
             while v.is_running() and not stop_event.is_set():
                 ctrl = np.array(ctrl_arr[:])
 
-                if eeff_id >= 0:
+                # Real-robot tracking: display actual joint angles instead of IK
+                use_real = (
+                    real_tracking is not None and real_q_arr is not None
+                    and real_tracking.value
+                )
+                if use_real:
+                    q_real = np.array(real_q_arr[:])
+                    if not np.all(q_real == 0):
+                        for ctrl_id, qadr in zip(arm_ctrl_ids, arm_jnt_qposadr):
+                            i = arm_ctrl_ids.index(ctrl_id)
+                            data.ctrl[ctrl_id] = q_real[i]
+                            data.qpos[qadr]    = q_real[i]
+                        # Still update finger ctrl from shared array
+                        for ctrl_id, val in zip(finger_ctrl_ids, ctrl[6:12]):
+                            data.ctrl[ctrl_id] = val
+                        mujoco.mj_forward(model, data)
+                        configuration.update(data.qpos)
+                elif eeff_id >= 0:
                     R_hand     = _Rx(ctrl[3]) @ _Ry(ctrl[4])
                     target_pos = ctrl[0:3] + R_hand @ eeff_local_arr
                     T_target   = np.eye(4)
@@ -440,9 +483,10 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                     for ctrl_id, val in zip(finger_ctrl_ids, ctrl[6:12]):
                         data.ctrl[ctrl_id] = val
 
-                for _ in range(n_steps):
-                    mujoco.mj_step(model, data)
-                configuration.update(data.qpos)
+                if not use_real:
+                    for _ in range(n_steps):
+                        mujoco.mj_step(model, data)
+                    configuration.update(data.qpos)
 
                 state = np.array(state_arr[:])
                 _worker_add_geoms(v, state)
@@ -465,6 +509,10 @@ class GraspViz:
         robot_mode: bool = False,
         send_real: bool = False,
         mink_viz: bool = True,
+        # Real-robot options (requires magpie_control + ur_rtde)
+        real_robot: bool = False,
+        ur5_ip: Optional[str] = None,
+        ur5_speed: float = 0.10,
     ):
         print("[GraspViz] Initialising FK model...")
         self.fk      = InspireHandFK(xml_path=xml_path, rebuild=rebuild)
@@ -476,6 +524,11 @@ class GraspViz:
         self._grasp_z = 0.0
         self._result: Optional[ClosureResult] = None
         self._width_range = (0.015, 0.090)
+
+        # Real-robot mode implies robot_mode
+        self._real_robot_mode = real_robot
+        if real_robot:
+            robot_mode = True
 
         # Robot mode flags
         self._robot_mode = robot_mode
@@ -554,6 +607,53 @@ class GraspViz:
             except Exception as exc:
                 print(f"[GraspViz] Could not load mink planner: {exc}")
 
+        # ---- Real robot arm (UR5) state ----
+        self._arm      = None   # UR5Bridge (set below if real_robot)
+        self._executor = None   # GraspExecutor (set below if arm + hand)
+        self._teach_mode   = False
+        self._grasp_strategy = "Plan"   # Naive / Plan / Thumb Reflex
+        self._grasp_force_N  = 0.0
+        self._grasp_step_mm  = 10.0
+
+        # Shared memory for real UR5 joint snapshot (robot viewer subprocess)
+        _mp2 = multiprocessing.get_context("fork")
+        self._real_q_arr    = _mp2.Array("d", 6)    # last known real UR5 q
+        self._real_tracking = _mp2.Value("b", 0)    # 1 = viewer shows real q
+
+        # Thread-safe status queue (executor→UI main thread via timer)
+        self._status_queue: queue.Queue = queue.Queue()
+        self._status_lines: list = []       # last N status lines for display
+        self._status_timer: Optional[threading.Timer] = None
+        self._ws_status_text = None         # matplotlib Text widget (set in run())
+
+        if real_robot and ur5_ip is not None:
+            try:
+                from .ur5_bridge import UR5Bridge
+                self._arm = UR5Bridge(ip=ur5_ip, speed=ur5_speed)
+                if self._arm.connect():
+                    self._arm.snapshot_joints(self._real_q_arr)
+                    self._real_tracking.value = 1
+                    print(f"[GraspViz] UR5 arm connected at {ur5_ip}")
+                else:
+                    self._arm = None
+            except Exception as exc:
+                print(f"[GraspViz] UR5 arm setup failed: {exc}")
+                self._arm = None
+
+        if self._arm is not None and self._hand is not None:
+            try:
+                from .grasp_executor import GraspExecutor
+                self._executor = GraspExecutor(
+                    arm=self._arm,
+                    hand=self._hand,
+                    fk=self.fk,
+                    status_cb=lambda s: self._status_queue.put(s),
+                    force_cb=lambda f: self._status_queue.put(f"forces: {f}"),
+                )
+                print("[GraspViz] GraspExecutor ready.")
+            except Exception as exc:
+                print(f"[GraspViz] GraspExecutor setup failed: {exc}")
+
         # Initial computation
         self._recompute()
 
@@ -598,9 +698,20 @@ class GraspViz:
         real_cmd = np.round(
             (1.0 - np.clip((finger_ctrl - ctrl_min) / np.where(rng > 0, rng, 1.0),
                            0.0, 1.0)) * 1000
-        ).astype(int)
+        ).astype(int).tolist()
+
+        # In Thumb Reflex strategy, slider adjustments only actuate the thumb
+        if (self._real_robot_mode
+                and self._grasp_strategy == "Thumb Reflex"
+                and not (self._executor is not None and self._executor.is_running())):
+            # Keep non-thumb fingers open (1000 = open, INVERTED convention)
+            real_cmd[0] = 1000  # pinky
+            real_cmd[1] = 1000  # ring
+            real_cmd[2] = 1000  # middle
+            real_cmd[3] = 1000  # index
+
         try:
-            self._hand.angle_set(real_cmd.tolist())
+            self._hand.angle_set(real_cmd)
         except Exception as exc:
             print(f"[GraspViz] angle_set failed: {exc}")
 
@@ -624,6 +735,65 @@ class GraspViz:
             a = float(np.arctan2(R[2, 1], R[1, 1]))
             c = 0.0
         return a, b, c
+
+    # ------------------------------------------------------------------
+    # Real-robot helpers
+    # ------------------------------------------------------------------
+    def _build_world_T_hand(self, r: ClosureResult) -> np.ndarray:
+        """Build 4×4 world_T_hand from current closure result + slider state.
+
+        This is the arm-pose equivalent of _build_ctrl_array — it produces
+        the continuous-frame pose used by UR5Bridge.move_to_hand_pose().
+        """
+        gz    = self._grasp_z
+        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+        if self._robot_mode:
+            wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
+        R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
+        T = np.eye(4)
+        T[:3, :3] = R_full
+        T[:3, 3]  = wbase
+        return T
+
+    def _update_status(self, msg: str):
+        """Append msg to the on-screen status area (main-thread safe)."""
+        self._status_lines.append(msg)
+        self._status_lines = self._status_lines[-6:]  # keep last 6 lines
+        if self._ws_status_text is not None:
+            self._ws_status_text.set_text("\n".join(self._status_lines))
+            try:
+                import matplotlib.pyplot as plt
+                plt.gcf().canvas.draw_idle()
+            except Exception:
+                pass
+
+    def _poll_status_queue(self):
+        """Drain the executor→UI message queue (called by repeating timer)."""
+        try:
+            while True:
+                msg = self._status_queue.get_nowait()
+                if msg == "__reset_grasp_btn__":
+                    # Restore GRASP! button appearance after execution
+                    if hasattr(self, "_btn_grasp"):
+                        self._btn_grasp.ax.set_facecolor("#2ecc71")
+                        self._btn_grasp.label.set_text("GRASP!")
+                        try:
+                            import matplotlib.pyplot as plt
+                            plt.draw()
+                        except Exception:
+                            pass
+                else:
+                    self._update_status(msg)
+        except queue.Empty:
+            pass
+        # Re-schedule
+        self._status_timer = threading.Timer(0.15, self._poll_status_queue)
+        self._status_timer.daemon = True
+        self._status_timer.start()
+
+    def _is_cylinder_bad(self) -> bool:
+        """True when cylinder mode diameter < 71 mm (power grasp disabled)."""
+        return self._mode == "cylinder" and self._width_m * 2 < 0.071
 
     # ------------------------------------------------------------------
     # Shared-memory state update helpers
@@ -760,7 +930,9 @@ class GraspViz:
                   self._viewer_state_arr, self._robot_ours_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=_IK_MAX_ITERS,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
-                        eeff_local=tuple(_EEFF_LOCAL)),
+                        eeff_local=tuple(_EEFF_LOCAL),
+                        real_q_arr=self._real_q_arr,
+                        real_tracking=self._real_tracking),
             daemon=True,
         )
         proc.start()
@@ -783,7 +955,9 @@ class GraspViz:
                   self._viewer_state_arr, self._robot_mink_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=_IK_MAX_ITERS,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
-                        eeff_local=tuple(_EEFF_LOCAL)),
+                        eeff_local=tuple(_EEFF_LOCAL),
+                        real_q_arr=self._real_q_arr,
+                        real_tracking=self._real_tracking),
             daemon=True,
         )
         proc.start()
@@ -870,7 +1044,9 @@ class GraspViz:
 
         from matplotlib.widgets import TextBox
 
-        fig = plt.figure(figsize=(14, 8))
+        # Expanded figure for real-robot mode to accommodate extra panel
+        _figsize = (20, 11) if self._real_robot_mode else (14, 8)
+        fig = plt.figure(figsize=_figsize)
         fig.suptitle("Inspire RH56 — Antipodal Grasp Geometry Planner", fontsize=12)
 
         # 3D axes: left 65%
@@ -922,32 +1098,35 @@ class GraspViz:
 
         if self._robot_mode:
             # ---- Robot mode: Width + Z + X + Y + Rx + Ry + Rz (7 rows) ----
-            # Row spacing: 0.09 each.  Radio at top.
-            ax_radio = fig.add_axes([0.65, 0.71, 0.14, 0.21])
+            # In real-robot mode the layout is shifted up by 0.25 to make
+            # room for the real arm control panel at the bottom.
+            _Y = 0.25 if self._real_robot_mode else 0.0   # vertical offset
+
+            ax_radio = fig.add_axes([0.65, 0.71 + _Y, 0.14, 0.21])
             self._radio = RadioButtons(ax_radio, MODES, active=MODES.index(self._mode))
             self._radio.on_clicked(self._on_mode)
 
             self._slider_w, self._tb_w = _make_slider_row(
-                "Width / Diameter (mm):", 0.665, 0.630, wmin_mm, wmax_mm,
+                "Width / Diameter (mm):", 0.665 + _Y, 0.630 + _Y, wmin_mm, wmax_mm,
                 self._width_m * 1000, 1.0)
             self._slider_z, self._tb_z = _make_slider_row(
-                "Grasp Z (mm):", 0.575, 0.540, -200.0, 200.0,
+                "Grasp Z (mm):", 0.575 + _Y, 0.540 + _Y, -200.0, 200.0,
                 self._grasp_z * 1000, 5.0)
             self._slider_x, self._tb_x = _make_slider_row(
-                "Grasp X (mm, UR5 world):", 0.485, 0.450, -850.0, 850.0,
+                "Grasp X (mm, UR5 world):", 0.485 + _Y, 0.450 + _Y, -850.0, 850.0,
                 self._grasp_x * 1000, 5.0)
             self._slider_y, self._tb_y = _make_slider_row(
-                "Grasp Y (mm, UR5 world):", 0.395, 0.360, -850.0, 850.0,
+                "Grasp Y (mm, UR5 world):", 0.395 + _Y, 0.360 + _Y, -850.0, 850.0,
                 self._grasp_y * 1000, 5.0)
 
-            _section_label(0.325, "── Plane orientation ──")
+            _section_label(0.325 + _Y, "── Plane orientation ──")
 
             self._slider_rx, self._tb_rx = _make_slider_row(
-                "Plane Rx (°):", 0.295, 0.260, -180.0, 180.0, 0.0, 1.0)
+                "Plane Rx (°):", 0.295 + _Y, 0.260 + _Y, -180.0, 180.0, 0.0, 1.0)
             self._slider_ry, self._tb_ry = _make_slider_row(
-                "Plane Ry (°):", 0.205, 0.170, -180.0, 180.0, 0.0, 1.0)
+                "Plane Ry (°):", 0.205 + _Y, 0.170 + _Y, -180.0, 180.0, 0.0, 1.0)
             self._slider_rz, self._tb_rz = _make_slider_row(
-                "Plane Rz (°):", 0.115, 0.080, -180.0, 180.0, 0.0, 1.0)
+                "Plane Rz (°):", 0.115 + _Y, 0.080 + _Y, -180.0, 180.0, 0.0, 1.0)
 
             _wire(self._slider_w,  self._tb_w,  self._on_width)
             _wire(self._slider_z,  self._tb_z,  self._on_z)
@@ -957,7 +1136,7 @@ class GraspViz:
             _wire(self._slider_ry, self._tb_ry, self._on_plane_ry)
             _wire(self._slider_rz, self._tb_rz, self._on_plane_rz)
 
-            btn_y = 0.010
+            btn_y = 0.010 + _Y
             # Top row: Hand viewers
             ax_h_ours = fig.add_axes([0.65,               btn_y + _BH + 0.006, _BW, _BH])
             ax_h_mink = fig.add_axes([0.65 + _BW + _GAP,  btn_y + _BH + 0.006, _BW, _BH])
@@ -974,6 +1153,81 @@ class GraspViz:
                                       "Robot: Mink" if _mink_ready else "Robot: Mink (N/A)")
             self._btn_r_ours.on_clicked(lambda _e: self._launch_robot_viewer_ours())
             self._btn_r_mink.on_clicked(lambda _e: self._launch_robot_viewer_mink())
+
+            # ---- Real Robot Control panel (only in --real-robot mode) ----
+            if self._real_robot_mode:
+                _arm_connected = self._arm is not None and self._arm.connected
+
+                _section_label(0.222, "── Real Robot Control ──")
+
+                # Row 1: Teach Mode + Set Pose from Robot
+                ax_teach   = fig.add_axes([0.65,              0.182, _BW, _BH])
+                ax_setpose = fig.add_axes([0.65 + _BW + _GAP, 0.182, _BW, _BH])
+                self._btn_teach   = Button(ax_teach,   "Teach Mode")
+                self._btn_setpose = Button(ax_setpose, "Set Pose from Robot")
+                self._btn_teach.on_clicked(self._on_teach_mode)
+                self._btn_setpose.on_clicked(self._on_set_pose_from_robot)
+
+                # Row 2: Send to Robot (Arm) + Simulate Trajectory
+                ax_sendarm = fig.add_axes([0.65,              0.144, _BW, _BH])
+                ax_simtraj = fig.add_axes([0.65 + _BW + _GAP, 0.144, _BW, _BH])
+                self._btn_sendarm = Button(ax_sendarm, "Send to Robot (Arm)")
+                self._btn_simtraj = Button(ax_simtraj, "Simulate Trajectory")
+                self._btn_sendarm.on_clicked(self._on_send_arm)
+                self._btn_simtraj.on_clicked(self._on_simulate_trajectory)
+
+                # Grasp controls label
+                _section_label(0.114, "── Grasp Controls ──")
+
+                # Grasp Strategy radio (3 items, horizontal layout via fig width)
+                ax_strategy = fig.add_axes([0.65, 0.053, 0.155, 0.058])
+                self._radio_strategy = RadioButtons(
+                    ax_strategy,
+                    ["Naive", "Plan", "Thumb Reflex"],
+                    active=["Naive", "Plan", "Thumb Reflex"].index(self._grasp_strategy),
+                )
+                self._radio_strategy.on_clicked(self._on_strategy)
+
+                # Force (N) label + textbox
+                ax_f_lbl = fig.add_axes([0.812, 0.090, 0.08, 0.022])
+                ax_f_lbl.axis("off")
+                ax_f_lbl.text(0.0, 0.5, "Force (N):", fontsize=7.5)
+                ax_f_tb  = fig.add_axes([0.812, 0.065, 0.08, 0.022])
+                self._tb_grasp_force = TextBox(ax_f_tb, "", initial="0")
+
+                # Step (mm) label + textbox
+                ax_s_lbl = fig.add_axes([0.812, 0.042, 0.08, 0.022])
+                ax_s_lbl.axis("off")
+                ax_s_lbl.text(0.0, 0.5, "Step (mm):", fontsize=7.5)
+                ax_s_tb  = fig.add_axes([0.812, 0.018, 0.08, 0.022])
+                self._tb_grasp_step = TextBox(ax_s_tb, "", initial="10")
+
+                # GRASP! button (full width)
+                ax_grasp = fig.add_axes([0.65, 0.005, 0.32, 0.042])
+                self._btn_grasp = Button(ax_grasp, "GRASP!")
+                self._btn_grasp.ax.set_facecolor("#2ecc71")
+                self._btn_grasp.on_clicked(self._on_grasp)
+
+                # Status text area
+                ax_status = fig.add_axes([0.65, 0.050, 0.155, 0.055])
+                ax_status.axis("off")
+                self._ws_status_text = ax_status.text(
+                    0.0, 1.0, "",
+                    fontsize=6.5, family="monospace",
+                    verticalalignment="top", wrap=True,
+                    transform=ax_status.transAxes,
+                )
+
+                # Grey out arm buttons if not connected
+                if not _arm_connected:
+                    for btn in [self._btn_teach, self._btn_setpose,
+                                self._btn_sendarm, self._btn_grasp]:
+                        btn.ax.set_facecolor("#cccccc")
+                    self._update_status(
+                        "No UR5 connection. Use --ur5-ip to connect.")
+
+                # Start status queue polling timer
+                self._poll_status_queue()
 
         else:
             # ---- Standard mode: Width + Z + Rx + Ry + Rz (5 rows) ----
@@ -1015,7 +1269,10 @@ class GraspViz:
 
         # ---- Send-to-real checkbox (only if hand is connected) ----
         if self._hand is not None:
-            ax_real = fig.add_axes([0.65, btn_y + 2 * (_BH + 0.008), 0.06, 0.050])
+            # In robot modes btn_y is set inside the if block above; in hand-only
+            # mode it is set further below.  Use a safe fallback if not yet defined.
+            _check_y = locals().get("btn_y", 0.080) + 2 * (_BH + 0.008)
+            ax_real = fig.add_axes([0.65, _check_y, 0.06, 0.050])
             self._check_real = CheckButtons(
                 ax_real, ["Send\nto Real"], [self._send_real])
             self._check_real.on_clicked(self._on_send_real)
@@ -1042,11 +1299,34 @@ class GraspViz:
         self._slider_w.ax.set_xlim(wmin_mm, wmax_mm)
         self._recompute()
         self._update_plot()
+        self._update_cylinder_guard()
 
     def _on_width(self, val: float):
         self._width_m = float(val) / 1000.0
         self._recompute()
         self._update_plot()
+        self._update_cylinder_guard()
+
+    def _update_cylinder_guard(self):
+        """Grey out GRASP! and Send-to-Robot when cylinder < 71 mm."""
+        if not self._real_robot_mode or not hasattr(self, "_btn_grasp"):
+            return
+        bad = self._is_cylinder_bad()
+        color = "#cccccc" if bad else "#2ecc71"
+        self._btn_grasp.ax.set_facecolor(color)
+        color_arm = "#cccccc" if bad else "white"
+        if hasattr(self, "_btn_sendarm"):
+            self._btn_sendarm.ax.set_facecolor(color_arm)
+        if bad:
+            self._update_status(
+                f"WARN: cylinder {self._width_m*2000:.0f}mm < 71mm — "
+                "power grasp disabled"
+            )
+        try:
+            import matplotlib.pyplot as plt
+            plt.draw()
+        except Exception:
+            pass
 
     def _on_z(self, val: float):
         self._grasp_z = float(val) / 1000.0
@@ -1082,6 +1362,176 @@ class GraspViz:
         self._send_real = not self._send_real
         if self._send_real:
             self._send_real_hand()
+
+    def _on_strategy(self, label: str):
+        """Grasp strategy radio callback."""
+        self._grasp_strategy = label
+
+    def _on_teach_mode(self, _event):
+        """Toggle teach mode on the real UR5."""
+        if self._arm is None:
+            self._update_status("No UR5 connected.")
+            return
+        if self._teach_mode:
+            self._arm.disable_teach_mode()
+            self._teach_mode = False
+            self._btn_teach.label.set_text("Teach Mode")
+            self._btn_teach.ax.set_facecolor("white")
+        else:
+            self._arm.enable_teach_mode()
+            self._teach_mode = True
+            self._btn_teach.label.set_text("TEACH MODE ACTIVE")
+            self._btn_teach.ax.set_facecolor("#ff4444")
+        import matplotlib.pyplot as plt
+        plt.draw()
+
+    def _on_set_pose_from_robot(self, _event):
+        """Read current UR5 TCP pose and update grasp sliders."""
+        if self._arm is None:
+            self._update_status("No UR5 connected.")
+            return
+        # Works even in teach mode (read-only)
+        with self._state_lock:
+            r = self._result
+        params = self._arm.decode_tcp_to_grasp_params(current_result=r)
+        if not params:
+            self._update_status("Failed to read arm pose.")
+            return
+        self._grasp_x   = params["grasp_x"]
+        self._grasp_y   = params["grasp_y"]
+        self._grasp_z   = params["grasp_z"]
+        self._plane_rx  = params["plane_rx"]
+        self._plane_ry  = params["plane_ry"]
+        self._plane_rz  = params["plane_rz"]
+        # Sync sliders
+        self._slider_x.set_val(self._grasp_x * 1000)
+        self._slider_y.set_val(self._grasp_y * 1000)
+        self._slider_z.set_val(self._grasp_z * 1000)
+        self._slider_rx.set_val(np.degrees(self._plane_rx))
+        self._slider_ry.set_val(np.degrees(self._plane_ry))
+        self._slider_rz.set_val(np.degrees(self._plane_rz))
+        self._push_viewer_ctrl()
+        self._update_plot()
+        self._update_status(
+            f"Pose set from robot: "
+            f"X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} "
+            f"Z={self._grasp_z*1000:.0f} mm"
+        )
+
+    def _on_send_arm(self, _event):
+        """Move the real UR5 arm to the current planned grasp pose."""
+        if self._arm is None:
+            self._update_status("No UR5 connected.")
+            return
+        if self._teach_mode:
+            self._update_status("BLOCKED: teach mode is active.")
+            return
+        if self._is_cylinder_bad():
+            self._update_status(
+                "BLOCKED: cylinder < 71 mm — power grasp disabled.")
+            return
+        with self._state_lock:
+            r = self._result
+        if r is None:
+            self._update_status("No grasp result — adjust sliders first.")
+            return
+        world_T_hand = self._build_world_T_hand(r)
+        warns = self._arm.check_pose_workspace(world_T_hand)
+        for w in warns:
+            self._update_status(w)
+        # Move arm only (no fingers)
+        self._update_status("Moving arm to planned pose...")
+        self._real_tracking.value = 0   # viewer shows planned pose
+        def _do_move():
+            warns2 = self._arm.move_to_hand_pose(world_T_hand, blocking=True)
+            for w in warns2:
+                self._status_queue.put(w)
+            self._arm.snapshot_joints(self._real_q_arr)
+            self._real_tracking.value = 1
+            self._status_queue.put("Arm move complete.")
+        t = threading.Thread(target=_do_move, daemon=True, name="arm-move")
+        t.start()
+
+    def _on_simulate_trajectory(self, _event):
+        """Show planned grasp pose in the robot sim viewer (mink IK mode)."""
+        self._real_tracking.value = 0   # viewer uses mink IK (planned pose)
+        self._launch_robot_viewer_ours()
+        self._push_viewer_ctrl()
+        self._update_status("Sim viewer open — showing planned trajectory.")
+
+    def _on_grasp(self, _event):
+        """Execute the selected grasp strategy on the real robot."""
+        if self._arm is None:
+            self._update_status("No UR5 connected.")
+            return
+        if self._teach_mode:
+            self._update_status("BLOCKED: teach mode is active.")
+            return
+        if self._is_cylinder_bad():
+            self._update_status(
+                "BLOCKED: cylinder < 71 mm — power grasp disabled.")
+            return
+        if self._executor is None:
+            self._update_status("GraspExecutor not available (hand connected?)")
+            return
+        if self._executor.is_running():
+            self._update_status("Executor busy — abort first.")
+            return
+        with self._state_lock:
+            r = self._result
+        if r is None:
+            self._update_status("No grasp result.")
+            return
+
+        try:
+            force_N  = float(self._tb_grasp_force.text.strip() or "0")
+            step_mm  = float(self._tb_grasp_step.text.strip()  or "10")
+        except ValueError:
+            force_N, step_mm = 0.0, 10.0
+
+        world_T_hand = self._build_world_T_hand(r)
+        warns = self._arm.check_pose_workspace(world_T_hand)
+        for w in warns:
+            self._update_status(w)
+
+        # Enable real hand send automatically during grasp
+        self._send_real = True
+
+        # Switch viewer to planned pose while executing
+        self._real_tracking.value = 0
+        strategy = self._grasp_strategy
+
+        def _post_grasp():
+            """Called from executor callbacks after completion."""
+            self._arm.snapshot_joints(self._real_q_arr)
+            self._real_tracking.value = 1
+
+        # Update GRASP button appearance during execution
+        self._btn_grasp.ax.set_facecolor("#e67e22")
+        self._btn_grasp.label.set_text("RUNNING…")
+
+        def _on_done(msg):
+            self._status_queue.put(msg)
+            if "complete" in msg.lower() or "aborted" in msg.lower():
+                _post_grasp()
+                self._status_queue.put("__reset_grasp_btn__")
+
+        orig_status_cb = self._executor._status
+
+        def _wrapped_status(msg):
+            orig_status_cb(msg)
+            _on_done(msg)
+
+        self._executor._status = _wrapped_status
+
+        if strategy == "Naive":
+            self._executor.execute_naive(world_T_hand, force_N, move_arm=True)
+        elif strategy == "Plan":
+            self._executor.execute_plan(r, world_T_hand, force_N, step_mm, move_arm=True)
+        else:  # Thumb Reflex
+            self._executor.execute_thumb_reflex(r, world_T_hand, force_N, move_arm=True)
+
+        self._update_status(f"[{strategy}] grasp started…")
 
     # ------------------------------------------------------------------
     # 3D plot update
@@ -1271,6 +1721,12 @@ def main():
                         help="Start with Send-to-Real enabled (requires --port)")
     parser.add_argument("--no-mink", action="store_true",
                         help="Disable mink IK comparison planner (faster startup)")
+    parser.add_argument("--real-robot", action="store_true",
+                        help="Enable real UR5 arm control panel (requires --ur5-ip)")
+    parser.add_argument("--ur5-ip", default=None,
+                        help="UR5 robot IP address (e.g. 192.168.0.4)")
+    parser.add_argument("--ur5-speed", type=float, default=0.10,
+                        help="UR5 arm linear speed in m/s (default 0.10)")
     args = parser.parse_args()
 
     viz = GraspViz(
@@ -1280,6 +1736,9 @@ def main():
         robot_mode=args.robot,
         send_real=args.send_real,
         mink_viz=not args.no_mink,
+        real_robot=args.real_robot,
+        ur5_ip=args.ur5_ip,
+        ur5_speed=args.ur5_speed,
     )
     viz.run()
 
