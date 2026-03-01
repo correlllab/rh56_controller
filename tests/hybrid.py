@@ -324,12 +324,11 @@ def main():
             cmd_speed_all(int(HYBRID_CONTACT_SPEED))
             cmd_angles(DEFAULT_CLOSE_ANGLES)
 
-        # Stability detection
+        # Peak detection: track running max after trigger, end when max stops increasing for STABLE_WINDOW_S.
         t0 = time.time()
         seen_trigger = False
-        buf: Deque[Tuple[float, int]] = deque()
-
-        min_samples = max(5, int((STABLE_WINDOW_S / LOG_DT) * 0.5))
+        max_g = -(10**9)
+        t_last_new_max: Optional[float] = None
 
         while (time.time() - t0) < TRIAL_TIMEOUT_S:
             if stop_event.is_set():
@@ -344,24 +343,18 @@ def main():
             now = time.time()
 
             if g >= FORCE_TRIGGER_G:
-                seen_trigger = True
+                if not seen_trigger:
+                    seen_trigger = True
+                    max_g = g
+                    t_last_new_max = now
+                else:
+                    if g > (max_g + MAX_REFRESH_EPS_G):
+                        max_g = g
+                        t_last_new_max = now
 
-            if seen_trigger:
-                buf.append((now, g))
-                # drop old
-                cutoff = now - STABLE_WINDOW_S
-                while buf and buf[0][0] < cutoff:
-                    buf.popleft()
-
-                if len(buf) >= min_samples:
-                    window_forces = [x[1] for x in buf]
-                    if force_is_stable_over_window(
-                        window_forces,
-                        target=int(FORCE_TARGET_G),
-                        band=int(STABLE_BAND_G),
-                        frac_in_band=float(STABLE_FRAC_IN_BAND),
-                    ):
-                        return True
+            if seen_trigger and (t_last_new_max is not None):
+                if (now - t_last_new_max) >= STABLE_WINDOW_S:
+                    return True
 
             time.sleep(0.01)
 
