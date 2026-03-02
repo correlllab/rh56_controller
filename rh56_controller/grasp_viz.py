@@ -151,6 +151,22 @@ def _Rz(a: float) -> np.ndarray:
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
+def _mat_to_xyz_euler(R: np.ndarray):
+    """Extract (a, b, c) s.t. Rx(a) @ Ry(b) @ Rz(c) = R (XYZ intrinsic Euler).
+
+    Module-level so it is accessible inside subprocess workers.
+    """
+    b = float(np.arcsin(np.clip(R[0, 2], -1.0, 1.0)))
+    cb = np.cos(b)
+    if abs(cb) > 1e-6:
+        a = float(np.arctan2(-R[1, 2], R[2, 2]))
+        c = float(np.arctan2(-R[0, 1], R[0, 0]))
+    else:
+        a = float(np.arctan2(R[2, 1], R[1, 1]))
+        c = 0.0
+    return a, b, c
+
+
 # ===========================================================================
 # Viewer subprocess shared-memory layout and worker functions
 #
@@ -212,9 +228,17 @@ def _worker_jnt_map(model: mujoco.MjModel) -> dict:
 
 def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
                         model: mujoco.MjModel) -> None:
-    """Apply 12-element ctrl vector to qpos with joint coupling (worker version)."""
-    pos_x, pos_y, pos_z, rot_x, rot_y, rot_z = ctrl[0:6]
-    pinky, ring, middle, index, pitch, yaw     = ctrl[6:12]
+    """Apply 12-element ctrl vector to qpos with joint coupling (worker version).
+
+    ctrl[3:6] are XYZ Euler angles in the robot world frame.  inspire_grasp_scene.xml
+    now has identity base orientation (no Rx offset), so ctrl encodes the hand
+    orientation directly.
+    """
+    pos_x, pos_y, pos_z = ctrl[0], ctrl[1], ctrl[2]
+    pinky, ring, middle, index, pitch, yaw = ctrl[6:12]
+
+    R_ctrl = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+    rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_ctrl)
 
     data.qpos[jm["pos_x"]] = pos_x;  data.qpos[jm["pos_y"]] = pos_y
     data.qpos[jm["pos_z"]] = pos_z;  data.qpos[jm["rot_x"]] = rot_x
@@ -751,16 +775,7 @@ class GraspViz:
     @staticmethod
     def _mat_to_xyz_euler(R: np.ndarray):
         """Extract (a, b, c) s.t. Rx(a) @ Ry(b) @ Rz(c) = R (XYZ intrinsic Euler)."""
-        b = float(np.arcsin(np.clip(R[0, 2], -1.0, 1.0)))
-        cb = np.cos(b)
-        if abs(cb) > 1e-6:
-            a = float(np.arctan2(-R[1, 2], R[2, 2]))
-            c = float(np.arctan2(-R[0, 1], R[0, 0]))
-        else:
-            # Gimbal lock: b = ±π/2
-            a = float(np.arctan2(R[2, 1], R[1, 1]))
-            c = 0.0
-        return a, b, c
+        return _mat_to_xyz_euler(R)
 
     # ------------------------------------------------------------------
     # Real-robot helpers
@@ -1502,16 +1517,7 @@ class GraspViz:
         plt.draw()
 
     def _on_set_pose_from_robot(self, _event):
-        """Read current UR5 TCP pose and update grasp sliders.
-
-        decode_tcp_to_grasp_params returns the actual hand-base world position.
-        We correct for the grasp geometry midpoint offset so that ctrl[0:3]
-        (used by both the hand-only and robot sims) equals the real hand-base
-        position, aligning both viewers with the physical robot pose.
-
-        Math: ctrl[i] = grasp_x/y/z - mid_w[i]  (from _build_ctrl_array)
-        To get ctrl == hand_pos:  grasp_x/y/z = hand_pos + mid_w
-        """
+        """Read current UR5 TCP pose and update grasp sliders."""
         if self._arm is None:
             self._update_status("No UR5 connected.")
             return
@@ -1522,23 +1528,12 @@ class GraspViz:
         if not params:
             self._update_status("Failed to read arm pose.")
             return
-        # Update plane orientation first — needed for the R_full below.
-        self._plane_rx  = params["plane_rx"]
-        self._plane_ry  = params["plane_ry"]
-        self._plane_rz  = params["plane_rz"]
-        # Correct hand-base world position for grasp geometry midpoint offset.
-        hand_pos = np.array([params["grasp_x"], params["grasp_y"], params["grasp_z"]])
-        if r is not None:
-            # R_full (using just-decoded plane orientation) ≈ world_T_hand[:3,:3]
-            R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
-            mid_w  = R_full @ r.midpoint
-            self._grasp_x = float(hand_pos[0] + mid_w[0])
-            self._grasp_y = float(hand_pos[1] + mid_w[1])
-            self._grasp_z = float(hand_pos[2] + mid_w[2])
-        else:
-            self._grasp_x = float(hand_pos[0])
-            self._grasp_y = float(hand_pos[1])
-            self._grasp_z = float(hand_pos[2])
+        self._grasp_x  = params["grasp_x"]
+        self._grasp_y  = params["grasp_y"]
+        self._grasp_z  = params["grasp_z"]
+        self._plane_rx = params["plane_rx"]
+        self._plane_ry = params["plane_ry"]
+        self._plane_rz = params["plane_rz"]
         # Sync sliders
         self._slider_x.set_val(self._grasp_x * 1000)
         self._slider_y.set_val(self._grasp_y * 1000)
@@ -1554,9 +1549,7 @@ class GraspViz:
         self._update_plot()
         self._update_status(
             f"Pose set: hand({params['grasp_x']*1000:.0f},"
-            f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm "
-            f"→ sliders X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f} "
-            f"Z={self._grasp_z*1000:.0f} mm"
+            f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm"
         )
 
     def _on_send_arm(self, _event):
