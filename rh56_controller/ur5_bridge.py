@@ -36,6 +36,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
 _WRIST3_TO_HAND_POS  = np.array([0.0, 0.0, 0.156])
+# _WRIST3_TO_HAND_POS  = np.array([-0.070, -0.016, 0.155])
 # _WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])
 _WRIST3_TO_HAND_QUAT = np.array([0.7071068, 0, 0, 0.7071068])
 
@@ -336,6 +337,14 @@ class UR5Bridge:
                 R_tilt  = ClosureResult._rot_matrix(current_result.base_tilt_y)
                 R_plane = R_hand @ R_tilt.T
                 plane_rx, plane_ry, plane_rz = GraspViz._mat_to_xyz_euler(R_plane)
+
+                # Invert _build_world_T_hand: hand_base = [-mid_w[0] + gx,
+                #   -mid_w[1] + gy, gz - mid_w[2]].  Recover slider coords:
+                #   gx = hand_base_X + mid_w[0], etc.
+                mid_w = R_hand @ current_result.midpoint
+                grasp_x = float(world_T_hand[0, 3]) + mid_w[0]
+                grasp_y = float(world_T_hand[1, 3]) + mid_w[1]
+                grasp_z = float(world_T_hand[2, 3]) + mid_w[2]
             except Exception as e:
                 print(f"[UR5Bridge] Plane orientation decode failed: {e}")
 

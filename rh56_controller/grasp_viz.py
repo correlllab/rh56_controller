@@ -651,7 +651,9 @@ class GraspViz:
         # ---- Real robot arm (UR5) state ----
         self._arm      = None   # UR5Bridge (set below if real_robot)
         self._executor = None   # GraspExecutor (set below if arm + hand)
-        self._teach_mode   = False
+        self._teach_mode           = False
+        self._manual_teach_override = False   # True when user explicitly enabled teach mode
+        self._approach_width_m: Optional[float] = None  # width at last "Send Arm" press
         self._grasp_strategy = "Plan"   # Naive / Plan / Thumb Reflex
         self._grasp_force_N  = 0.0
         self._grasp_step_mm  = 10.0
@@ -821,6 +823,7 @@ class GraspViz:
                 elif msg == "__reset_teach_btn__":
                     # Auto-disabled teach mode (sim viewer closed while in teach mode)
                     self._teach_mode = False
+                    self._manual_teach_override = False
                     if hasattr(self, "_btn_teach"):
                         self._btn_teach.label.set_text("Teach Mode")
                         self._btn_teach.ax.set_facecolor("white")
@@ -843,7 +846,7 @@ class GraspViz:
         def _monitor():
             while True:
                 time.sleep(2.0)
-                if not self._teach_mode or self._arm is None:
+                if not self._teach_mode or self._arm is None or self._manual_teach_override:
                     continue
                 any_open = any(
                     p is not None and p.is_alive()
@@ -1501,11 +1504,13 @@ class GraspViz:
         if self._teach_mode:
             self._arm.disable_teach_mode()
             self._teach_mode = False
+            self._manual_teach_override = False
             self._btn_teach.label.set_text("Teach Mode")
             self._btn_teach.ax.set_facecolor("white")
         else:
             self._arm.enable_teach_mode()
             self._teach_mode = True
+            self._manual_teach_override = True   # prevent viewer monitor from auto-disabling
             self._btn_teach.label.set_text("TEACH MODE ACTIVE")
             self._btn_teach.ax.set_facecolor("#ff4444")
         import matplotlib.pyplot as plt
@@ -1568,6 +1573,9 @@ class GraspViz:
         warns = self._arm.check_pose_workspace(world_T_hand)
         for w in warns:
             self._update_status(w)
+        # Record approach width so Plan strategy can compute width-space waypoints
+        self._approach_width_m = self._width_m
+
         # Move arm only (no fingers)
         self._update_status("Moving arm to planned pose...")
         self._real_tracking.value = 0   # viewer shows planned pose
@@ -1606,6 +1614,45 @@ class GraspViz:
             self._status_queue.put("Sim grasp complete.")
 
         threading.Thread(target=_animate, daemon=True, name="sim-grasp").start()
+
+    def _compute_plan_closures(self, step_mm: float, r_target):
+        """Compute list of ClosureResult for width-space Plan waypoints.
+
+        Steps from self._approach_width_m (set by last "Send Arm" press) down
+        to r_target.width in step_mm increments.  If approach_width is unset,
+        falls back to the current mode's maximum width.
+
+        Returns a list ending exactly at r_target.
+        """
+        import math
+        width_end = r_target.width
+        width_start = (
+            self._approach_width_m
+            if self._approach_width_m is not None
+            else self._width_range[1]
+        )
+        # Approach must be at least one step wider than target
+        if width_start <= width_end:
+            return [r_target]
+
+        step_m = max(step_mm / 1000.0, 1e-4)
+        N = max(1, int(math.ceil((width_start - width_end) / step_m)))
+
+        closures = []
+        for i in range(1, N + 1):
+            t = i / N
+            w_i = width_start + t * (width_end - width_start)
+            try:
+                r_i = self.closure.solve(self._mode, w_i)
+            except Exception:
+                r_i = None
+            if r_i is not None:
+                closures.append(r_i)
+
+        # Always end with the exact target result
+        if not closures or closures[-1] is not r_target:
+            closures.append(r_target)
+        return closures
 
     def _on_grasp(self, _event):
         """Execute the selected grasp strategy on the real robot."""
@@ -1675,7 +1722,13 @@ class GraspViz:
         if strategy == "Naive":
             self._executor.execute_naive(world_T_hand, force_N, move_arm=True)
         elif strategy == "Plan":
-            self._executor.execute_plan(r, world_T_hand, force_N, step_mm, move_arm=True)
+            closures = self._compute_plan_closures(step_mm, r)
+            waypoints = [
+                (self._build_world_T_hand(r_i), r_i) for r_i in closures
+            ]
+            self._executor.execute_plan_waypoints(
+                waypoints, force_N, move_arm=True,
+            )
         else:  # Thumb Reflex
             self._executor.execute_thumb_reflex(r, world_T_hand, force_N, move_arm=True)
 

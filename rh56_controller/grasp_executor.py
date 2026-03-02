@@ -108,6 +108,19 @@ class GraspExecutor:
             closure_result, world_T_hand, force_N, step_mm, move_arm,
         )
 
+    def execute_plan_waypoints(
+        self,
+        waypoints,
+        force_N: float = 0.0,
+        move_arm: bool = True,
+    ):
+        """Start a width-space Plan grasp from pre-computed waypoints.
+
+        waypoints: list of (world_T_hand: np.ndarray, closure_result) pairs,
+                   ordered from approach width down to final grip width.
+        """
+        self._start(self._run_plan_waypoints, waypoints, force_N, move_arm)
+
     def execute_thumb_reflex(
         self,
         closure_result,
@@ -278,6 +291,75 @@ class GraspExecutor:
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Plan: entering force phase ({force_N:.1f} N)...")
             self._adaptive_force_phase(closure_result.ctrl_values, force_N)
+
+        self._status("Plan: complete.")
+
+    # ------------------------------------------------------------------
+    # Plan strategy — width-space waypoints
+    # ------------------------------------------------------------------
+    def _run_plan_waypoints(
+        self,
+        waypoints,
+        force_N: float,
+        move_arm: bool,
+    ):
+        """
+        Width-space Plan grasp: each waypoint is a (world_T_hand, closure_result)
+        pair, ordered from approach width down to final grip width.
+
+        Execution per step:
+          1. Arm moves to intermediate pose (blocking).
+          2. Fingers sent to config at that width.
+
+        Thumb yaw is set to its final value BEFORE the first arm move and held
+        fixed throughout — only flex joints (pinky/ring/middle/index/thumb_bend)
+        vary with width.
+        """
+        if not waypoints:
+            self._status("Plan: no waypoints — aborted.")
+            return
+
+        n = len(waypoints)
+        final_cmd = self._ctrl_to_real(waypoints[-1][1].ctrl_values)
+
+        # Pre-set thumb yaw to the final value before any arm motion.
+        thumb_init = [1000, 1000, 1000, 1000, 1000, final_cmd[5]]
+        self._status("Plan: pre-setting thumb yaw...")
+        try:
+            self._hand.angle_set(thumb_init)
+            time.sleep(0.3)
+        except Exception as e:
+            self._status(f"Plan: thumb yaw init error: {e}")
+
+        self._status(
+            f"Plan: {n} width-space step(s), "
+            f"width {waypoints[0][1].width*1000:.1f}→{waypoints[-1][1].width*1000:.1f} mm"
+        )
+
+        for i, (wp_T, r_i) in enumerate(waypoints):
+            if self._abort.is_set():
+                self._status("Plan: aborted.")
+                return
+
+            cmd = self._ctrl_to_real(r_i.ctrl_values)
+            cmd[5] = final_cmd[5]   # thumb yaw stays fixed at final value
+
+            if move_arm:
+                warns = self._arm.move_to_hand_pose(wp_T, blocking=True)
+                for w in warns:
+                    self._status(w)
+            try:
+                self._hand.angle_set(cmd)
+            except Exception as e:
+                self._status(f"Plan: finger error at step {i+1}: {e}")
+
+            self._status(
+                f"Plan: step {i+1}/{n} (width={r_i.width*1000:.1f}mm)"
+            )
+
+        if force_N > 0.0 and not self._abort.is_set():
+            self._status(f"Plan: entering force phase ({force_N:.1f} N)...")
+            self._adaptive_force_phase(waypoints[-1][1].ctrl_values, force_N)
 
         self._status("Plan: complete.")
 
