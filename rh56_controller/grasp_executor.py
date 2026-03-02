@@ -199,7 +199,7 @@ class GraspExecutor:
         # Fixed naive posture [pinky, ring, middle, index, thumb_bend, thumb_yaw]
         # 750 ≈ 75% closed for fingers; 740 ≈ 74% for thumb_bend;
         # 0 = thumb_yaw max adduction (INVERTED: 0 → ctrl_max)
-        naive_cmd = [750, 750, 750, 750, 740, 0]
+        naive_cmd = [504, 496, 467, 500, 479, 0]
         self._status("Naive: closing fingers to pinch posture...")
         try:
             self._hand.angle_set(naive_cmd)
@@ -403,7 +403,7 @@ class GraspExecutor:
             self._status(f"Thumb Reflex: thumb error: {e}")
             return
 
-        time.sleep(0.5)  # wait for thumb to reach position
+        time.sleep(0.2)  # wait for thumb to reach position
 
         if self._abort.is_set():
             self._status("Thumb Reflex: aborted.")
