@@ -7,10 +7,10 @@ Three strategies:
   Thumb Reflex — Arm moves to final pose; thumb positions first; then all
                  fingers close; optional adaptive force phase at end.
 
-All execution runs in a background thread so the matplotlib UI stays
+All execution runs in a background thread so the tkinter UI stays
 responsive.  Status messages and live force readings are delivered via
 callbacks (called from the executor thread — the UI must be thread-safe,
-e.g. drain messages via a queue + timer as done in GraspViz).
+e.g. drain messages via a queue + timer as done in GraspVizUI).
 
 Arm + force coordination:
     moveL is always called with blocking=True, so each arm chunk finishes
@@ -38,6 +38,20 @@ _FORCE_CALIB = {
     2: (0.006452,  0.018),   # middle
     4: (0.012547,  0.384),   # thumb (bend)
 }
+
+# Inverse calibration: Newton → raw integer [0..1000]
+# raw = (F_N - b) / a, clamped to [0, 1000]
+_FORCE_CALIB_INV = {
+    3: lambda N: max(0, min(1000, int((N - (-0.414)) / 0.007478))),  # index
+    2: lambda N: max(0, min(1000, int((N - 0.018) / 0.006452))),     # middle
+    4: lambda N: max(0, min(1000, int((N - 0.384) / 0.012547))),     # thumb_bend
+}
+
+# Fallback for fingers without calibration (ring, pinky)
+def _force_N_to_raw(finger_idx: int, force_N: float) -> int:
+    if finger_idx in _FORCE_CALIB_INV:
+        return _FORCE_CALIB_INV[finger_idx](force_N)
+    return int(force_N * 1000 / 9.81)
 
 
 class GraspExecutor:
@@ -90,9 +104,12 @@ class GraspExecutor:
         world_T_hand: np.ndarray,
         force_N: float = 0.0,
         move_arm: bool = True,
+        active_fingers: Optional[List[int]] = None,
+        logger=None,
     ):
         """Start a Naive grasp in a background thread."""
-        self._start(self._run_naive, world_T_hand, force_N, move_arm)
+        self._start(self._run_naive, world_T_hand, force_N, move_arm,
+                    active_fingers, logger)
 
     def execute_plan(
         self,
@@ -101,11 +118,14 @@ class GraspExecutor:
         force_N: float = 0.0,
         step_mm: float = 10.0,
         move_arm: bool = True,
+        active_fingers: Optional[List[int]] = None,
+        logger=None,
     ):
         """Start a Plan grasp in a background thread."""
         self._start(
             self._run_plan,
             closure_result, world_T_hand, force_N, step_mm, move_arm,
+            active_fingers, logger,
         )
 
     def execute_plan_waypoints(
@@ -113,13 +133,16 @@ class GraspExecutor:
         waypoints,
         force_N: float = 0.0,
         move_arm: bool = True,
+        active_fingers: Optional[List[int]] = None,
+        logger=None,
     ):
         """Start a width-space Plan grasp from pre-computed waypoints.
 
         waypoints: list of (world_T_hand: np.ndarray, closure_result) pairs,
                    ordered from approach width down to final grip width.
         """
-        self._start(self._run_plan_waypoints, waypoints, force_N, move_arm)
+        self._start(self._run_plan_waypoints, waypoints, force_N, move_arm,
+                    active_fingers, logger)
 
     def execute_thumb_reflex(
         self,
@@ -127,11 +150,14 @@ class GraspExecutor:
         world_T_hand: np.ndarray,
         force_N: float = 0.0,
         move_arm: bool = True,
+        active_fingers: Optional[List[int]] = None,
+        logger=None,
     ):
         """Start a Thumb Reflex grasp in a background thread."""
         self._start(
             self._run_thumb_reflex,
             closure_result, world_T_hand, force_N, move_arm,
+            active_fingers, logger,
         )
 
     # ------------------------------------------------------------------
@@ -174,6 +200,41 @@ class GraspExecutor:
         return [1000] * 6
 
     # ------------------------------------------------------------------
+    # EEF error helpers
+    # ------------------------------------------------------------------
+    def _eef_error(self, desired_T: np.ndarray, actual_T: np.ndarray):
+        """
+        Compute position error (mm) and rotation error (deg) between two 4×4
+        homogeneous transforms.
+        """
+        pos_err = float(np.linalg.norm(actual_T[:3, 3] - desired_T[:3, 3]) * 1000)
+        R_err   = actual_T[:3, :3].T @ desired_T[:3, :3]
+        cos_a   = float(np.clip((np.trace(R_err) - 1) / 2, -1.0, 1.0))
+        rot_err = float(np.degrees(np.arccos(cos_a)))
+        return pos_err, rot_err
+
+    def _report_eef_error(self, desired_T: np.ndarray, label: str = ""):
+        """
+        Read the current arm EEF pose, compute error vs desired_T, log it.
+
+        Returns (actual_T, pos_err_mm, rot_err_deg).  All three are None if
+        the arm is unavailable.
+        """
+        if self._arm is None:
+            return None, None, None
+        actual_T = self._arm.get_hand_pose_4x4()
+        if actual_T is None:
+            return None, None, None
+        pos_err, rot_err = self._eef_error(desired_T, actual_T)
+        sev = ("OK"   if pos_err < 5  and rot_err < 3
+               else "WARN" if pos_err < 15
+               else "HIGH")
+        self._status(
+            f"EEF [{label}] pos={pos_err:.1f}mm rot={rot_err:.1f}° [{sev}]"
+        )
+        return actual_T, pos_err, rot_err
+
+    # ------------------------------------------------------------------
     # Naive strategy
     # ------------------------------------------------------------------
     def _run_naive(
@@ -181,6 +242,8 @@ class GraspExecutor:
         world_T_hand: np.ndarray,
         force_N: float,
         move_arm: bool,
+        active_fingers: Optional[List[int]],
+        logger,
     ):
         """
         Naive: move arm to pose (optional), then send fixed 5-finger pinch.
@@ -191,30 +254,57 @@ class GraspExecutor:
             warns = self._arm.move_to_hand_pose(world_T_hand, blocking=True)
             for w in warns:
                 self._status(w)
+            actual_T, pos_err, rot_err = self._report_eef_error(
+                world_T_hand, label="Naive"
+            )
+            if logger is not None:
+                joint_q = self._arm.get_joint_angles() if self._arm else None
+                fa = self._hand.angle_read() if self._hand else None
+                ff = self._hand.force_act()   if self._hand else None
+                logger.log_waypoint(
+                    step_i=0, n_steps=1,
+                    desired_T=world_T_hand, actual_T=actual_T,
+                    pos_err_mm=pos_err, rot_err_deg=rot_err,
+                    joint_q=joint_q,
+                    finger_angles=fa if fa is not None else [],
+                    finger_forces=ff if ff is not None else [],
+                )
 
         if self._abort.is_set():
+            if logger is not None:
+                logger.log_done(strategy="Naive", status="aborted")
+                logger.close()
             self._status("Naive: aborted.")
             return
 
         # Fixed naive posture [pinky, ring, middle, index, thumb_bend, thumb_yaw]
-        # 750 ≈ 75% closed for fingers; 740 ≈ 74% for thumb_bend;
-        # 0 = thumb_yaw max adduction (INVERTED: 0 → ctrl_max)
         naive_cmd = [504, 496, 467, 500, 479, 0]
         self._status("Naive: closing fingers to pinch posture...")
         try:
             self._hand.angle_set(naive_cmd)
         except Exception as e:
             self._status(f"Naive: finger error: {e}")
+            if logger is not None:
+                logger.log_done(strategy="Naive", status=f"error: {e}")
+                logger.close()
             return
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Naive: monitoring force (threshold {force_N:.1f} N)...")
-            self._naive_force_monitor(force_N)
+            self._naive_force_monitor(force_N, active_fingers=active_fingers)
 
+        if logger is not None:
+            logger.log_done(strategy="Naive", status="complete")
+            logger.close()
         self._status("Naive: complete.")
 
-    def _naive_force_monitor(self, threshold_N: float, poll_s: float = 0.05):
-        """Poll force_act until any calibrated finger reaches threshold."""
+    def _naive_force_monitor(
+        self,
+        threshold_N: float,
+        poll_s: float = 0.05,
+        active_fingers: Optional[List[int]] = None,
+    ):
+        """Poll force_act until any active calibrated finger reaches threshold."""
         while not self._abort.is_set():
             raw = self._hand.force_act()
             if raw is None:
@@ -222,6 +312,8 @@ class GraspExecutor:
                 continue
             self._forcecb(raw)
             for idx, (a, b) in _FORCE_CALIB.items():
+                if active_fingers is not None and idx not in active_fingers:
+                    continue
                 f_N = max(0.0, a * raw[idx] + b)
                 if f_N >= threshold_N:
                     self._status(
@@ -241,15 +333,12 @@ class GraspExecutor:
         force_N: float,
         step_mm: float,
         move_arm: bool,
+        active_fingers: Optional[List[int]],
+        logger,
     ):
         """
         Plan grasp: chunked arm + proportional finger trajectory, then
         optional adaptive force phase.
-
-        Each chunk:
-          1. Arm moves to intermediate pose (blocking).
-          2. Fingers sent to proportionally interpolated position.
-        Finger interpolation: open (1000) at chunk 0 → final at chunk N.
         """
         finger_final = self._ctrl_to_real(closure_result.ctrl_values)
 
@@ -261,19 +350,19 @@ class GraspExecutor:
             waypoints = self._compute_waypoints(
                 current_T, world_T_hand, step_mm / 1000.0,
             )
-            self._status(
-                f"Plan: {len(waypoints)} chunk(s) × {step_mm:.0f} mm"
-            )
+            self._status(f"Plan: {len(waypoints)} chunk(s) × {step_mm:.0f} mm")
         else:
             waypoints = [world_T_hand]
 
         n = len(waypoints)
         for i, wp_T in enumerate(waypoints):
             if self._abort.is_set():
+                if logger is not None:
+                    logger.log_done(strategy="Plan", status="aborted")
+                    logger.close()
                 self._status("Plan: aborted.")
                 return
 
-            # Proportional finger close: t goes 0→1 over the chunks
             t   = (i + 1) / n
             cmd = [max(0, int(1000 - t * (1000 - v))) for v in finger_final]
 
@@ -281,6 +370,21 @@ class GraspExecutor:
                 warns = self._arm.move_to_hand_pose(wp_T, blocking=True)
                 for w in warns:
                     self._status(w)
+                actual_T, pos_err, rot_err = self._report_eef_error(
+                    wp_T, label=f"chunk {i+1}"
+                )
+                if logger is not None:
+                    joint_q = self._arm.get_joint_angles() if self._arm else None
+                    fa = self._hand.angle_read() if self._hand else None
+                    ff = self._hand.force_act()   if self._hand else None
+                    logger.log_waypoint(
+                        step_i=i, n_steps=n,
+                        desired_T=wp_T, actual_T=actual_T,
+                        pos_err_mm=pos_err, rot_err_deg=rot_err,
+                        joint_q=joint_q,
+                        finger_angles=fa if fa is not None else [],
+                        finger_forces=ff if ff is not None else [],
+                    )
             try:
                 self._hand.angle_set(cmd)
             except Exception as e:
@@ -290,8 +394,14 @@ class GraspExecutor:
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Plan: entering force phase ({force_N:.1f} N)...")
-            self._adaptive_force_phase(closure_result.ctrl_values, force_N)
+            self._adaptive_force_phase(
+                closure_result.ctrl_values, force_N,
+                active_fingers=active_fingers, logger=logger,
+            )
 
+        if logger is not None:
+            logger.log_done(strategy="Plan", status="complete")
+            logger.close()
         self._status("Plan: complete.")
 
     # ------------------------------------------------------------------
@@ -302,6 +412,8 @@ class GraspExecutor:
         waypoints,
         force_N: float,
         move_arm: bool,
+        active_fingers: Optional[List[int]],
+        logger,
     ):
         """
         Width-space Plan grasp.
@@ -314,9 +426,12 @@ class GraspExecutor:
         """
         if not waypoints:
             self._status("Plan: no waypoints — aborted.")
+            if logger is not None:
+                logger.log_done(strategy="Plan", status="no waypoints")
+                logger.close()
             return
 
-        final_cmd = self._ctrl_to_real(waypoints[-1][1].ctrl_values)
+        final_cmd    = self._ctrl_to_real(waypoints[-1][1].ctrl_values)
         approach_T, approach_r = waypoints[0]
         approach_cmd = self._ctrl_to_real(approach_r.ctrl_values)
         approach_cmd[5] = final_cmd[5]  # thumb yaw fixed
@@ -324,9 +439,10 @@ class GraspExecutor:
         # Phase 1: pre-set thumb yaw (fingers open), then approach finger config
         self._status("Plan: opening fingers to approach config...")
         try:
-            # self._hand.angle_set([1000, 1000, 1000, 1000, 1000, final_cmd[5]])
-            # time.sleep(0.3)
             if self._abort.is_set():
+                if logger is not None:
+                    logger.log_done(strategy="Plan", status="aborted")
+                    logger.close()
                 self._status("Plan: aborted.")
                 return
             self._hand.angle_set(approach_cmd)
@@ -343,9 +459,24 @@ class GraspExecutor:
             warns = self._arm.move_to_hand_pose(approach_T, blocking=True)
             for w in warns:
                 self._status(w)
+            actual_T, pos_err, rot_err = self._report_eef_error(
+                approach_T, label="approach"
+            )
+            if logger is not None:
+                joint_q = self._arm.get_joint_angles() if self._arm else None
+                fa = self._hand.angle_read() if self._hand else None
+                ff = self._hand.force_act()   if self._hand else None
+                logger.log_waypoint(
+                    step_i=0, n_steps=len(waypoints),
+                    desired_T=approach_T, actual_T=actual_T,
+                    pos_err_mm=pos_err, rot_err_deg=rot_err,
+                    joint_q=joint_q,
+                    finger_angles=fa if fa is not None else [],
+                    finger_forces=ff if ff is not None else [],
+                )
 
         # Phase 3: step from approach → target
-        steps = waypoints[1:]
+        steps   = waypoints[1:]
         n_steps = len(steps)
         self._status(
             f"Plan: stepping {n_steps} step(s) → "
@@ -353,14 +484,32 @@ class GraspExecutor:
         )
         for i, (wp_T, r_i) in enumerate(steps):
             if self._abort.is_set():
+                if logger is not None:
+                    logger.log_done(strategy="Plan", status="aborted")
+                    logger.close()
                 self._status("Plan: aborted.")
                 return
-            cmd = self._ctrl_to_real(r_i.ctrl_values)
+            cmd    = self._ctrl_to_real(r_i.ctrl_values)
             cmd[5] = final_cmd[5]
             if move_arm:
                 warns = self._arm.move_to_hand_pose(wp_T, blocking=True)
                 for w in warns:
                     self._status(w)
+                actual_T, pos_err, rot_err = self._report_eef_error(
+                    wp_T, label=f"step {i+1}"
+                )
+                if logger is not None:
+                    joint_q = self._arm.get_joint_angles() if self._arm else None
+                    fa = self._hand.angle_read() if self._hand else None
+                    ff = self._hand.force_act()   if self._hand else None
+                    logger.log_waypoint(
+                        step_i=i + 1, n_steps=len(waypoints),
+                        desired_T=wp_T, actual_T=actual_T,
+                        pos_err_mm=pos_err, rot_err_deg=rot_err,
+                        joint_q=joint_q,
+                        finger_angles=fa if fa is not None else [],
+                        finger_forces=ff if ff is not None else [],
+                    )
             try:
                 self._hand.angle_set(cmd)
             except Exception as e:
@@ -371,8 +520,14 @@ class GraspExecutor:
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Plan: entering force phase ({force_N:.1f} N)...")
-            self._adaptive_force_phase(waypoints[-1][1].ctrl_values, force_N)
+            self._adaptive_force_phase(
+                waypoints[-1][1].ctrl_values, force_N,
+                active_fingers=active_fingers, logger=logger,
+            )
 
+        if logger is not None:
+            logger.log_done(strategy="Plan", status="complete")
+            logger.close()
         self._status("Plan: complete.")
 
     # ------------------------------------------------------------------
@@ -384,6 +539,8 @@ class GraspExecutor:
         world_T_hand: np.ndarray,
         force_N: float,
         move_arm: bool,
+        active_fingers: Optional[List[int]],
+        logger,
     ):
         """
         Thumb Reflex:
@@ -393,19 +550,24 @@ class GraspExecutor:
           4. All remaining fingers close to final config.
           5. Optional adaptive force phase.
         """
-        full_cmd = self._ctrl_to_real(closure_result.ctrl_values)
-        # Send thumb only — pinky/ring/middle/index stay open (1000)
+        full_cmd   = self._ctrl_to_real(closure_result.ctrl_values)
         thumb_only = [1000, 1000, 1000, 1000, full_cmd[4], full_cmd[5]]
         self._status("Thumb Reflex: positioning thumb (fingers open)...")
         try:
             self._hand.angle_set(thumb_only)
         except Exception as e:
             self._status(f"Thumb Reflex: thumb error: {e}")
+            if logger is not None:
+                logger.log_done(strategy="Thumb Reflex", status=f"error: {e}")
+                logger.close()
             return
 
-        time.sleep(0.2)  # wait for thumb to reach position
+        time.sleep(0.2)
 
         if self._abort.is_set():
+            if logger is not None:
+                logger.log_done(strategy="Thumb Reflex", status="aborted")
+                logger.close()
             self._status("Thumb Reflex: aborted.")
             return
 
@@ -414,8 +576,26 @@ class GraspExecutor:
             warns = self._arm.move_to_hand_pose(world_T_hand, blocking=True)
             for w in warns:
                 self._status(w)
+            actual_T, pos_err, rot_err = self._report_eef_error(
+                world_T_hand, label="Thumb Reflex"
+            )
+            if logger is not None:
+                joint_q = self._arm.get_joint_angles() if self._arm else None
+                fa = self._hand.angle_read() if self._hand else None
+                ff = self._hand.force_act()   if self._hand else None
+                logger.log_waypoint(
+                    step_i=0, n_steps=1,
+                    desired_T=world_T_hand, actual_T=actual_T,
+                    pos_err_mm=pos_err, rot_err_deg=rot_err,
+                    joint_q=joint_q,
+                    finger_angles=fa if fa is not None else [],
+                    finger_forces=ff if ff is not None else [],
+                )
 
         if self._abort.is_set():
+            if logger is not None:
+                logger.log_done(strategy="Thumb Reflex", status="aborted")
+                logger.close()
             self._status("Thumb Reflex: aborted.")
             return
 
@@ -424,29 +604,59 @@ class GraspExecutor:
             self._hand.angle_set(full_cmd)
         except Exception as e:
             self._status(f"Thumb Reflex: finger error: {e}")
+            if logger is not None:
+                logger.log_done(strategy="Thumb Reflex", status=f"error: {e}")
+                logger.close()
             return
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Thumb Reflex: entering force phase ({force_N:.1f} N)...")
-            self._adaptive_force_phase(closure_result.ctrl_values, force_N)
+            self._adaptive_force_phase(
+                closure_result.ctrl_values, force_N,
+                active_fingers=active_fingers, logger=logger,
+            )
 
+        if logger is not None:
+            logger.log_done(strategy="Thumb Reflex", status="complete")
+            logger.close()
         self._status("Thumb Reflex: complete.")
 
     # ------------------------------------------------------------------
     # Adaptive force phase (shared by Plan + Thumb Reflex)
     # ------------------------------------------------------------------
-    def _adaptive_force_phase(self, ctrl_values: dict, force_N: float):
+    def _adaptive_force_phase(
+        self,
+        ctrl_values: dict,
+        force_N: float,
+        active_fingers: Optional[List[int]] = None,
+        logger=None,
+    ):
         """
         Use RH56Hand.adaptive_force_control_iter (generator) to step-close
         until the desired force threshold is reached.
-        Converts force_N to raw gram units (F_N = raw/1000 * 9.81 fallback).
+
+        Per-finger calibrated Newton→raw conversion.  Non-active fingers
+        get threshold=0 (firmware treats them as already done).
         """
-        target_raw_g  = int(force_N * 1000 / 9.81)
-        target_forces = [target_raw_g] * 6
-        target_angles = self._ctrl_to_real(ctrl_values)
+        target_forces = [
+            (_force_N_to_raw(i, force_N)
+             if (active_fingers is None or i in active_fingers)
+             else 0)
+            for i in range(6)
+        ]
+        plan_angles = self._ctrl_to_real(ctrl_values)
+        # Force phase: active fingers must close PAST the geometry target until
+        # contact force is reached.  Target angle 0 = fully closed (real hand
+        # convention); the firmware force_set limit stops the motor when the
+        # threshold is hit.  Inactive fingers (target_forces[i]==0) hold their
+        # plan position and are not moved further.
+        force_target_angles = [
+            0 if target_forces[i] > 0 else plan_angles[i]
+            for i in range(6)
+        ]
         try:
             gen = self._hand.adaptive_force_control_iter(
-                target_forces, target_angles,
+                target_forces, force_target_angles,
                 step_size=50, max_iterations=20,
             )
             for state in gen:
@@ -461,6 +671,13 @@ class GraspExecutor:
                 else:
                     self._forcecb(state.get("forces", []))
                     self._status(f"Force phase: iter {state['iteration']}")
+                    if logger is not None:
+                        logger.log_force_iter(
+                            iteration=state["iteration"],
+                            forces=state.get("forces", []),
+                            angles=state.get("angles", []),
+                            thresholds=target_forces,
+                        )
         except Exception as e:
             self._status(f"Force phase: error: {e}")
 
@@ -486,7 +703,6 @@ class GraspExecutor:
             T_wp = np.eye(4)
             T_wp[:3, 3] = (1 - t) * start_T[:3, 3] + t * end_T[:3, 3]
 
-            # SLERP between the two rotation matrices
             R_rel  = start_T[:3, :3].T @ end_T[:3, :3]
             cos_a  = float(np.clip((np.trace(R_rel) - 1) / 2, -1.0, 1.0))
             angle  = float(np.arccos(cos_a))

@@ -306,7 +306,7 @@ class UR5Bridge:
     # ------------------------------------------------------------------
     def decode_tcp_to_grasp_params(self, current_result=None) -> dict:
         """
-        Read the current TCP pose and decode it into grasp_viz UI parameters.
+        Read the current TCP pose and decode it into grasp_viz_core parameters.
 
         Returns dict with keys:
             grasp_x, grasp_y, grasp_z   (metres, UR5 world frame)
@@ -315,7 +315,7 @@ class UR5Bridge:
         If current_result (ClosureResult) is supplied, the plane_rx/ry/rz are
         recovered by inverting the auto-tilt transform.  Otherwise zeroed.
 
-        Math (inverse of _build_ctrl_array in grasp_viz.py):
+        Math (inverse of _build_ctrl_array in grasp_viz_core.py):
             R_full  = plane_R @ tilt_R
             plane_R = R_full @ tilt_R.T
             => extract XYZ Euler angles from plane_R
@@ -332,11 +332,11 @@ class UR5Bridge:
         if current_result is not None:
             try:
                 from .grasp_geometry import ClosureResult
-                from .grasp_viz import GraspViz
+                from .grasp_viz_core import GraspVizCore
                 R_hand  = world_T_hand[:3, :3]
                 R_tilt  = ClosureResult._rot_matrix(current_result.base_tilt_y)
                 R_plane = R_hand @ R_tilt.T
-                plane_rx, plane_ry, plane_rz = GraspViz._mat_to_xyz_euler(R_plane)
+                plane_rx, plane_ry, plane_rz = GraspVizCore._mat_to_xyz_euler(R_plane)
 
                 # Invert _build_world_T_hand: hand_base = [-mid_w[0] + gx,
                 #   -mid_w[1] + gy, gz - mid_w[2]].  Recover slider coords:
