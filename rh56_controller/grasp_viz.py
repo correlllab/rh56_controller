@@ -234,11 +234,13 @@ def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
     now has identity base orientation (no Rx offset), so ctrl encodes the hand
     orientation directly.
     """
-    pos_x, pos_y, pos_z = ctrl[0], ctrl[1], ctrl[2]
-    pinky, ring, middle, index, pitch, yaw = ctrl[6:12]
+    # pos_x, pos_y, pos_z = ctrl[0], ctrl[1], ctrl[2]
+    # pinky, ring, middle, index, pitch, yaw = ctrl[6:12]
 
-    R_ctrl = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
-    rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_ctrl)
+    # R_ctrl = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+    # rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_ctrl)
+    pos_x, pos_y, pos_z, rot_x, rot_y, rot_z = ctrl[0:6]
+    pinky, ring, middle, index, pitch, yaw     = ctrl[6:12]
 
     data.qpos[jm["pos_x"]] = pos_x;  data.qpos[jm["pos_y"]] = pos_y
     data.qpos[jm["pos_z"]] = pos_z;  data.qpos[jm["rot_x"]] = rot_x
