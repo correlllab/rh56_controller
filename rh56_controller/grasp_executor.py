@@ -304,46 +304,59 @@ class GraspExecutor:
         move_arm: bool,
     ):
         """
-        Width-space Plan grasp: each waypoint is a (world_T_hand, closure_result)
-        pair, ordered from approach width down to final grip width.
+        Width-space Plan grasp.
 
-        Execution per step:
-          1. Arm moves to intermediate pose (blocking).
-          2. Fingers sent to config at that width.
+        waypoints[0]   = approach: fingers go to approach config first (single
+                         angle_set), then arm moves to approach pose (single moveL).
+        waypoints[1:]  = steps: arm moveL + finger set per step, approach→target.
 
-        Thumb yaw is set to its final value BEFORE the first arm move and held
-        fixed throughout — only flex joints (pinky/ring/middle/index/thumb_bend)
-        vary with width.
+        Thumb yaw is pre-set to its final value and held fixed throughout.
         """
         if not waypoints:
             self._status("Plan: no waypoints — aborted.")
             return
 
-        n = len(waypoints)
         final_cmd = self._ctrl_to_real(waypoints[-1][1].ctrl_values)
+        approach_T, approach_r = waypoints[0]
+        approach_cmd = self._ctrl_to_real(approach_r.ctrl_values)
+        approach_cmd[5] = final_cmd[5]  # thumb yaw fixed
 
-        # Pre-set thumb yaw to the final value before any arm motion.
-        thumb_init = [1000, 1000, 1000, 1000, 1000, final_cmd[5]]
-        self._status("Plan: pre-setting thumb yaw...")
+        # Phase 1: pre-set thumb yaw (fingers open), then approach finger config
+        self._status("Plan: opening fingers to approach config...")
         try:
-            self._hand.angle_set(thumb_init)
-            time.sleep(0.3)
-        except Exception as e:
-            self._status(f"Plan: thumb yaw init error: {e}")
-
-        self._status(
-            f"Plan: {n} width-space step(s), "
-            f"width {waypoints[0][1].width*1000:.1f}→{waypoints[-1][1].width*1000:.1f} mm"
-        )
-
-        for i, (wp_T, r_i) in enumerate(waypoints):
+            # self._hand.angle_set([1000, 1000, 1000, 1000, 1000, final_cmd[5]])
+            # time.sleep(0.3)
             if self._abort.is_set():
                 self._status("Plan: aborted.")
                 return
+            self._hand.angle_set(approach_cmd)
+            time.sleep(0.3)
+        except Exception as e:
+            self._status(f"Plan: approach finger error: {e}")
 
+        # Phase 2: arm moves to approach pose (single moveL)
+        if move_arm and not self._abort.is_set():
+            self._status(
+                f"Plan: moving arm to approach pose "
+                f"(width={approach_r.width*1000:.1f}mm)..."
+            )
+            warns = self._arm.move_to_hand_pose(approach_T, blocking=True)
+            for w in warns:
+                self._status(w)
+
+        # Phase 3: step from approach → target
+        steps = waypoints[1:]
+        n_steps = len(steps)
+        self._status(
+            f"Plan: stepping {n_steps} step(s) → "
+            f"{waypoints[-1][1].width*1000:.1f}mm"
+        )
+        for i, (wp_T, r_i) in enumerate(steps):
+            if self._abort.is_set():
+                self._status("Plan: aborted.")
+                return
             cmd = self._ctrl_to_real(r_i.ctrl_values)
-            cmd[5] = final_cmd[5]   # thumb yaw stays fixed at final value
-
+            cmd[5] = final_cmd[5]
             if move_arm:
                 warns = self._arm.move_to_hand_pose(wp_T, blocking=True)
                 for w in warns:
@@ -352,9 +365,8 @@ class GraspExecutor:
                 self._hand.angle_set(cmd)
             except Exception as e:
                 self._status(f"Plan: finger error at step {i+1}: {e}")
-
             self._status(
-                f"Plan: step {i+1}/{n} (width={r_i.width*1000:.1f}mm)"
+                f"Plan: step {i+1}/{n_steps} (width={r_i.width*1000:.1f}mm)"
             )
 
         if force_N > 0.0 and not self._abort.is_set():
@@ -375,26 +387,16 @@ class GraspExecutor:
     ):
         """
         Thumb Reflex:
-          1. Arm moves to final grasp pose (single moveL).
-          2. Thumb (bend + yaw) positions first; other fingers stay open.
-          3. Wait 0.5 s for thumb to settle.
-          4. All remaining fingers close.
+          1. Thumb (bend + yaw) positions first; other fingers stay fully open.
+          2. Wait 0.5 s for thumb to settle.
+          3. Arm moves to final grasp pose (single moveL — no stepping).
+          4. All remaining fingers close to final config.
           5. Optional adaptive force phase.
         """
-        if move_arm and not self._abort.is_set():
-            self._status("Thumb Reflex: moving arm to grasp pose...")
-            warns = self._arm.move_to_hand_pose(world_T_hand, blocking=True)
-            for w in warns:
-                self._status(w)
-
-        if self._abort.is_set():
-            self._status("Thumb Reflex: aborted.")
-            return
-
         full_cmd = self._ctrl_to_real(closure_result.ctrl_values)
         # Send thumb only — pinky/ring/middle/index stay open (1000)
         thumb_only = [1000, 1000, 1000, 1000, full_cmd[4], full_cmd[5]]
-        self._status("Thumb Reflex: positioning thumb...")
+        self._status("Thumb Reflex: positioning thumb (fingers open)...")
         try:
             self._hand.angle_set(thumb_only)
         except Exception as e:
@@ -402,6 +404,16 @@ class GraspExecutor:
             return
 
         time.sleep(0.5)  # wait for thumb to reach position
+
+        if self._abort.is_set():
+            self._status("Thumb Reflex: aborted.")
+            return
+
+        if move_arm:
+            self._status("Thumb Reflex: moving arm to grasp pose...")
+            warns = self._arm.move_to_hand_pose(world_T_hand, blocking=True)
+            for w in warns:
+                self._status(w)
 
         if self._abort.is_set():
             self._status("Thumb Reflex: aborted.")

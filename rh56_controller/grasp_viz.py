@@ -1220,7 +1220,7 @@ class GraspViz:
             self._tb_z = TextBox(ax_tb_z, "",
                                  initial="{:.0f}".format(self._grasp_z * 1000))
             ax_btn_up = fig.add_axes([_TL + _Z_TB_W + 0.004, 0.767, _Z_BTN_W, _SH])
-            self._btn_move_up = Button(ax_btn_up, "+20cm")
+            self._btn_move_up = Button(ax_btn_up, "+10cm")
             self._btn_move_up.on_clicked(self._on_move_up)
 
             self._slider_x, self._tb_x = _make_slider_row(
@@ -1327,14 +1327,21 @@ class GraspViz:
                 ax_s_tb  = fig.add_axes([_x3, 0.227, _w3, 0.020])
                 self._tb_grasp_step = TextBox(ax_s_tb, "", initial="10")
 
+                # Approach (mm) — override default (mode max width = fully open)
+                ax_a_lbl = fig.add_axes([_x3, 0.205, _w3, 0.020])
+                ax_a_lbl.axis("off")
+                ax_a_lbl.text(0.0, 0.5, "Approach (mm):", fontsize=7.5)
+                ax_a_tb  = fig.add_axes([_x3, 0.182, _w3, 0.020])
+                self._tb_approach = TextBox(ax_a_tb, "", initial="")
+
                 # GRASP! button
-                ax_grasp = fig.add_axes([_x3, 0.183, _w3, 0.038])
+                ax_grasp = fig.add_axes([_x3, 0.140, _w3, 0.038])
                 self._btn_grasp = Button(ax_grasp, "GRASP!")
                 self._btn_grasp.ax.set_facecolor("#2ecc71")
                 self._btn_grasp.on_clicked(self._on_grasp)
 
                 # Status text area
-                ax_status = fig.add_axes([_x3, 0.010, _w3, 0.165])
+                ax_status = fig.add_axes([_x3, 0.010, _w3, 0.123])
                 ax_status.axis("off")
                 self._ws_status_text = ax_status.text(
                     0.0, 1.0, "",
@@ -1480,7 +1487,7 @@ class GraspViz:
     def _on_move_up(self, _event):
         """Increment grasp Z by +20 cm and update slider/viewer."""
         z_max_mm = 400.0 if self._robot_mode else 200.0
-        new_z_mm = min(z_max_mm, self._grasp_z * 1000.0 + 200.0)
+        new_z_mm = min(z_max_mm, self._grasp_z * 1000.0 + 100.0)
         self._grasp_z = new_z_mm / 1000.0
         self._slider_z.set_val(new_z_mm)
         self._tb_z.set_val("{:.0f}".format(new_z_mm))
@@ -1615,30 +1622,42 @@ class GraspViz:
 
         threading.Thread(target=_animate, daemon=True, name="sim-grasp").start()
 
-    def _compute_plan_closures(self, step_mm: float, r_target):
+    def _compute_plan_closures(self, step_mm: float, r_target,
+                               approach_m: float = None):
         """Compute list of ClosureResult for width-space Plan waypoints.
 
-        Steps from self._approach_width_m (set by last "Send Arm" press) down
-        to r_target.width in step_mm increments.  If approach_width is unset,
-        falls back to the current mode's maximum width.
+        First element: approach width (fully open by default, or approach_m if
+        given, or self._approach_width_m from last "Send Arm" press).
+        Subsequent elements: step from approach+1_step down to r_target.width.
 
-        Returns a list ending exactly at r_target.
+        Returns a list [r_approach, r_step1, ..., r_target].
         """
         import math
         width_end = r_target.width
-        width_start = (
-            self._approach_width_m
-            if self._approach_width_m is not None
-            else self._width_range[1]
-        )
-        # Approach must be at least one step wider than target
-        if width_start <= width_end:
-            return [r_target]
+        if approach_m is not None:
+            width_start = approach_m
+        elif self._approach_width_m is not None:
+            width_start = self._approach_width_m
+        else:
+            width_start = self._width_range[1]
 
-        step_m = max(step_mm / 1000.0, 1e-4)
-        N = max(1, int(math.ceil((width_start - width_end) / step_m)))
+        # Clamp approach to valid range
+        width_start = min(width_start, self._width_range[1])
+        width_start = max(width_start, width_end + 1e-4)
+
+        # First element: approach (arm pre-positions here, fingers open to this)
+        try:
+            r_approach = self.closure.solve(self._mode, width_start)
+        except Exception:
+            r_approach = None
 
         closures = []
+        if r_approach is not None:
+            closures.append(r_approach)
+
+        # Steps from approach → target
+        step_m = max(step_mm / 1000.0, 1e-4)
+        N = max(1, int(math.ceil((width_start - width_end) / step_m)))
         for i in range(1, N + 1):
             t = i / N
             w_i = width_start + t * (width_end - width_start)
@@ -1683,6 +1702,11 @@ class GraspViz:
             step_mm  = float(self._tb_grasp_step.text.strip()  or "10")
         except ValueError:
             force_N, step_mm = 0.0, 10.0
+        approach_text = self._tb_approach.text.strip()
+        try:
+            approach_m = float(approach_text) / 1000.0 if approach_text else None
+        except ValueError:
+            approach_m = None
 
         world_T_hand = self._build_world_T_hand(r)
         warns = self._arm.check_pose_workspace(world_T_hand)
@@ -1722,7 +1746,7 @@ class GraspViz:
         if strategy == "Naive":
             self._executor.execute_naive(world_T_hand, force_N, move_arm=True)
         elif strategy == "Plan":
-            closures = self._compute_plan_closures(step_mm, r)
+            closures = self._compute_plan_closures(step_mm, r, approach_m)
             waypoints = [
                 (self._build_world_T_hand(r_i), r_i) for r_i in closures
             ]
