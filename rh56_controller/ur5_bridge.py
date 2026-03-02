@@ -34,8 +34,10 @@ import numpy as np
 # _T_HAND_IN_TCP  :  hand_base expressed in TCP (wrist3) frame
 # _T_TCP_IN_HAND  :  TCP (wrist3) expressed in hand_base frame  (inverse)
 # ---------------------------------------------------------------------------
-_WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
-_WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])   # wxyz — matches gripper_attachment quat in ur5_inspire.xml
+# _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
+_WRIST3_TO_HAND_POS  = np.array([0.0, 0.0, 0.156])
+# _WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])
+_WRIST3_TO_HAND_QUAT = np.array([0.7071068, 0, 0, 0.7071068])
 
 
 def _quat_wxyz_to_R(w: float, x: float, y: float, z: float) -> np.ndarray:

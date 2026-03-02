@@ -95,8 +95,10 @@ _ACTUATOR_ORDER = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_
 _EEFF_LOCAL = np.array([0.070, 0.016, 0.155])
 
 # TCP transform: wrist_3_link frame → hand base body
-_WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
-_WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])  # wxyz — matches gripper_attachment quat in ur5_inspire.xml
+# _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
+_WRIST3_TO_HAND_POS  = np.array([0.0, 0.0, 0.156])
+# _WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])  # wxyz — matches gripper_attachment quat in ur5_inspire.xml
+_WRIST3_TO_HAND_QUAT = np.array([0.7071068, 0, 0, 0.7071068])  # wxyz — matches gripper_attachment quat in ur5_inspire.xml
 
 # Default grasp XY position in robot mode (UR5 world frame, metres)
 _DEFAULT_ROBOT_X = 0.40
@@ -229,16 +231,7 @@ def _worker_jnt_map(model: mujoco.MjModel) -> dict:
 def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
                         model: mujoco.MjModel) -> None:
     """Apply 12-element ctrl vector to qpos with joint coupling (worker version).
-
-    ctrl[3:6] are XYZ Euler angles in the robot world frame.  inspire_grasp_scene.xml
-    now has identity base orientation (no Rx offset), so ctrl encodes the hand
-    orientation directly.
     """
-    # pos_x, pos_y, pos_z = ctrl[0], ctrl[1], ctrl[2]
-    # pinky, ring, middle, index, pitch, yaw = ctrl[6:12]
-
-    # R_ctrl = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
-    # rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_ctrl)
     pos_x, pos_y, pos_z, rot_x, rot_y, rot_z = ctrl[0:6]
     pinky, ring, middle, index, pitch, yaw     = ctrl[6:12]
 
