@@ -715,7 +715,11 @@ class GraspVizUI(GraspVizCore):
 
         # Create logger
         log_name = self._ent_log_name.get().strip() or "test"
-        logger = GraspLogger(log_name)
+        strategy = self._grasp_strategy  # "Naive", "Plan", or "Thumb Reflex"
+        strategy_tag = strategy.lower().replace(" ", "_")
+        full_log_id = f"{log_name}_{strategy_tag}"
+
+        logger = GraspLogger(full_log_id)
         logger.log_meta(
             mode=self._mode,
             width_target_m=self._width_target_m,
@@ -756,9 +760,12 @@ class GraspVizUI(GraspVizCore):
         self._executor._status = _wrapped_status
 
         # Restore speed, force to max before each grasp
+        self._hand.clear_errors()
+        time.sleep(0.125)
         self._hand.speed_set([1000] * 6)
+        time.sleep(0.125)
         self._hand.force_set([1000] * 6)
-        time.sleep(0.25)
+        time.sleep(0.125)
 
         if strategy == "Naive":
             self._executor.execute_naive(

@@ -66,9 +66,9 @@ def _force_N_to_raw(finger_idx: int, force_N: float) -> int:
 # the total force on the finger side equals force_N, matching the thumb).
 _ANTIPODAL_COEFFS: Dict[int, List[float]] = {
     1: [1.0],                       # 2-finger: thumb vs. 1 finger — equal
-    2: [0.9, 0.9],                  # 3-finger: thumb vs. middle+index — halves
-    3: [0.7, 0.85, 0.85],            # 4-finger: ring, middle, index
-    4: [0.5, 0.6, 0.8, 0.8],    # 5-finger: pinky, ring, middle, index
+    2: [1.0, 1.0],                  # 3-finger: thumb vs. middle+index — halves
+    3: [0.5, 1.75, 1.75],            # 4-finger: ring, middle, index
+    4: [0.5, 0.5, 1.9, 1.9],    # 5-finger: pinky, ring, middle, index
 }
 
 # Approximate finger lateral positions (m) in the hand base frame, indexed
@@ -325,6 +325,8 @@ class GraspExecutor:
         naive_cmd = [504, 496, 467, 500, 479, 0]
         self._status("Naive: closing fingers to pinch posture...")
         try:
+            if force_N > 0.0 and not self._abort.is_set():
+                self._hand.force_set([_force_N_to_raw(i, force_N) for i in range(6)])
             self._hand.angle_set(naive_cmd)
         except Exception as e:
             self._status(f"Naive: finger error: {e}")
