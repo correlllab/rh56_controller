@@ -54,6 +54,18 @@ def _force_N_to_raw(finger_idx: int, force_N: float) -> int:
     return int(force_N * 1000 / 9.81)
 
 
+def _raw_to_N(forces_raw) -> list:
+    """Convert raw force readings [0..1000] → Newtons for all 6 fingers."""
+    result = []
+    for i, raw in enumerate(forces_raw):
+        if i in _FORCE_CALIB:
+            a, b = _FORCE_CALIB[i]
+            result.append(round(max(0.0, a * raw + b), 4))
+        else:
+            result.append(round(max(0.0, raw / 1000.0 * 9.81), 4))
+    return result
+
+
 class GraspExecutor:
     """
     Background-thread grasp executor coordinating UR5 arm + RH56 hand.
@@ -666,31 +678,42 @@ class GraspExecutor:
             if target_forces[i] > 0 else 50
             for i in range(6)
         ]
+        target_forces_N = _raw_to_N(target_forces)
         try:
             gen = self._hand.adaptive_force_control_iter(
                 target_forces, force_target_angles,
                 step_size=step_sizes,
                 max_iterations=max_iterations,
-                speed=25,
+                speed=50,
             )
             for state in gen:
                 if self._abort.is_set():
                     self._status("Force phase: aborted.")
                     break
                 if state.get("done"):
+                    final_raw = state["final_forces"]
+                    final_N   = _raw_to_N(final_raw)
+                    errs = [
+                        round(final_N[i] - target_forces_N[i], 3)
+                        for i in range(6)
+                    ]
                     self._status(
                         f"Force phase: done. "
-                        f"Final forces={state['final_forces']}"
+                        f"Final={[f'{v:.2f}' for v in final_N]} N  "
+                        f"Error={[f'{e:+.2f}' for e in errs]} N"
                     )
                 else:
-                    self._forcecb(state.get("forces", []))
+                    raw_forces = state.get("forces", [])
+                    self._forcecb(raw_forces)
                     self._status(f"Force phase: iter {state['iteration']}")
                     if logger is not None:
                         logger.log_force_iter(
                             iteration=state["iteration"],
-                            forces=state.get("forces", []),
+                            forces=raw_forces,
                             angles=state.get("angles", []),
                             thresholds=target_forces,
+                            forces_N=_raw_to_N(raw_forces),
+                            thresholds_N=target_forces_N,
                         )
 
         except Exception as e:

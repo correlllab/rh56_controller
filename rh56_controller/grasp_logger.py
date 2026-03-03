@@ -67,12 +67,15 @@ class GraspLogger:
                  finger_angles=list(finger_angles) if finger_angles is not None else None,
                  finger_forces=list(finger_forces) if finger_forces is not None else None)
 
-    def log_force_iter(self, *, iteration: int, forces, angles, thresholds=None):
+    def log_force_iter(self, *, iteration: int, forces, angles,
+                       thresholds=None, forces_N=None, thresholds_N=None):
         self.log("force_iter",
                  iteration=iteration,
                  forces=list(forces) if forces is not None else None,
+                 forces_N=[round(v, 4) for v in forces_N] if forces_N is not None else None,
                  angles=list(angles) if angles is not None else None,
-                 thresholds=list(thresholds) if thresholds is not None else None)
+                 thresholds=list(thresholds) if thresholds is not None else None,
+                 thresholds_N=[round(v, 4) for v in thresholds_N] if thresholds_N is not None else None)
 
     def log_done(self, *, strategy: str, status: str):
         self.log("done", strategy=strategy, status=status)

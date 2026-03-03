@@ -856,7 +856,7 @@ class RH56Hand:
                 continue
 
             # Wait a moment for the hand to respond
-            time.sleep(0.5)
+            time.sleep(0.025)
 
             # Read current Newton values
             current_newtons = self.get_newton_readings_from_forces()
@@ -920,16 +920,19 @@ class RH56Hand:
             # Set firmware force limit (constant — never bumped, so protection
             # stays in place for the full phase).
             response = self.force_set(target_forces)
+            time.sleep(0.10)
             if not response:
                 continue
 
             # Step angles toward target, clipped to step_size per iteration
             delta = target_angles_arr - current_angles
             step = np.clip(delta, -step_size_arr, step_size_arr)
+            print(f"Iteration {iteration + 1}: Current angles: {current_angles}, Target angles: {target_angles_arr}, Step: {step}")
             next_angles = current_angles + step
+            print(f"Iteration {iteration + 1}: Setting angles to: {next_angles}")
             self.angle_set(np.round(next_angles).astype(int).tolist())
 
-            time.sleep(0.025)
+            time.sleep(0.10)
 
             # Read back actual angles so we know if firmware stopped a motor
             # at the force threshold (actual < commanded in that case).

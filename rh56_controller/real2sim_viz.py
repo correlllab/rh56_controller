@@ -103,6 +103,8 @@ FINGER_COLORS_RGB = {
 _FORCE_CALIB: Dict[str, tuple] = {
     "index":  (0.007478, -0.414),
     "middle": (0.006452,  0.018),
+    "pinky": (0.006452,  0.018),
+    "ring": (0.006452,  0.018),
     "thumb":  (0.012547,  0.384),  # thumb_bend channel
     # "ring" and "pinky": TBD — using fallback below
 }
