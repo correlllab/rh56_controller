@@ -755,6 +755,10 @@ class GraspVizUI(GraspVizCore):
 
         self._executor._status = _wrapped_status
 
+        # Restore speed to max before each grasp
+        self._hand.speed_set([1000] * 6)
+        time.sleep(0.05)
+
         if strategy == "Naive":
             self._executor.execute_naive(
                 world_T_hand, force_N, move_arm=True,

@@ -599,7 +599,7 @@ class GraspExecutor:
             self._status("Thumb Reflex: aborted.")
             return
 
-        self._status("Thumb Reflex: closing remaining fingers...")
+        self._status("Thumb Reflex: closing remaining fingers to target width...")
         try:
             self._hand.angle_set(full_cmd)
         except Exception as e:
@@ -608,6 +608,10 @@ class GraspExecutor:
                 logger.log_done(strategy="Thumb Reflex", status=f"error: {e}")
                 logger.close()
             return
+
+        # Wait for fingers to reach target position at full speed before
+        # switching to the slow adaptive force phase.
+        time.sleep(0.5)
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Thumb Reflex: entering force phase ({force_N:.1f} N)...")
@@ -669,9 +673,6 @@ class GraspExecutor:
                 max_iterations=max_iterations,
                 speed=25,
             )
-            # restore speed to max
-            self._hand.speed_set([1000] * 6)
-            time.sleep(0.05)
             for state in gen:
                 if self._abort.is_set():
                     self._status("Force phase: aborted.")
@@ -691,8 +692,10 @@ class GraspExecutor:
                             angles=state.get("angles", []),
                             thresholds=target_forces,
                         )
+
         except Exception as e:
             self._status(f"Force phase: error: {e}")
+            self._hand.speed_set([1000] * 6)
 
     # ------------------------------------------------------------------
     # Waypoint interpolation
