@@ -34,9 +34,12 @@ _ACTUATOR_ORDER = [
 # Force calibration constants (same as real2sim_viz._FORCE_CALIB)
 # Finger index → (a, b) such that F_N = a*raw + b, clamped ≥ 0
 _FORCE_CALIB = {
-    3: (0.007478, -0.414),   # index
+    0: (0.006452,  0.018),   # pinky
+    1: (0.006452,  0.018),   # ring
     2: (0.006452,  0.018),   # middle
+    3: (0.007478, -0.414),   # index
     4: (0.012547,  0.384),   # thumb (bend)
+    5: (0.012547,  0.384),   # thumb (yaw)
 }
 
 # Inverse calibration: Newton → raw integer [0..1000]
@@ -52,6 +55,30 @@ def _force_N_to_raw(finger_idx: int, force_N: float) -> int:
     if finger_idx in _FORCE_CALIB_INV:
         return _FORCE_CALIB_INV[finger_idx](force_N)
     return int(force_N * 1000 / 9.81)
+
+
+# ---------------------------------------------------------------------------
+# Antipodal load distribution
+# ---------------------------------------------------------------------------
+# Ad-hoc force distribution coefficients keyed by N = number of non-thumb
+# active fingers.  Order is pinky→index (ascending finger index, 0..3).
+# F_i = _ANTIPODAL_COEFFS[N][i] * force_N / N  (coefficients sum to N so
+# the total force on the finger side equals force_N, matching the thumb).
+_ANTIPODAL_COEFFS: Dict[int, List[float]] = {
+    1: [1.0],                       # 2-finger: thumb vs. 1 finger — equal
+    2: [0.9, 0.9],                  # 3-finger: thumb vs. middle+index — halves
+    3: [0.7, 0.85, 0.85],            # 4-finger: ring, middle, index
+    4: [0.5, 0.6, 0.8, 0.8],    # 5-finger: pinky, ring, middle, index
+}
+
+# Approximate finger lateral positions (m) in the hand base frame, indexed
+# by finger index (0=pinky, 1=ring, 2=middle, 3=index).  Used for the
+# geometric moment-balance distribution.  Tune for your specific hardware.
+_FINGER_LATERAL_POS: List[float] = [0.054, 0.036, 0.018, 0.000]
+
+# Thumb opposition lateral position (m) for the geometric distribution.
+# This is the y-coordinate that the resultant finger force must pass through.
+_THUMB_LATERAL_POS: float = 0.018
 
 
 def _raw_to_N(forces_raw) -> list:
@@ -94,6 +121,11 @@ class GraspExecutor:
         self._forcecb = force_cb  or (lambda f: None)
         self._abort   = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+        # Toggle between moment-balanced geometric distribution and the
+        # ad-hoc _ANTIPODAL_COEFFS heuristic in _adaptive_force_phase().
+        # False (default) = ad-hoc coefficients.
+        self.use_geometric_force_dist: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -638,6 +670,97 @@ class GraspExecutor:
         self._status("Thumb Reflex: complete.")
 
     # ------------------------------------------------------------------
+    # Antipodal force distribution helpers
+    # ------------------------------------------------------------------
+    def _compute_finger_force_targets(
+        self,
+        force_N: float,
+        active_fingers: Optional[List[int]],
+        use_geometric: bool = False,
+    ) -> List[float]:
+        """
+        Per-finger Newton targets for an antipodal grasp.
+
+        Thumb (idx 4) receives ``force_N``; non-thumb active fingers share
+        the same total force using an antipodal load distribution so the
+        resultant finger force matches the thumb in magnitude and line of
+        action.  Thumb yaw (idx 5) is always excluded.
+
+        Parameters
+        ----------
+        force_N        : target squeeze force (N)
+        active_fingers : participating finger indices, or None (= all).
+        use_geometric  : if True use pseudoinverse moment-balance;
+                         if False use _ANTIPODAL_COEFFS heuristic.
+
+        Returns
+        -------
+        List[float] of length 6, order [pinky, ring, middle, index,
+        thumb_bend, thumb_yaw].
+        """
+        targets: List[float] = [0.0] * 6
+
+        if active_fingers is None:
+            non_thumb   = [0, 1, 2, 3]
+            thumb_active = True
+        else:
+            non_thumb    = sorted(f for f in active_fingers if f not in (4, 5))
+            thumb_active = 4 in active_fingers
+
+        if thumb_active:
+            targets[4] = force_N
+
+        N = len(non_thumb)
+        if N == 0:
+            return targets
+
+        if use_geometric:
+            weights = self._geometric_antipodal_weights(non_thumb)
+        else:
+            coeffs  = _ANTIPODAL_COEFFS.get(N, [1.0] * N)
+            weights = [c / N for c in coeffs]   # sum(weights) = 1
+
+        for rank, fi in enumerate(non_thumb):
+            targets[fi] = weights[rank] * force_N
+
+        return targets
+
+    def _geometric_antipodal_weights(
+        self, non_thumb_fingers: List[int]
+    ) -> List[float]:
+        """
+        Compute moment-balanced force weights via min-norm pseudoinverse.
+
+        Solves  A @ w = b  (minimum ||w||₂ subject to force + moment balance):
+            A = [[1,  1,  ...,  1 ],   (total force = 1)
+                 [y₁, y₂, ..., yₙ]]   (moment about origin = y_thumb)
+            b = [1, _THUMB_LATERAL_POS]
+
+        Any negative weights are clipped to 0 and the result is renormalised
+        so that sum(weights) = 1.  Falls back to equal weights on degeneracy.
+
+        Tune _FINGER_LATERAL_POS and _THUMB_LATERAL_POS for your hardware.
+        """
+        ys  = np.array([_FINGER_LATERAL_POS[fi] for fi in non_thumb_fingers])
+        y_t = _THUMB_LATERAL_POS
+        N   = len(ys)
+
+        A = np.vstack([np.ones(N), ys])   # shape (2, N)
+        b = np.array([1.0, y_t])
+
+        try:
+            # Minimum-norm (pseudoinverse) solution: w = Aᵀ (AAᵀ)⁻¹ b
+            w = A.T @ np.linalg.solve(A @ A.T, b)
+        except np.linalg.LinAlgError:
+            return [1.0 / N] * N
+
+        w = np.maximum(w, 0.0)
+        s = float(w.sum())
+        if s < 1e-6:
+            return [1.0 / N] * N
+        return (w / s).tolist()
+
+    # ------------------------------------------------------------------
     # Adaptive force phase (shared by Plan + Thumb Reflex)
     # ------------------------------------------------------------------
     def _adaptive_force_phase(
@@ -648,77 +771,159 @@ class GraspExecutor:
         logger=None,
     ):
         """
-        Use RH56Hand.adaptive_force_control_iter (generator) to step-close
-        until the desired force threshold is reached.
+        Adaptive force phase: close active fingers iteratively until each
+        reaches its individual force target, then hold.
 
-        Per-finger calibrated Newton→raw conversion.  Non-active fingers
-        get threshold=0 (firmware treats them as already done).
+        Antipodal load distribution
+        ---------------------------
+        Thumb (idx 4) receives ``force_N``.  Non-thumb active fingers share
+        the same total so the resultant finger force opposes the thumb.
+        Toggle ``self.use_geometric_force_dist`` (default False) to switch
+        between:
+          - False : ad-hoc _ANTIPODAL_COEFFS heuristic
+          - True  : pseudoinverse moment-balance (_geometric_antipodal_weights)
+
+        Per-finger saturation
+        ---------------------
+        Once a finger's measured force ≥ its individual target the executor
+        stops commanding further position changes for that finger (holds its
+        last angle).  Other fingers continue closing independently.
         """
-        target_forces = [
-            (_force_N_to_raw(i, force_N)
-             if (active_fingers is None or i in active_fingers)
-             else 0)
+        max_iterations = 20
+        poll_dt        = 0.10
+
+        # --- 1. Per-finger Newton targets -----------------------------------
+        targets_N = self._compute_finger_force_targets(
+            force_N, active_fingers,
+            use_geometric=self.use_geometric_force_dist,
+        )
+        dist_mode = "geometric" if self.use_geometric_force_dist else "ad-hoc"
+        # Normalised per-finger weights (proportion of force_N; sum ≤ 1 per side).
+        weights_norm = [
+            round(t / force_N, 4) if force_N > 0 else 0.0 for t in targets_N
+        ]
+        self._status(
+            f"Force phase: targets={[f'{v:.2f}' for v in targets_N]} N"
+            f"  weights={weights_norm}  [{dist_mode}]"
+        )
+
+        # --- 2. Raw targets for firmware force_set() ------------------------
+        targets_raw = [
+            _force_N_to_raw(i, targets_N[i]) if targets_N[i] > 0 else 0
             for i in range(6)
         ]
-        plan_angles = self._ctrl_to_real(ctrl_values)
-        # Minimum-closure position: FK ctrl_max → real = 0 (most physically closed).
-        # Active fingers close from plan_angles toward this target; inactive fingers
-        # hold at their plan position.
-        max_iterations = 20
-        min_closure_real = self._ctrl_to_real(
+
+        # --- 3. Angle targets and per-finger step sizes ---------------------
+        plan_angles  = self._ctrl_to_real(ctrl_values)
+        min_closure  = self._ctrl_to_real(
             {a: self._fk.ctrl_max[a] for a in _ACTUATOR_ORDER}
         )
-        force_target_angles = [
-            min_closure_real[i] if target_forces[i] > 0 else plan_angles[i]
+        target_angles = np.array([
+            min_closure[i] if targets_raw[i] > 0 else plan_angles[i]
             for i in range(6)
-        ]
-        # Per-finger step size: spread the closing delta evenly over max_iterations.
-        step_sizes = [
-            max(1, (plan_angles[i] - min_closure_real[i]) // max_iterations)
-            if target_forces[i] > 0 else 50
+        ], dtype=float)
+        step_sizes = np.array([
+            max(1.0, abs(plan_angles[i] - min_closure[i]) / max_iterations)
+            if targets_raw[i] > 0 else 0.0
             for i in range(6)
-        ]
-        target_forces_N = _raw_to_N(target_forces)
-        try:
-            gen = self._hand.adaptive_force_control_iter(
-                target_forces, force_target_angles,
-                step_size=step_sizes,
-                max_iterations=max_iterations,
-                speed=50,
-            )
-            for state in gen:
-                if self._abort.is_set():
-                    self._status("Force phase: aborted.")
-                    break
-                if state.get("done"):
-                    final_raw = state["final_forces"]
-                    final_N   = _raw_to_N(final_raw)
-                    errs = [
-                        round(final_N[i] - target_forces_N[i], 3)
-                        for i in range(6)
-                    ]
-                    self._status(
-                        f"Force phase: done. "
-                        f"Final={[f'{v:.2f}' for v in final_N]} N  "
-                        f"Error={[f'{e:+.2f}' for e in errs]} N"
-                    )
-                else:
-                    raw_forces = state.get("forces", [])
-                    self._forcecb(raw_forces)
-                    self._status(f"Force phase: iter {state['iteration']}")
-                    if logger is not None:
-                        logger.log_force_iter(
-                            iteration=state["iteration"],
-                            forces=raw_forces,
-                            angles=state.get("angles", []),
-                            thresholds=target_forces,
-                            forces_N=_raw_to_N(raw_forces),
-                            thresholds_N=target_forces_N,
-                        )
+        ], dtype=float)
 
+        # --- 4. Initial setup -----------------------------------------------
+        try:
+            self._hand.speed_set([75] * 6)
         except Exception as e:
-            self._status(f"Force phase: error: {e}")
-            self._hand.speed_set([1000] * 6)
+            self._status(f"Force phase: speed_set error: {e}")
+            return
+
+        # Inactive fingers (target=0) and thumb_yaw (idx 5) are immediately
+        # considered satisfied so they are never commanded further.
+        satisfied = [targets_raw[i] == 0 for i in range(6)]
+
+        current_angles = np.array(
+            self._hand.angle_read() or [1000] * 6, dtype=float
+        )
+
+        # --- 5. Control loop ------------------------------------------------
+        for iteration in range(max_iterations):
+            if self._abort.is_set():
+                self._status("Force phase: aborted.")
+                return
+
+            # Refresh firmware force protection each iteration.
+            try:
+                self._hand.force_set(targets_raw)
+            except Exception as e:
+                self._status(f"Force phase: force_set error: {e}")
+                break
+
+            # Step unsatisfied fingers toward closure; hold satisfied ones.
+            next_angles = current_angles.copy()
+            for i in range(6):
+                if not satisfied[i]:
+                    delta = target_angles[i] - current_angles[i]
+                    next_angles[i] += float(
+                        np.clip(delta, -step_sizes[i], step_sizes[i])
+                    )
+
+            try:
+                self._hand.angle_set(np.round(next_angles).astype(int).tolist())
+            except Exception as e:
+                self._status(f"Force phase: angle_set error: {e}")
+                break
+
+            time.sleep(poll_dt)
+
+            # Read back actual angles (firmware may have stopped a motor early).
+            readback = self._hand.angle_read()
+            current_angles = np.array(
+                readback if readback else next_angles, dtype=float
+            )
+
+            # Read forces and check per-finger saturation.
+            raw_forces = self._hand.force_act()
+            if raw_forces is None:
+                continue
+            self._forcecb(raw_forces)
+
+            newly_satisfied = [
+                i for i in range(6)
+                if not satisfied[i] and raw_forces[i] >= targets_raw[i]
+            ]
+            for i in newly_satisfied:
+                satisfied[i] = True
+            if newly_satisfied:
+                f_N = _raw_to_N(raw_forces)
+                self._status(
+                    f"Force phase: finger(s) {newly_satisfied} satisfied"
+                    f" @ {[f'{f_N[i]:.2f}' for i in newly_satisfied]} N"
+                )
+
+            self._status(f"Force phase: iter {iteration + 1}/{max_iterations}")
+            if logger is not None:
+                logger.log_force_iter(
+                    iteration=iteration + 1,
+                    forces=raw_forces,
+                    angles=current_angles.tolist(),
+                    thresholds=targets_raw,
+                    forces_N=_raw_to_N(raw_forces),
+                    thresholds_N=targets_N,
+                    # Log distribution metadata on the first iteration only.
+                    weights=weights_norm if iteration == 0 else None,
+                    dist_mode=dist_mode if iteration == 0 else None,
+                )
+
+            if all(satisfied):
+                break
+
+        # --- 6. Final report ------------------------------------------------
+        final_raw = self._hand.force_act()
+        final_N   = _raw_to_N(final_raw) if final_raw else [0.0] * 6
+        errs      = [round(final_N[i] - targets_N[i], 3) for i in range(6)]
+        self._status(
+            f"Force phase: done. "
+            f"Final={[f'{v:.2f}' for v in final_N]} N  "
+            f"Error={[f'{e:+.2f}' for e in errs]} N"
+        )
 
     # ------------------------------------------------------------------
     # Waypoint interpolation

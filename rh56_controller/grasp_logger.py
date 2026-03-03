@@ -68,14 +68,22 @@ class GraspLogger:
                  finger_forces=list(finger_forces) if finger_forces is not None else None)
 
     def log_force_iter(self, *, iteration: int, forces, angles,
-                       thresholds=None, forces_N=None, thresholds_N=None):
-        self.log("force_iter",
-                 iteration=iteration,
-                 forces=list(forces) if forces is not None else None,
-                 forces_N=[round(v, 4) for v in forces_N] if forces_N is not None else None,
-                 angles=list(angles) if angles is not None else None,
-                 thresholds=list(thresholds) if thresholds is not None else None,
-                 thresholds_N=[round(v, 4) for v in thresholds_N] if thresholds_N is not None else None)
+                       thresholds=None, forces_N=None, thresholds_N=None,
+                       weights=None, dist_mode=None):
+        rec = dict(
+            iteration=iteration,
+            forces=list(forces) if forces is not None else None,
+            forces_N=[round(v, 4) for v in forces_N] if forces_N is not None else None,
+            angles=list(angles) if angles is not None else None,
+            thresholds=list(thresholds) if thresholds is not None else None,
+            thresholds_N=[round(v, 4) for v in thresholds_N] if thresholds_N is not None else None,
+        )
+        # Only written on the first iteration (caller passes None thereafter).
+        if weights is not None:
+            rec["weights"] = [round(v, 4) for v in weights]
+        if dist_mode is not None:
+            rec["dist_mode"] = dist_mode
+        self.log("force_iter", **rec)
 
     def log_done(self, *, strategy: str, status: str):
         self.log("done", strategy=strategy, status=status)
