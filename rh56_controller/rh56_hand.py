@@ -899,16 +899,21 @@ class RH56Hand:
         self,
         target_forces: List[int],
         target_angles: List[int],
-        step_size: int = 50,
-        max_iterations: int = 20
+        step_size = 50, # can also accept a list of step sizes per finger
+        max_iterations: int = 20,
+        speed: Optional[int] = None,
     ):
         if len(target_forces) != 6 or len(target_angles) != 6:
             raise ValueError("Need 6 values for both forces and angles")
 
         import numpy as np
 
+        if speed is not None:
+            self.speed_set([speed] * 6)
+
         target_forces_arr = np.array(target_forces)
         target_angles_arr = np.array(target_angles)
+        step_size_arr = np.array(step_size)
         current_angles = np.array(self.angle_read() or [1000] * 6, dtype=float)
 
         for iteration in range(max_iterations):
@@ -920,7 +925,7 @@ class RH56Hand:
 
             # Step angles toward target, clipped to step_size per iteration
             delta = target_angles_arr - current_angles
-            step = np.clip(delta, -step_size, step_size)
+            step = np.clip(delta, -step_size_arr, step_size_arr)
             next_angles = current_angles + step
             self.angle_set(np.round(next_angles).astype(int).tolist())
 

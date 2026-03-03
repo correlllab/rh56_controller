@@ -645,20 +645,33 @@ class GraspExecutor:
             for i in range(6)
         ]
         plan_angles = self._ctrl_to_real(ctrl_values)
-        # Force phase: active fingers must close PAST the geometry target until
-        # contact force is reached.  Target angle 0 = fully closed (real hand
-        # convention); the firmware force_set limit stops the motor when the
-        # threshold is hit.  Inactive fingers (target_forces[i]==0) hold their
-        # plan position and are not moved further.
+        # Minimum-closure position: FK ctrl_max → real = 0 (most physically closed).
+        # Active fingers close from plan_angles toward this target; inactive fingers
+        # hold at their plan position.
+        max_iterations = 20
+        min_closure_real = self._ctrl_to_real(
+            {a: self._fk.ctrl_max[a] for a in _ACTUATOR_ORDER}
+        )
         force_target_angles = [
-            0 if target_forces[i] > 0 else plan_angles[i]
+            min_closure_real[i] if target_forces[i] > 0 else plan_angles[i]
+            for i in range(6)
+        ]
+        # Per-finger step size: spread the closing delta evenly over max_iterations.
+        step_sizes = [
+            max(1, (plan_angles[i] - min_closure_real[i]) // max_iterations)
+            if target_forces[i] > 0 else 50
             for i in range(6)
         ]
         try:
             gen = self._hand.adaptive_force_control_iter(
                 target_forces, force_target_angles,
-                step_size=50, max_iterations=20,
+                step_size=step_sizes,
+                max_iterations=max_iterations,
+                speed=25,
             )
+            # restore speed to max
+            self._hand.speed_set([1000] * 6)
+            time.sleep(0.05)
             for state in gen:
                 if self._abort.is_set():
                     self._status("Force phase: aborted.")

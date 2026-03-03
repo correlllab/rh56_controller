@@ -56,7 +56,7 @@ class RH56Driver(Node):
 
         # Publisher for combined state, matching the C++ package
         self.hand_state_pub = self.create_publisher(MotorStates, 'hands/state', 10)
-        
+
         # Subscriber for combined command, matching the C++ package
         self.hand_cmd_sub = self.create_subscription(
             MotorCmds,
@@ -131,7 +131,7 @@ class RH56Driver(Node):
                 right_angles = self.righthand.angle_read()
                 right_forces = self.righthand.force_act()
                 # right_temps = self.righthand.temp_read()
-                
+
                 left_angles = self.lefthand.angle_read()
                 left_forces = self.lefthand.force_act()
                 # left_temps = self.lefthand.temp_read()
@@ -220,29 +220,6 @@ class RH56Driver(Node):
         response.message = f"Parameters saved to {hand_name} hand's non-volatile memory."
         return response
 
-    # def adaptive_force_callback(self, request: AdaptiveForce.Request, response: AdaptiveForce.Response, hand: RH56Hand):
-    #     hand_name = "right" if hand.hand_id == 1 else "left"
-    #     self.get_logger().info(f"Adaptive force control service called for {hand_name} hand.")
-
-    #     with self.hand_lock:
-    #         results = hand.adaptive_force_control(
-    #             target_forces=list(request.target_forces),
-    #             target_angles=list(request.target_angles),
-    #             step_size=request.step_size,
-    #             max_iterations=request.max_iterations
-    #         )
-
-    #     if results and results.get('final_forces') is not None:
-    #         response.success = True
-    #         response.final_forces = results['final_forces']
-    #         response.final_angles = results['final_angles']
-    #         self.get_logger().info(f"Adaptive force control for {hand_name} hand finished successfully.")
-    #     else:
-    #         response.success = False
-    #         self.get_logger().error(f"Adaptive force control for {hand_name} hand failed.")
-
-    #     return response
-
     def adaptive_force_callback(self, goal_handle, hand):
         hand_name = "right" if hand.hand_id == 1 else "left"
         self.get_logger().info(f"Adaptive force control action called for {hand_name} hand.")
@@ -321,7 +298,7 @@ class RH56Driver(Node):
         response.success = True
         response.message = f"Set joint angles for '{hand_str}'"
         return response
-    
+
     def send_angles_concurrent(self, hand_angle_pairs: List[Tuple[RH56Hand, List[int]]]):
         threads = []
         for hand, angles in hand_angle_pairs:
@@ -334,11 +311,11 @@ class RH56Driver(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    
+
     # Use a MultiThreadedExecutor to handle callbacks and the publisher thread concurrently
     executor = MultiThreadedExecutor()
     driver_node = RH56Driver()
-    
+
     # Check if the node was initialized correctly before spinning
     if rclpy.ok():
         executor.add_node(driver_node)
