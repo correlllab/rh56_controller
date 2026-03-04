@@ -38,9 +38,9 @@ APPROACH_W = 0.038   # 38 mm approach (Plan)
 INTERMED_W = 0.033   # 33 mm intermediate (Plan)
 
 GZ         = OBJECT_H / 2   # 10 mm — grasp midpoint = object centre
-GZ_START   = 0.115          # 11.5 cm — starting height
+GZ_START   = 0.060          # 6 cm — starting height (lower keeps start index in viewport)
 
-EXTRA_TILT = np.radians(45)          # starting orientation offset
+EXTRA_TILT = np.radians(15)          # starting orientation offset
 THUMB_YAW  = 1.16                    # fixed for 2-finger line (all states)
 
 # ---------------------------------------------------------------------------
@@ -173,8 +173,8 @@ def _xz(p: np.ndarray):
     return p[0] * 1e3, p[2] * 1e3
 
 
-_XLO, _XHI = -62.0, 118.0   # mm  (hand base ~+155 mm → clipped off right)
-_ZLO, _ZHI = -8.0,  120.0   # mm
+_XLO, _XHI = -80.0, 100.0   # mm
+_ZLO, _ZHI = -8.0,  133.0   # mm
 
 
 def draw_scene(ax):
@@ -188,30 +188,43 @@ def draw_scene(ax):
     ax.add_patch(rect)
 
 
-def draw_hand(ax, pos, alpha=1.0, lw=1.5, ls="-", zorder=5):
+def _proxy_base(pos: dict, offset_mm: float = 45.0) -> tuple[float, float]:
     """
-    Draw the hand skeleton.
-    The hand base (~+155 mm) is clipped off the right edge; only the arm
-    stubs and finger tips within the viewport are visible.
+    Visible proxy for the (off-screen) wrist: step offset_mm from the tip
+    midpoint toward the actual base, clamped inside the viewport.
     """
-    bx, bz = _xz(pos["base"])
     tx, tz = _xz(pos["thumb"])
     ix, iz = _xz(pos["index"])
+    mx, mz = (tx + ix) / 2, (tz + iz) / 2
+    bx, bz = _xz(pos["base"])
+    dx, dz = bx - mx, bz - mz
+    length = np.hypot(dx, dz)
+    if length < 1e-9:
+        return float(np.clip(bx, _XLO + 3, _XHI - 3)), float(np.clip(bz, _ZLO + 3, _ZHI - 3))
+    ux, uz = dx / length, dz / length
+    px = float(np.clip(mx + ux * offset_mm, _XLO + 3, _XHI - 3))
+    pz = float(np.clip(mz + uz * offset_mm, _ZLO + 3, _ZHI - 3))
+    return px, pz
 
-    cap = dict(solid_capstyle="butt", solid_joinstyle="round")
-    ax.plot([bx, tx], [bz, tz], color=C_THUMB, lw=lw, ls=ls, alpha=alpha,
-            zorder=zorder, clip_on=True, **cap)
-    ax.plot([bx, ix], [bz, iz], color=C_INDEX, lw=lw, ls=ls, alpha=alpha,
-            zorder=zorder, clip_on=True, **cap)
-    ax.plot([tx, ix], [tz, iz], color=C_PINCH, lw=lw * 0.75, ls=ls,
-            alpha=alpha * 0.6, zorder=zorder - 1, clip_on=True, **cap)
 
-    ms = 5.0
-    # Only draw tip dots when they're clearly within the viewport
-    if _XLO + 2 < tx < _XHI - 2:
-        ax.plot(tx, tz, "o", color=C_THUMB, ms=ms, alpha=alpha, zorder=zorder + 1)
-    if _XLO + 2 < ix < _XHI - 2:
-        ax.plot(ix, iz, "o", color=C_INDEX, ms=ms, alpha=alpha, zorder=zorder + 1)
+def draw_hand(ax, pos, alpha=1.0, zorder=5, draw_lines=True):
+    """Three dots: thumb tip (red), index tip (blue), wrist proxy (black).
+    draw_lines: add semi-transparent grey dashed connectors (skip when dots are very close)."""
+    tx, tz = _xz(pos["thumb"])
+    ix, iz = _xz(pos["index"])
+    px, pz = _proxy_base(pos)
+
+    # if draw_lines:
+    la = alpha * 1.0
+    lkw = dict(color="#AAAAAA", lw=0.7, ls=(0, (3, 4)), alpha=la,
+                zorder=zorder - 1, clip_on=True)
+    ax.plot([px, tx], [pz, tz], **lkw)
+    ax.plot([px, ix], [pz, iz], **lkw)
+
+    ms = 5.5
+    ax.plot(px, pz, "o", color=C_BASE,  ms=ms, alpha=alpha, zorder=zorder,     clip_on=True)
+    ax.plot(tx, tz, "o", color=C_THUMB, ms=ms, alpha=alpha, zorder=zorder + 1, clip_on=True)
+    ax.plot(ix, iz, "o", color=C_INDEX, ms=ms, alpha=alpha, zorder=zorder + 1, clip_on=True)
 
 
 def setup_ax(ax, title):
@@ -231,14 +244,9 @@ def setup_ax(ax, title):
 # ---------------------------------------------------------------------------
 fig, axes = plt.subplots(1, 3, figsize=(13, 5.8))
 fig.patch.set_facecolor("white")
-plt.subplots_adjust(left=0.02, right=0.98, top=0.90, bottom=0.12, wspace=0.06)
+plt.subplots_adjust(left=0.02, right=0.98, top=0.90, bottom=0.17, wspace=0.06)
 
 GZ_MM = GZ * 1e3
-
-def _wrist_hint(ax, z_mm=88):
-    """Small 'wrist →' hint near the right clip edge."""
-    ax.text(_XHI - 2, z_mm, "wrist →", fontsize=7, color="#BBBBBB",
-            ha="right", va="center", style="italic", zorder=10)
 
 def _subtitle(ax, text):
     """Small italic subtitle centred just below axes bottom."""
@@ -258,34 +266,28 @@ setup_ax(ax, "Naive")
 _subtitle(ax, "open fingers → close at target")
 draw_scene(ax)
 
-draw_hand(ax, naive["start"], alpha=0.15, lw=0.85, ls=(0, (5, 4)), zorder=4)
-draw_hand(ax, naive["half"],  alpha=0.30, lw=1.1,  ls=(0, (5, 3)), zorder=5)
-draw_hand(ax, naive["crash"], alpha=0.62, lw=1.5,  ls="-",         zorder=6)
-draw_hand(ax, naive["whiff"], alpha=1.00, lw=2.0,  ls="-",         zorder=7)
+draw_hand(ax, naive["start"], alpha=0.15, zorder=4)
+draw_hand(ax, naive["half"],  alpha=0.30, zorder=5)
+draw_hand(ax, naive["crash"], alpha=0.62, zorder=6)
+draw_hand(ax, naive["whiff"], alpha=1.00, zorder=7)
 
 # Collision marker — thumb hits ground
 th_crash_x, _ = _xz(naive["crash"]["thumb"])
 ax.plot(th_crash_x, 0, "x", color=C_COLL, ms=10, mew=2.2, zorder=9, alpha=0.9)
-ax.annotate(
-    "ground\ncollision",
-    xy=(th_crash_x, 1), xytext=(th_crash_x - 16, 32),
-    fontsize=10.5, color=C_COLL, ha="center", va="bottom",
-    arrowprops=dict(arrowstyle="->", color=C_COLL, lw=0.9,
-                    connectionstyle="arc3,rad=-0.3"),
-)
-_wrist_hint(ax)
+ax.text(th_crash_x, 2, "ground\ncollision", fontsize=9.5, color=C_COLL,
+        ha="center", va="bottom", zorder=10)
 ax.axhline(GZ_MM, color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), alpha=0.7, zorder=2)
 
 # ── Column 2 · Thumb Reflex ─────────────────────────────────────────────────
 ax = axes[1]
 setup_ax(ax, "Thumb Reflex")
-_subtitle(ax, "pre-set thumb → reactive index close")
+_subtitle(ax, "pre-set thumb → reactive index closure")
 draw_scene(ax)
 
-draw_hand(ax, reflex["start"],    alpha=0.15, lw=0.85, ls=(0, (5, 4)), zorder=4)
-draw_hand(ax, reflex["half"],     alpha=0.30, lw=1.1,  ls=(0, (5, 3)), zorder=5)
-draw_hand(ax, reflex["at_grasp"], alpha=0.62, lw=1.5,  ls="-",         zorder=6)
-draw_hand(ax, reflex["grasp"],    alpha=1.00, lw=2.0,  ls="-",         zorder=7)
+draw_hand(ax, reflex["start"],    alpha=0.15, zorder=4)
+draw_hand(ax, reflex["half"],     alpha=0.30, zorder=5)
+draw_hand(ax, reflex["at_grasp"], alpha=0.62, zorder=6)
+draw_hand(ax, reflex["grasp"],    alpha=1.00, zorder=7)
 
 # Arrow: index snaps closed
 ig_x, ig_z = _xz(reflex["at_grasp"]["index"])
@@ -295,46 +297,47 @@ ax.annotate("", xy=(fg_x, fg_z), xytext=(ig_x, ig_z),
                             connectionstyle="arc3,rad=0.4"),
             zorder=8)
 
-_wrist_hint(ax)
 ax.axhline(GZ_MM, color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), alpha=0.7, zorder=2)
 
 # ── Column 3 · Plan ─────────────────────────────────────────────────────────
 ax = axes[2]
 setup_ax(ax, "Plan")
-_subtitle(ax, "pre-close fingers → stepped width reduction")
+_subtitle(ax, "offset pregrasp → iterative closure")
 draw_scene(ax)
 
-draw_hand(ax, plan["start"],    alpha=0.15, lw=0.85, ls=(0, (5, 4)), zorder=4)
-draw_hand(ax, plan["half"],     alpha=0.28, lw=1.0,  ls=(0, (5, 3)), zorder=5)
-draw_hand(ax, plan["approach"], alpha=0.48, lw=1.3,  ls="-",         zorder=6)
-draw_hand(ax, plan["step1"],    alpha=0.72, lw=1.7,  ls="-",         zorder=7)
-draw_hand(ax, plan["grasp"],    alpha=1.00, lw=2.0,  ls="-",         zorder=8)
+draw_hand(ax, plan["start"],    alpha=0.15, zorder=4)
+draw_hand(ax, plan["half"],     alpha=0.28, zorder=5)
+draw_hand(ax, plan["approach"], alpha=0.48, zorder=6, draw_lines=False)
+draw_hand(ax, plan["step1"],    alpha=0.72, zorder=7, draw_lines=False)
+draw_hand(ax, plan["grasp"],    alpha=1.00, zorder=8, draw_lines=False)
 
 # Width step labels between each pair of tips (at gz level)
 # Labels above the object (top at 20 mm), stacked with 4 mm spacing
-_pinch_width_label(ax, plan["approach"], "38 mm", z_abs=30, alpha=0.55)
-_pinch_width_label(ax, plan["step1"],    "33 mm", z_abs=26, alpha=0.78)
-_pinch_width_label(ax, plan["grasp"],    "28 mm", z_abs=22, alpha=1.00)
+_pinch_width_label(ax, plan["approach"], "38 mm", z_abs=32, alpha=0.55, fontsize=9)
+_pinch_width_label(ax, plan["step1"],    "33 mm", z_abs=27, alpha=0.78, fontsize=9)
+_pinch_width_label(ax, plan["grasp"],    "28 mm", z_abs=22, alpha=1.00, fontsize=9)
 
-_wrist_hint(ax)
 ax.axhline(GZ_MM, color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), alpha=0.7, zorder=2)
 
-# ── Shared legend ────────────────────────────────────────────────────────────
+# ── Shared legend ─────────────────────────────────────────────────────────────
+# Row 1: dot type colours
+# Row 2: step progression (four shades of grey, lightest → darkest)
 leg_items = [
-    Line2D([0], [0], color=C_THUMB, lw=2.0,  label="Thumb"),
-    Line2D([0], [0], color=C_INDEX, lw=2.0,  label="Index"),
+    Line2D([0],[0], marker='o', ls='none', mfc=C_THUMB, mec=C_THUMB, ms=7, label="Thumb tip"),
+    Line2D([0],[0], marker='o', ls='none', mfc=C_INDEX, mec=C_INDEX, ms=7, label="Index tip"),
+    Line2D([0],[0], marker='o', ls='none', mfc=C_BASE,  mec=C_BASE,  ms=7, label="Wrist (proxy)"),
     mpatches.Patch(fc=C_OBJ, ec=C_OBJ_E, lw=0.8, label="Object (28 × 20 mm)"),
-    Line2D([0], [0], color=C_GND,   lw=1.5,  label="Ground"),
-    Line2D([0], [0], color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), label="Grasp Z height"),
+    Line2D([0],[0], marker='o', ls='none', mfc='#555555', mec='#555555', ms=7, alpha=0.15, label="Step 1"),
+    Line2D([0],[0], marker='o', ls='none', mfc='#555555', mec='#555555', ms=7, alpha=0.40, label="Step 2"),
+    Line2D([0],[0], marker='o', ls='none', mfc='#555555', mec='#555555', ms=7, alpha=0.70, label="Step 3"),
+    Line2D([0],[0], marker='o', ls='none', mfc='#555555', mec='#555555', ms=7, alpha=1.00, label="Final"),
 ]
 fig.legend(
-    handles=leg_items, loc="lower center", ncol=5,
+    handles=leg_items, loc="lower center", ncol=4,
     fontsize=8.5, frameon=False,
     bbox_to_anchor=(0.5, 0.01),
-    handlelength=1.6, columnspacing=1.5,
+    handlelength=0.8, columnspacing=1.6,
 )
-
-# (step labels removed — hand base is off-screen right; sequence reads via alpha/dash progression)
 
 # ── Save ─────────────────────────────────────────────────────────────────────
 out_pdf = _ROOT / "grasp_strategy_comparison.pdf"
