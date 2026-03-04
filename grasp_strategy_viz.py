@@ -222,7 +222,7 @@ def setup_ax(ax, title):
     ax.set_yticks([])
     for sp in ax.spines.values():
         sp.set_visible(False)
-    ax.set_title(title, fontsize=11, fontweight="bold", color="#222222", pad=10,
+    ax.set_title(title, fontsize=16, fontweight="bold", color="#222222", pad=10,
                  fontfamily="sans-serif")
 
 
@@ -243,7 +243,7 @@ def _wrist_hint(ax, z_mm=88):
 def _subtitle(ax, text):
     """Small italic subtitle centred just below axes bottom."""
     ax.text(0.5, -0.055, text, transform=ax.transAxes,
-            fontsize=7, color="#888888", ha="center", va="top", style="italic")
+            fontsize=14, color="#888888", ha="center", va="top", style="italic")
 
 def _pinch_width_label(ax, pos, label, z_abs, alpha=1.0, fontsize=7.0):
     """Label at a fixed absolute Z, centered between the two tips in X."""
@@ -269,9 +269,9 @@ ax.plot(th_crash_x, 0, "x", color=C_COLL, ms=10, mew=2.2, zorder=9, alpha=0.9)
 ax.annotate(
     "ground\ncollision",
     xy=(th_crash_x, 1), xytext=(th_crash_x - 16, 32),
-    fontsize=7.5, color=C_COLL, ha="center", va="bottom",
+    fontsize=10.5, color=C_COLL, ha="center", va="bottom",
     arrowprops=dict(arrowstyle="->", color=C_COLL, lw=0.9,
-                    connectionstyle="arc3,rad=0.3"),
+                    connectionstyle="arc3,rad=-0.3"),
 )
 _wrist_hint(ax)
 ax.axhline(GZ_MM, color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), alpha=0.7, zorder=2)
@@ -325,7 +325,7 @@ leg_items = [
     Line2D([0], [0], color=C_INDEX, lw=2.0,  label="Index"),
     mpatches.Patch(fc=C_OBJ, ec=C_OBJ_E, lw=0.8, label="Object (28 × 20 mm)"),
     Line2D([0], [0], color=C_GND,   lw=1.5,  label="Ground"),
-    Line2D([0], [0], color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), label="Grasp height"),
+    Line2D([0], [0], color="#BBBBBB", lw=0.7, ls=(0, (3, 4)), label="Grasp Z height"),
 ]
 fig.legend(
     handles=leg_items, loc="lower center", ncol=5,
