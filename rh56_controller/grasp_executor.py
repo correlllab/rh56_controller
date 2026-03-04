@@ -37,6 +37,7 @@ _FORCE_CALIB = {
     0: (0.006452,  0.018),   # pinky
     1: (0.006452,  0.018),   # ring
     2: (0.006452,  0.018),   # middle
+    # 3: (0.006452,  0.018),   # index, overwriting index-specific calibration
     3: (0.007478, -0.414),   # index
     4: (0.012547,  0.384),   # thumb (bend)
     5: (0.012547,  0.384),   # thumb (yaw)
@@ -657,7 +658,7 @@ class GraspExecutor:
 
         # Wait for fingers to reach target position at full speed before
         # switching to the slow adaptive force phase.
-        time.sleep(0.5)
+        time.sleep(0.25)
 
         if force_N > 0.0 and not self._abort.is_set():
             self._status(f"Thumb Reflex: entering force phase ({force_N:.1f} N)...")
