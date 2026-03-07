@@ -49,6 +49,15 @@ FINGER_COLORS = {
     "pinky":  "#9b59b6",
 }
 
+# Fingertip site names in ur5_inspire.xml / inspire_right_ur5.xml
+_TIP_SITE_NAMES = {
+    "thumb":  "right_thumb_tip",
+    "index":  "right_index_tip",
+    "middle": "right_middle_tip",
+    "ring":   "right_ring_tip",
+    "pinky":  "right_pinky_tip",
+}
+
 # Viewer geom RGBA per finger (float32, MuJoCo)
 _FINGER_RGBA = {
     "thumb":  np.array([0.9, 0.3, 0.2, 0.9], dtype=np.float32),
@@ -174,20 +183,9 @@ def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
     mujoco.mj_kinematics(model, data)
 
 
-def _worker_add_geoms(viewer, state: np.ndarray) -> None:
-    """Draw grasp geometry overlay from pre-computed world-frame tip positions."""
-    mode_idx   = int(round(state[1]))
-    cyl_radius = float(state[2])
-    mode       = MODES[mode_idx] if 0 <= mode_idx < len(MODES) else ""
-
-    wtips: Dict[str, np.ndarray] = {}
-    for i, fname in enumerate(_VIEWER_FINGER_ORDER):
-        p = state[5 + i * 3: 5 + i * 3 + 3]
-        if not np.any(np.isnan(p)):
-            wtips[fname] = p.copy()
-
-    scn = viewer.user_scn
-    scn.ngeom = 0
+def _worker_draw_geoms(scn, wtips: Dict[str, np.ndarray],
+                       mode: str, cyl_radius: float) -> None:
+    """Draw grasp geometry geoms onto scn from pre-computed world-frame tip positions."""
 
     def add_sphere(pos, radius=0.003, rgba=(0.9, 0.9, 0.2, 0.9)):
         if scn.ngeom >= scn.maxgeom:
@@ -263,6 +261,46 @@ def _worker_add_geoms(viewer, state: np.ndarray) -> None:
                         add_line(p0, p1, rgba=(0.2, 0.7, 0.9, 0.5), width=0.002)
 
 
+def _worker_add_geoms(viewer, state: np.ndarray) -> None:
+    """Draw grasp geometry overlay from pre-computed world-frame tip positions in state array."""
+    mode_idx   = int(round(state[1]))
+    cyl_radius = float(state[2])
+    mode       = MODES[mode_idx] if 0 <= mode_idx < len(MODES) else ""
+
+    wtips: Dict[str, np.ndarray] = {}
+    for i, fname in enumerate(_VIEWER_FINGER_ORDER):
+        p = state[5 + i * 3: 5 + i * 3 + 3]
+        if not np.any(np.isnan(p)):
+            wtips[fname] = p.copy()
+
+    scn = viewer.user_scn
+    scn.ngeom = 0
+    _worker_draw_geoms(scn, wtips, mode, cyl_radius)
+
+
+def _worker_add_geoms_from_model(viewer, data: "mujoco.MjData",
+                                 tip_site_ids: Dict[str, int],
+                                 state: np.ndarray) -> None:
+    """Draw grasp geometry overlay using actual MuJoCo site positions (robot viewer).
+
+    Uses data.site_xpos for accurate fingertip positions instead of the
+    grasp-scene state array (which has a known transform offset in robot mode).
+    """
+    mode_idx   = int(round(state[1]))
+    cyl_radius = float(state[2])
+    mode       = MODES[mode_idx] if 0 <= mode_idx < len(MODES) else ""
+
+    active = set(_VIEWER_MODE_ACTIVE.get(mode_idx, list(_TIP_SITE_NAMES.keys())))
+    wtips: Dict[str, np.ndarray] = {}
+    for fname, sid in tip_site_ids.items():
+        if fname in active:
+            wtips[fname] = data.site_xpos[sid].copy()
+
+    scn = viewer.user_scn
+    scn.ngeom = 0
+    _worker_draw_geoms(scn, wtips, mode, cyl_radius)
+
+
 def _hand_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                          stop_event, title: str = "") -> None:
     """Subprocess entry: passive floating-hand MuJoCo viewer."""
@@ -319,6 +357,13 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                                       lm_damping=1e-6)
         posture_task = mink.PostureTask(model, cost=1e-4)
         tasks        = [eeff_task, posture_task]
+
+        # Look up fingertip site IDs for robot-frame geom overlay (request 1)
+        tip_site_ids: Dict[str, int] = {}
+        for fname, sname in _TIP_SITE_NAMES.items():
+            sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, sname)
+            if sid >= 0:
+                tip_site_ids[fname] = sid
 
         _ARM_JNT = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
@@ -406,7 +451,10 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                     configuration.update(data.qpos)
 
                 state = np.array(state_arr[:])
-                _worker_add_geoms(v, state)
+                if tip_site_ids:
+                    _worker_add_geoms_from_model(v, data, tip_site_ids, state)
+                else:
+                    _worker_add_geoms(v, state)
                 v.sync()
                 time.sleep(0.033)
     except Exception as exc:

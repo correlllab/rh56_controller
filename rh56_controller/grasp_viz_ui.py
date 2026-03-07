@@ -34,6 +34,7 @@ from .grasp_geometry import ClosureResult, GRASP_FINGER_SETS, NON_THUMB_FINGERS
 from .grasp_viz_core import GraspVizCore
 from .grasp_viz_workers import FINGER_COLORS, MODES
 from .grasp_logger import GraspLogger
+from .grasp_viz_force_panel import ForceVizPanel
 
 # Active finger indices (actuator order: pinky=0 ring=1 middle=2 index=3 thumb_bend=4)
 # per closure mode, used when setting force targets
@@ -263,6 +264,9 @@ class GraspVizUI(GraspVizCore):
                   state="normal" if _mink_ready else "disabled",
                   command=self._launch_robot_viewer_mink).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+        tk.Button(outer, text="Force Viz",
+                  command=self._open_force_viz_panel).grid(
+            row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
 
         # Send to Real checkbox
         if self._hand is not None:
@@ -545,6 +549,22 @@ class GraspVizUI(GraspVizCore):
         self._push_viewer_ctrl()
         self._schedule_plot_only()  # arm-pose only — do not re-send fingers
 
+    def _open_force_viz_panel(self):
+        """Open (or raise) the Force Viz Toplevel window."""
+        if hasattr(self, "_force_panel") and self._force_panel is not None:
+            try:
+                self._force_panel._win.lift()
+                return
+            except Exception:
+                self._force_panel = None
+        self._force_panel = ForceVizPanel(
+            root=self._root,
+            ctrl_arr=self._custom_ctrl_arr,
+            state_arr=self._viewer_state_arr,
+            mp_ctx=self._mp_ctx,
+            hand=self._hand,
+        )
+
     def _on_send_real(self):
         self._send_real = self._send_real_var.get()
         self._grasp_hand_locked = False  # explicit toggle always clears the post-grasp lock
@@ -642,15 +662,33 @@ class GraspVizUI(GraspVizCore):
 
     def _on_simulate_trajectory(self):
         self._real_tracking.value = 0
-        self._sim_grasp_t.value   = 0.0
         self._launch_robot_viewer_ours()
-        self._push_viewer_ctrl()
-        self._update_status("Sim: arm moving to pose, fingers will close...")
 
         self._sim_grasp_gen += 1
-        gen = self._sim_grasp_gen
+        gen      = self._sim_grasp_gen
+        strategy = self._grasp_strategy
 
-        def _animate():
+        with self._state_lock:
+            r = self._result
+        if r is None:
+            return
+
+        try:
+            step_mm = float(self._ent_step.get().strip() or "10") if hasattr(self, "_ent_step") else 10.0
+        except (ValueError, AttributeError):
+            step_mm = 10.0
+        try:
+            approach_m = (float(self._ent_approach.get().strip()) / 1000.0
+                          if hasattr(self, "_ent_approach") and self._ent_approach.get().strip()
+                          else None)
+        except (ValueError, AttributeError):
+            approach_m = None
+
+        def _animate_naive():
+            # Arm moves to pose (IK), fingers close linearly via sim_grasp_t
+            self._sim_grasp_t.value = 0.0
+            self._push_viewer_ctrl()
+            self._update_status("Sim Naive: arm → pose, fingers closing...")
             time.sleep(2.0)
             n_steps = 40
             for i in range(n_steps + 1):
@@ -658,9 +696,87 @@ class GraspVizUI(GraspVizCore):
                     return
                 self._sim_grasp_t.value = i / n_steps
                 time.sleep(0.05)
-            self._status_queue.put("Sim grasp complete.")
+            self._status_queue.put("Sim Naive: complete.")
 
-        threading.Thread(target=_animate, daemon=True, name="sim-grasp").start()
+        def _animate_plan():
+            try:
+                r_target = self.closure.solve(self._mode, self._width_target_m)
+            except Exception:
+                r_target = r
+            closures = self._compute_plan_closures(step_mm, r_target, approach_m)
+            if not closures:
+                return
+
+            # Disable sim_grasp_t interpolation — drive ctrl_arr directly
+            self._sim_grasp_t.value = 1.0
+
+            # Build approach finger config: all open, thumb_yaw fixed at final
+            final_cv  = r_target.ctrl_values
+            open_fc   = {k: self.fk.ctrl_min[k] for k in
+                         ["pinky", "ring", "middle", "index", "thumb_proximal"]}
+            open_fc["thumb_yaw"] = final_cv.get("thumb_yaw", 0.0)
+
+            # Phase 1: fingers to approach config, arm to approach pose
+            r_approach = closures[0]
+            ctrl = self._build_ctrl_array(r_approach, open_fc)
+            self._custom_ctrl_arr[:] = ctrl
+            self._update_status(
+                f"Sim Plan: approach width={r_approach.width*1000:.1f}mm → "
+                f"target={r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
+            time.sleep(2.5)
+
+            # Phase 2: step through remaining waypoints (arm + fingers together)
+            for i, r_i in enumerate(closures[1:]):
+                if self._sim_grasp_gen != gen:
+                    return
+                ctrl = self._build_ctrl_array(r_i)
+                self._custom_ctrl_arr[:] = ctrl
+                self._update_status(
+                    f"Sim Plan: step {i+1}/{len(closures)-1} "
+                    f"({r_i.width*1000:.1f}mm)")
+                time.sleep(0.5)
+
+            self._status_queue.put("Sim Plan: complete.")
+
+        def _animate_thumb_reflex():
+            try:
+                r_target = self.closure.solve(self._mode, self._width_target_m)
+            except Exception:
+                r_target = r
+
+            self._sim_grasp_t.value = 1.0
+
+            # Phase 1: thumb to final config, other fingers open, arm to final pose
+            final_cv = r_target.ctrl_values
+            thumb_fc = {
+                "pinky":          self.fk.ctrl_min["pinky"],
+                "ring":           self.fk.ctrl_min["ring"],
+                "middle":         self.fk.ctrl_min["middle"],
+                "index":          self.fk.ctrl_min["index"],
+                "thumb_proximal": final_cv.get("thumb_proximal", 0.0),
+                "thumb_yaw":      final_cv.get("thumb_yaw",      0.0),
+            }
+            ctrl = self._build_ctrl_array(r_target, thumb_fc)
+            self._custom_ctrl_arr[:] = ctrl
+            self._update_status("Sim Thumb Reflex: thumb → final, arm → pose...")
+            time.sleep(2.5)
+            if self._sim_grasp_gen != gen:
+                return
+
+            # Phase 2: all fingers close
+            ctrl = self._build_ctrl_array(r_target)
+            self._custom_ctrl_arr[:] = ctrl
+            self._update_status("Sim Thumb Reflex: all fingers closing...")
+            time.sleep(1.0)
+            self._status_queue.put("Sim Thumb Reflex: complete.")
+
+        self._update_status(f"Sim [{strategy}]: starting...")
+        if strategy == "Plan":
+            threading.Thread(target=_animate_plan, daemon=True, name="sim-grasp").start()
+        elif strategy == "Thumb Reflex":
+            threading.Thread(target=_animate_thumb_reflex, daemon=True, name="sim-grasp").start()
+        else:
+            threading.Thread(target=_animate_naive, daemon=True, name="sim-grasp").start()
 
     # ------------------------------------------------------------------
     # GRASP! execution
