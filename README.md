@@ -1,6 +1,6 @@
 # Overview
 
-This repository provides both the **control stack** and the **quantitative experimental benchmarks** for the Inspire RH56DFX dexterous hand. 
+This repository provides both the **control stack** and the **quantitative experimental benchmarks** for the Inspire RH56DFX dexterous hand.
 It includes calibrated force mapping, dynamic step-response characterization, high-speed force-limiting analysis, and command-to-motion latency, establishing a reproducible baseline for contact-rich manipulation research while supporting ROS 2 integration for deployment.
 
 ## 🎥 Grasp Demos
@@ -34,7 +34,7 @@ This repository uses [uv](https://docs.astral.sh/uv/) as the package manager.  `
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and set up the environment
-git clone https://github.com/correlllab/rh56_controller.git
+git clone --recurse-submodules https://github.com/correlllab/rh56_controller.git
 cd rh56_controller
 uv sync          # creates .venv and installs all dependencies
 
@@ -54,11 +54,24 @@ To run without the mink planner (e.g., hardware-only use without simulation):
 uv run python -m rh56_controller.grasp_viz --no-mink
 ```
 
+### Grasp Planner — Quick Reference
+
+| Command | Description |
+|:--|:--|
+| `uv run python -m rh56_controller.grasp_viz` | Floating-hand grasp geometry viewer |
+| `uv run python -m rh56_controller.grasp_viz --robot` | UR5+hand sim viewer with mink IK |
+| `uv run python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0` | Sim viewer + real hand mirroring |
+| `uv run python -m rh56_controller.grasp_viz --robot --real-robot --ur5-ip 192.168.0.4 --port /dev/ttyUSB0` | Full sim+real UR5 arm + hand control |
+
+Once the grasp viewer is open, click **Force Viz** to open the force closure analysis panel (works in sim-only or real-hand mode).
+
+For complete real-robot setup, wiring, and operation guide, see [README_REAL.md](README_REAL.md).
+
 ---
 
 ## Force Mapping to Newtons
 
-> This repository currently exposes finger forces in **raw 0–1000 units**.  
+> This repository currently exposes finger forces in **raw 0–1000 units**.
 > External experiments show a **linear** relationship between the raw reading `r` and force in Newtons `F` for each finger:
 >
 > $$
@@ -97,7 +110,6 @@ def raw_to_newtons(raw, finger="index"):
 ```
 
 > **Notes.**
-> * Our hand is damaged so the results might not be accurate.
 > * The fits are valid within the listed raw ranges; outside this interval you will be extrapolating.
 > * Measured maximal forces at `r=1000` are approximately: index ≈ 7.06 N, middle ≈ 6.47 N, thumb_bend ≈ 12.93 N.
 
@@ -116,32 +128,32 @@ Each read operation takes 0.006s, totalling 0.024s for four reads. After ROS ove
 ---
 ## X‑mode: Force‑Reactive Pinch for Peg‑in‑Hole
 
-**What it does.**  
+**What it does.**
 X‑mode is a lightweight, event‑driven controller for the RH56 hand that
 - **auto‑closes** on contact to pick the part, and
 - **auto‑opens** after a **short horizontal verification** confirms that the peg is constrained by the hole (index finger spike),
 enabling fully automated pick–insert–release cycles.
 
-**Signals & units.**  
+**Signals & units.**
 All force/pressure readings are **raw, unitless counts** (e.g., 0–1000). Thresholds below are specified in these raw units.
 
 ### Event logic
 
 1. **Pre‑grasp & limits.** Move to a precision‑pinch pre‑grasp and set per‑finger force limits (index, thumb).
-2. **Auto‑close on contact (thumb).** Monitor the thumb channel; when a **positive jump** ΔF_th ≥ `CONTACT_SPIKE` occurs, **close** to grasp.  
+2. **Auto‑close on contact (thumb).** Monitor the thumb channel; when a **positive jump** ΔF_th ≥ `CONTACT_SPIKE` occurs, **close** to grasp.
    *Timeout:* if **no contact** is detected for `TIMEOUT` (≈20 s), **open** and reset to `WAIT`.
 3. **Stabilize grasp (index).** After closing, monitor the **index** moving‑average; once it exceeds `LOAD_ARM`, the grasp is considered established.
 4. **Horizontal verification.** If the **index** force reading shows a **spike** ΔF_idx ≥ `LATERAL_SPIKE`, interpret this as **peg constrained by the hole** (i.e., insertion achieved).
-5. **Auto‑open to release.** On successful horizontal verification, **open** (with an error‑clear + second open for robustness) and return to `WAIT`.  
+5. **Auto‑open to release.** On successful horizontal verification, **open** (with an error‑clear + second open for robustness) and return to `WAIT`.
    *Timeout:* if no lateral spike is observed for `TIMEOUT`, **open** and reset.
 
 ### Default parameters (tune per task; all in raw, unitless counts)
 
-- `FORCE_LIMIT` (per finger): **~800**  
-- `CONTACT_SPIKE` (thumb Δ): **+75**  
-- `LOAD_ARM` (index moving‑avg): **≥ 500**  
-- `LATERAL_SPIKE` (index Δ during sweep): **+75**  
-- Moving‑average window: **~0.5 s**  
+- `FORCE_LIMIT` (per finger): **~800**
+- `CONTACT_SPIKE` (thumb Δ): **+75**
+- `LOAD_ARM` (index moving‑avg): **≥ 500**
+- `LATERAL_SPIKE` (index Δ during sweep): **+75**
+- Moving‑average window: **~0.5 s**
 - `TIMEOUT`: **~20 s**
 
 ## 📊 2025‑11‑04 — Calibration & Benchmarks
@@ -153,7 +165,7 @@ This section aggregates the results from today's experiments and can be moved in
 **Setup.** Each finger was commanded a unit step from its baseline to `target_angle = 500` (raw units) at several speeds. We report rise/settling times, overshoot and steady‑state error as computed by the post‑processing scripts.
 
 **Takeaways.**
-- At `speed=1000`, rise times are ~0.18–0.30 s and settling times ~0.27–0.43 s for index/middle/thumb joints with minimal overshoot (where observed).  
+- At `speed=1000`, rise times are ~0.18–0.30 s and settling times ~0.27–0.43 s for index/middle/thumb joints with minimal overshoot (where observed).
 - Thumb‑rotate often undershoots the target (negative steady‑state error); consider offset compensation in the driver.
 
 ---
@@ -176,21 +188,21 @@ The test applied a fixed force limit (raw units) and measured the peak force at 
 
 ### Attempted Alternatives for High-Speed Force Limiting
 
-Several approaches were tested to mitigate the overshoot observed when using the vendor-provided `force_limit` register at high motor speeds. 
+Several approaches were tested to mitigate the overshoot observed when using the vendor-provided `force_limit` register at high motor speeds.
 Because the internal register does not reliably stop motion in time when `speed ≥ 25`, we attempted to implement custom software-level safeguards:
 
 1. **Real-time force monitoring:** continuously reading the finger’s force sensor and sending an immediate new target angle to halt motion when the threshold was reached.
 2. **Dynamic angle stepping:** issuing small incremental angle commands (small step size) to effectively lower motion speed while retaining manual force supervision.
 3. **Hybrid scheme:** combining 1 and 2 to emulate a closed-loop stop.
 
-However, comparative tests against the native register control showed **no measurable improvement** in either peak force or overshoot timing.  
+However, comparative tests against the native register control showed **no measurable improvement** in either peak force or overshoot timing.
 This suggests that the observed overshoot originates in the **firmware-side latency** of command execution rather than host-side timing, and cannot be fully compensated without direct low-level access to the actuator’s embedded controller.
 
 > **Conclusion:** for speeds above 25, the hardware register remains the limiting factor; software-side interception offers no significant benefit under the current communication interface.
 
 ### Discussion and Future Directions
 
-Empirically, the hardware-level `force_limit` register becomes ineffective at **speeds above ≈25**, where the actuator continues to move significantly past the intended stop threshold.  
+Empirically, the hardware-level `force_limit` register becomes ineffective at **speeds above ≈25**, where the actuator continues to move significantly past the intended stop threshold.
 The lack of responsiveness suggests that the limit enforcement occurs only after a buffered command cycle, rather than in real-time on the motor controller.
 
 A possible next step is to explore a **predictive host-side cutoff**, in which the system:
@@ -198,7 +210,7 @@ A possible next step is to explore a **predictive host-side cutoff**, in which t
 2. Estimates the short-term rate of force increase (force growth trend); and
 3. Issues an early stop command based on the **measured command–actuation latency** (≈60–70 ms).
 
-This would allow the software to preemptively compensate for communication and processing delays.  
+This would allow the software to preemptively compensate for communication and processing delays.
 However, this concept has **not yet been experimentally validated**, and remains a candidate for future investigation once low-latency force streaming and synchronization are implemented.
 
 ---
@@ -229,86 +241,99 @@ We measured latency from the **command publish** timestamp to the first detected
 **Harness parameters (representative):** `baseline≈1000`, `cmd_angle≈700`, `|Δ|≈300`, `speed≈1000`, `movement_eps≈10`.
 
 ---
+<img src="resource/video/3d_workspace.png" alt="2d kinematice space" width="720">
 
-### Reproducibility — Data files
+## Early Experiments — Baseline (Pre-Planner)
 
-Commit these into e.g. `resource/experiments/2025-11-04/`:
+These notes describe the initial open-loop baseline experiments conducted before the analytical grasp planner was developed.
+For the full planner-validated benchmark (300 grasps, 15 objects), see the **Analytical Grasp Planning** section below.
 
-- `force mapping.xlsx` (Index/Mid/Thumb_bend sheets; columns: “Hand reading”, “force meter reading / N”).  
-- `summary_index.csv`, `summary_mid.csv`, `summary_thumb_bend.csv`, `summary_thumb_rotate.csv` (step‑response summaries).  
-- `force_stop_summary.csv` (force‑limit overshoot).  
-- `latency_log.csv`, `latency_summary.json` (latency micro‑benchmark).
+**Protocol (two-finger baseline).**
+To probe local contact mechanics without pose planning, we fixed the **thumb rotation** and set the **thumb bend** to a contact-seeking angle, then closed the **index** (two-finger pinch). For larger or elongated objects we added more fingers (thumb–index–middle / thumb–index–middle–ring).
+
+**Key takeaway.**
+Grasp outcome was governed primarily by **pre-contact alignment** accuracy rather than the control policy itself.
+These trials served as the baseline against which the hybrid force-control policy and analytical planner were developed and validated.
+
+
+## Analytical Grasp Planning
+
+The grasp planner converts a single scalar — **object width** — into a complete, collision-free hand configuration using offline MuJoCo forward kinematics.
+
+### Why width-to-grasp is non-trivial
+
+The RH56’s coupled linkages cause the fingertip to arc inward **and** upward as the finger closes.
+A naive "close until width matches" command is systematically misaligned: across the reachable range, the hand must tilt up to **49°** and shift **7 mm vertically and 12 mm laterally** to maintain an antipodal grasp about a fixed point in space.
+
+### Analytical solution
+
+We precompute fingertip positions offline by sweeping the MuJoCo model over the full joint range.
+Let **d = T − C** be the thumb-to-reference-finger vector in the hand frame.
+
+Antipodal contact requires coplanarity:
+
+```
+θ* = atan2(−d_z, d_x)      (wrist tilt)
+W  = √(d_x² + d_z²)        (pinch width)
+```
+
+Rather than searching independently over closure and tilt (which produces discontinuous solutions), we parameterize the closure state by a single scalar `s ∈ [0, 1]` where `ctrl(s) = ctrl_min + s·(ctrl_max − ctrl_min)`.
+The XZ-distance `D(s) = √(d_x² + d_z²)` is monotone in `s`; Brent’s method locates `s*` such that `D(s*) = W` in sub-millisecond time.
+The coplanarity tilt `θ*` then follows directly from `s*`, producing a smooth, guaranteed-convergent solution across all reachable widths.
+
+### Reachable width ranges
+
+| Fingers | Min (mm) | Max (mm) |
+|:--|--:|--:|
+| 2 (thumb + index) | 0 | 110 |
+| 3 (thumb + index + middle) | 7 | 100 |
+| 4 (thumb + index + middle + ring) | 7 | 100 |
+
+The number of fingers is selected to cover the half-length of the object’s major axis.
+
+### Grasp strategies
+
+Three closure strategies are provided, selectable in the UI:
+
+| Strategy | Description |
+|:--|:--|
+| **Iterative (Plan)** | Arm and fingers advance together in configurable step increments from an offset approach width down to the target width. Most geometry-aware; best for small or delicate objects. |
+| **Reflex** | Arm moves to the final width pose with only the thumb pre-positioned; remaining fingers snap closed once the thumb reports contact. Faster (6.0 s vs 8.6 s average) and more robust against object collision during approach. |
+| **Naive** | Arm moves fully open to the grasp point and then closes in one step — equivalent to a parallel-jaw gripper. Susceptible to ground collision for small objects. |
+
+For all strategies, a **hybrid force-control phase** follows closure: the finger approaches at high speed (`v=1000`) and switches to low speed (`v=25`) 25 raw units before the target, bounding contact overshoot while maintaining fast free-space motion.
+
+### QP / differential IK validation
+
+As structural validation, the same width-to-grasp problem is also solvable via differential IK using the [mink](https://github.com/kevinzakka/mink) library.
+Both planners converge to identical configurations and width ranges; the analytical method achieves zero tip-position error by construction, versus a 2.4–3.3 mm residual for the QP, making the analytical method the primary planner.
+
+### Force closure visualization
+
+Click **Force Viz** in the planner UI to open the contact analysis panel.
+The panel displays:
+
+- **Per-finger contact forces** (bar chart) — calibrated Newtons from real sensors and/or MuJoCo contacts, including thumb yaw tangential force
+- **Grasp wrench space (GWS)** — 3D convex hull of linearized friction cones; Ferrari–Canny quality metric Q
+- **Heuristic force-closure indicator** — sensor-only estimate with explicit loss rules (thumb < 0.3 N → lost; index < 0.5 N and middle < 0.3 N → lost)
+- **External wrench check** — apply an arbitrary world-frame force [Fx, Fy, Fz] plus optional gravity; the panel reports whether the GWS can resist it and by what margin
+
+The panel works in sim-only mode (MuJoCo contacts), real-only mode (sensor forces + geometric normals), or full sim+real mode.
+
+### Validated performance (300 grasps, 15 objects)
+
+| Strategy | All objects | YCB objects | Delicate objects |
+|:--|--:|--:|--:|
+| Iterative | 82% | 76% | **94%** |
+| Reflex | **87%** | **90%** | 80% |
+| Naive | 48% | 62% | 20% |
+
+Both iterative and reflex closure significantly outperform naive closure (p < 10⁻⁹).
+The difference between iterative and reflex is not statistically significant (p = 0.27).
 
 ---
-<img src="resource/video/2d_kinematice_space.jpeg" alt="2d kinematice space" width="720">
 
-## Grasp Experiments — Protocol & Notes on Success Rates
-
-**Protocol (two-finger baseline).**  
-To evaluate grasp behavior without perception or planning, we fix the **thumb rotation** and set the **thumb bend** to a contact-seeking angle, lightly “preloading” the object. We then close the **index** (two-finger pinch). For larger or elongated objects we optionally add more fingers (thumb–index–middle / thumb–index–middle–ring).
-
-**What this measures (and what it doesn’t).**  
-- The experiment probes **local contact mechanics** (pinch vs. power grasp) under a fixed-pose assumption.  
-- The **absolute success rate** is **not** a reliable metric for the grasp policy itself, because performance depends mainly on **pre-contact alignment**—that is, the relative pose between the hand, object, and table.  
-- When pre-alignment is accurate, small items (e.g., nuts) can be grasped almost perfectly; when alignment drifts, failures increase sharply for small parts but are less critical for larger objects.
-
-**Interpretation.**  
-- The current rule-based closing logic performs consistently once contact is properly established.  
-- Experiment outcomes therefore reflect the **precision of object presentation and hand pre-pose**, not the **control policy**.  
-- In future closed-loop systems (with visual or force feedback), these trials will serve as baseline open-loop performance data.
-
-**Recommendations.**  
-- Report success rate alongside **placement error** (e.g., translational / angular deviation) rather than as an isolated figure.  
-- Use a **two-stage close** (high-speed → low-speed near contact) to mitigate over-sensitivity in small objects.  
-- For long or heavy objects, extend to **tripod or power** grasps once stable pinch contact is detected.  
-
-> **Summary:** In these open-loop tests, grasp outcome is governed primarily by **pose accuracy** rather than control strategy. Improving perception and pre-grasp alignment will yield the largest real-world gains.
-
-
-## Grasp Overview
-
-The **Grasp** module provides a structured framework for evaluating and demonstrating various grasping strategies with the Inspire RH56 dexterous hand.  
-Its current implementation focuses on **simple, rule-based heuristics** that allow the hand to adapt its grasp configuration based on object geometry without external perception or planning.
-
-### Design Philosophy
-
-Rather than using vision or high-level planning, this module relies on **measurable object dimensions**—primarily width and length—to parameterize the grasp.  
-By keeping the thumb rotation fixed and varying only the **thumb bend angle** and **number of active fingers**, the controller achieves a range of grasp types from precision to power grasps with minimal complexity.
-
-### Grasp Logic
-
-1. **Thumb Configuration (Width-Based):**  
-   - The object width determines the thumb bend angle (`thumb_bend`).  
-   - Two different configurations are used now for different width object.  
-   - This allows the thumb to form a stable initial pinch against the index or middle finger.
-
-2. **Finger Selection (Length-Based):**  
-   - The object length determines how many fingers are involved in the grasp.  
-   - Short objects trigger a two-finger (thumb–index) pinch.  
-   - Medium objects use a three-finger (thumb–index–middle) tripod grasp.  
-   - Long or wide objects engage four fingers (thumb-index–middle–ring) for a full power grasp.
-   - Pinky isn't really useful due to its length
-
-3. **Force Regulation:**  
-   - Each finger closes until its force reading reaches a target threshold, converted to Newtons using the linear *force mapping* calibration.  
-   - This enables consistent contact pressure across objects of different stiffness and size.
-
-
-### Current Capabilities
-
-- Successfully grasps small metallic nuts, medium-sized items (e.g., Rubik’s cubes), and large objects up to 10 cm wide.  
-- Demonstrates both **precision** and **power** grasp behaviors using the same heuristic policy.  
-- Compatible with both stand-alone scripts and the ROS 2 driver through topic-level command injection.
-
-### Future Directions
-
-- Integrate visual sensing for dynamic object dimension estimation.  
-- Extend the heuristics into a learning-based grasp selection policy.  
-- Quantify grasp stability through external load and slippage tests.
-
----
-
-> This module aims to balance **simplicity, reproducibility, and real-world performance**, serving as a baseline for more advanced manipulation strategies.
+> The planner is modular and designed to accept object width, orientation, and centroid from any external detector (e.g., a vision-language model or 6D pose estimator) without modification.
 
 
 # RH56 Controller (ROS 2)
@@ -330,10 +355,10 @@ This package provides a ROS 2 driver for the Inspire RH56DFX robotic hand, which
 
 ## Usage
 
-*Temporary Usage*: By default, the `inspire_hand.service` connects to the hands' serial bus and publishes/subscribes to the `inspire/state` and `inspire/cmd` topics. Stop this service with: 
-```bash 
-sudo systemctl stop inspire_hand.service 
-``` 
+*Temporary Usage*: By default, the `inspire_hand.service` connects to the hands' serial bus and publishes/subscribes to the `inspire/state` and `inspire/cmd` topics. Stop this service with:
+```bash
+sudo systemctl stop inspire_hand.service
+```
 
 ---
 
@@ -396,7 +421,7 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
     *   Saves the current configuration to the hand's non-volatile memory.
 *   **TODO: `/hands/adaptive_force_control`** (`rh56_controller/srv/AdaptiveForce`)
     *   Executes the advanced adaptive force control routine. **DOES NOT WORK YET**
-* Preliminary feature: named gestures `{name: String: angles: List[Int]}` in the [`rh56_driver.py:self._gesture_library`](https://github.com/correlllab/rh56_controller/blob/dcda3061751199523323d6b24221c99eade7b0a5/rh56_controller/rh56_driver.py#L78) class dictionary will autopopulate `/hands/<gesture>`, `/hands/left/<gesture>`, and `/hands/right/<gesture>` services. Run `ros2 service list | grep '^/hands/'` to see the full list of generated services. These are generic `Trigger` services and can be run with: 
+* Preliminary feature: named gestures `{name: String: angles: List[Int]}` in the [`rh56_driver.py:self._gesture_library`](https://github.com/correlllab/rh56_controller/blob/dcda3061751199523323d6b24221c99eade7b0a5/rh56_controller/rh56_driver.py#L78) class dictionary will autopopulate `/hands/<gesture>`, `/hands/left/<gesture>`, and `/hands/right/<gesture>` services. Run `ros2 service list | grep '^/hands/'` to see the full list of generated services. These are generic `Trigger` services and can be run with:
     * ```bash
         ros2 service call /hands/<gesture> std_srvs/srv/Trigger
         ros2 service call /hands/left/<gesture> std_srvs/srv/Trigger
@@ -487,7 +512,7 @@ Before running the script, you need to modify two key parameters at the **bottom
 ```python
 if __name__ == "__main__":
     # Modify the parameters here based on your hardware connection
-    hand = RH56Hand(port="/dev/tty.usbserial-1130", hand_id=1) 
+    hand = RH56Hand(port="/dev/tty.usbserial-1130", hand_id=1)
     ...
 ```
 
@@ -553,6 +578,6 @@ The script can be run directly to start the pre-configured **Adaptive Force Cont
 - **Controller Precision and Response**: The precision and response speed of the finger controllers are currently limited.
 - **Force Control Overshoot**: Even at the slowest movement speeds, the force control can overshoot the preset target values by 50-100 grams.
 - **High-Speed Behavior**: When moving at high speeds, the fingers tend to "ignore" the preset maximum force thresholds and move directly to their peak force.
-- **Testing Status**: All features have currently only undergone light and informal testing. 
+- **Testing Status**: All features have currently only undergone light and informal testing.
 
 </details>

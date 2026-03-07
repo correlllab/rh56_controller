@@ -48,10 +48,14 @@ python tools/thumb_lever_arm.py --plot
 | Script | One-liner |
 |---|---|
 | `rh56_controller/grasp_viz.py` | Interactive planner: pick grasp mode/width/height, visualize in FK model and MuJoCo viewer, optionally mirror to real hand or UR5 |
+| `rh56_controller/grasp_viz_ui.py` | Tkinter UI layer for grasp_viz: sliders, buttons, real-robot panel, Force Viz launcher |
+| `rh56_controller/grasp_viz_force_panel.py` | Force closure analysis panel: per-finger bar chart, GWS, heuristic FC, external wrench check |
+| `rh56_controller/grasp_executor.py` | Executes grasp strategies (iterative, reflex, naive) on real UR5+hand; hybrid force control |
 | `rh56_controller/real2sim_viz.py` | Real-time force analysis: reads real hand forces + runs sim, computes wrench cones and Ferrari-Canny grasp quality for both |
 | `rh56_controller/hand_mirror.py` | Real-to-sim angle mirror with live bar chart; also sim-to-real slider mode for calibration |
 | `rh56_controller/mujoco_bridge.py` | Sim backend (library): wraps `inspire_scene.xml`, computes contacts, wrenches, force closure |
 | `rh56_controller/grasp_geometry.py` | FK backend (library): MuJoCo FK sweep + closure solver for line/plane/cylinder grasps |
+| `rh56_controller/ur5_bridge.py` | UR5 bridge (library): RTDE connection, TCP ↔ hand-frame transforms, moveL wrapper |
 | `tools/thumb_lever_arm.py` | Utility: MuJoCo FK sweep to compute `r_eff(θ)` polynomial for yaw tangential force estimation |
 
 ---
@@ -81,8 +85,11 @@ Solve antipodal grasp geometry for a target width/height, show results in a matp
 
 **CLI:**
 ```
---port /dev/ttyUSB0   connect real hand (enables Send-to-Real)
---robot               enable UR5 robot viewer buttons
+--port /dev/ttyUSB0   connect real hand (enables Send-to-Real and Force Viz real mode)
+--robot               enable UR5 robot viewer buttons and real-robot panel
+--real-robot          connect to real UR5 arm (requires --robot)
+--ur5-ip IP           UR5 robot IP address (default: 192.168.0.4)
+--ur5-speed M/S       arm linear speed in m/s (default: 0.10)
 --send-real           start with Send-to-Real enabled
 --no-mink             skip loading mink planner (faster startup)
 --xml PATH            override default inspire_right.xml
@@ -178,16 +185,7 @@ Maps real hand joint angles into MuJoCo in real time with a live grouped bar cha
 
 `InspireHandFK` runs a MuJoCo FK sweep at startup and fits scipy interpolators (cached to `.fk_cache.npz`). `ClosureGeometry` uses these to solve antipodal grasps.
 
-**Coupling implemented manually in FK sweep** (mirrors `inspire_grasp_scene.xml` equality constraints):
-
-| Joint | Equation |
-|---|---|
-| pinky/ring/middle intermediate | `q_inter = −0.15 + 1.1169 · q_prox` |
-| index intermediate | `q_inter = −0.05 + 1.1169 · q_prox` |
-| thumb intermediate | `q_inter = 0.15 + 1.33 · q_pitch` |
-| thumb distal | `q_dist = 0.15 + 0.66 · q_pitch` |
-
-These must be kept in sync with the XML — `mj_kinematics` does not enforce equality constraints when `qpos` is written directly.
+**Coupling:** manually replicates the XML equality constraints in the FK sweep (see **Joint coupling** table in the XML Model Files section).
 
 **Cache invalidation:** the cache stores an mtime fingerprint. Delete `.fk_cache.npz` or pass `--rebuild` after changing the XML or coupling equations.
 
@@ -195,17 +193,48 @@ These must be kept in sync with the XML — `mj_kinematics` does not enforce equ
 
 ## XML Model Files
 
+All XML files live under `h1_mujoco/inspire/`. The hand joint geometry, coupling polycoefs, and actuator limits are derived from the community URDF by [Omkar Kshirsagar](https://github.com/ookkshirsagar/rh56dfx_description).
+
 | File | Used by | Description |
 |---|---|---|
-| `inspire_right.xml` | real2sim_viz, hand_mirror | Fixed-base right hand, 6 DOF |
-| `inspire_scene.xml` | real2sim_viz, hand_mirror | inspire_right.xml + suspended box for contact experiments |
-| `inspire_grasp_scene.xml` | grasp_viz, grasp_geometry | Floating hand (6-DOF base), calibrated tip sites |
-| `ur5_inspire.xml` | grasp_viz --robot | UR5e arm + inspire hand |
+| `inspire_right.xml` | real2sim_viz, hand_mirror, grasp_viz_force_panel | Fixed-base right hand, 6 DOF. Source-of-truth for real2sim joint limits. |
+| `inspire_right_ur5.xml` | ur5_inspire.xml (included) | Hand body definitions with `gravcomp="1"` on all 13 bodies; included by the robot scene. |
+| `inspire_scene.xml` | real2sim_viz, hand_mirror | `inspire_right.xml` + a suspended box for contact experiments. |
+| `inspire_grasp_scene.xml` | grasp_viz, grasp_geometry | Floating hand (6-DOF free joint base), calibrated fingertip sites. FK source-of-truth for the analytical planner. |
+| `inspire_force_scene.xml` | grasp_viz_force_panel | Fixed-base hand + fixed `object` body (no joint, `gravcomp="1"`) whose pose is set at runtime to auto-snap to the current fingertip centroid. |
+| `ur5_inspire.xml` | grasp_viz --robot | UR5e arm + Inspire hand; mink drives arm joints each frame. |
 
-`inspire_right.xml` and `inspire_grasp_scene.xml` share identical joint coupling
-polycoef values. If you update one, update both — and also update the manual
-coupling in `grasp_geometry.py` (`_set_finger_qpos`, `_set_thumb_qpos`) and
-`grasp_viz.py` (`_apply_qpos`), then delete `.fk_cache.npz`.
+### Joint coupling (equality constraints)
+
+The RH56's underactuated linkages are modelled as `<equality>` polycoef constraints. The same coefficients must be replicated manually wherever `mj_kinematics` is called directly (i.e. whenever the full constraint solver is bypassed — see note below).
+
+| Joint | Driving joint | Equation |
+|---|---|---|
+| pinky / ring / middle intermediate | proximal | `q_inter = −0.15 + 1.1169 · q_prox` |
+| index intermediate | proximal | `q_inter = −0.05 + 1.1169 · q_prox` |
+| thumb intermediate | pitch | `q_inter = 0.15 + 1.33 · q_pitch` |
+| thumb distal | pitch | `q_dist = 0.15 + 0.66 · q_pitch` |
+
+> **Why manual replication is needed:** `mj_kinematics` computes forward kinematics from `qpos` but does **not** enforce `<equality>` constraints — those are velocity-level constraints solved only during `mj_step`. Whenever `qpos` is written directly (FK sweep in `grasp_geometry.py`, passive viewer in `grasp_viz.py`), all coupled joints must be set manually using the above equations.
+
+If you update these coefficients, you must update **all four** locations:
+1. `inspire_grasp_scene.xml` (source of truth)
+2. `inspire_right.xml`
+3. `grasp_geometry.py` — `_set_finger_qpos` / `_set_thumb_qpos`
+4. `grasp_viz.py` — `_apply_qpos`
+
+Then delete `.fk_cache.npz` so the FK cache rebuilds.
+
+### Actuator ctrl ranges
+
+| Actuator | ctrl_min (rad) | ctrl_max (rad) | Notes |
+|---|---|---|---|
+| pinky | 0 | 1.57 | |
+| ring | 0 | 1.57 | |
+| middle | 0 | 1.50 | |
+| index | 0 | 1.50 | |
+| thumb_proximal (bend) | 0.1 | 0.57 | `ctrl_min=0.1` = fully open (real=1000) |
+| thumb_yaw | 0 | 1.308 | `ctrl=0` = spread out; `ctrl=1.308` = adducted |
 
 ---
 
@@ -229,18 +258,7 @@ real = 1000 − round((ctrl − ctrl_min) / (ctrl_max − ctrl_min) × 1000)
   real = 1000 → open  / abducted   (ctrl = ctrl_min)
 ```
 
-**Actuator ctrl ranges (from XML):**
-
-| Actuator | ctrl_min (rad) | ctrl_max (rad) |
-|---|---|---|
-| pinky | 0 | 1.57 |
-| ring | 0 | 1.57 |
-| middle | 0 | 1.50 |
-| index | 0 | 1.50 |
-| thumb_proximal | 0.1 | 0.57 |
-| thumb_yaw | 0 | 1.308 |
-
-Note: `thumb_proximal ctrl_min = 0.1` corresponds to `real = 1000` (fully open).
+See the **Actuator ctrl ranges** table in the XML Model Files section above.
 
 ---
 

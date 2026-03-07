@@ -107,7 +107,7 @@ Select the finger closing strategy before pressing GRASP!:
 |:--|:--|
 | **Naive** | Arm moves to pose, then all fingers close to a fixed pinch posture (750/750/750/750/740/0). No geometry solver. |
 | **Plan** | Chunked approach: arm and fingers advance proportionally in `Step (mm)` increments. Most geometry-aware. |
-| **Thumb Reflex** | Arm moves to pose; thumb positions first and waits 0.5 s; then remaining fingers close. Good for power grasps. |
+| **Thumb Reflex** | Arm moves to planned pose with only the thumb positioned first before waiting 0.2 s, after which remaining fingers close. |
 
 > Naive strategy greyed out IK Method radio (not relevant for fixed posture).
 
@@ -134,8 +134,8 @@ The bottom strip of the panel shows the last 3 status messages from the executor
 World frame: UR5 base, Z up, robot base at origin.
 Hand frame:  hand_base body (mount point on wrist-3 flange).
 
-_WRIST3_TO_HAND_POS  = [0, 0.156, 0]   (m)
-_WRIST3_TO_HAND_QUAT = [-0.707108, 0.707108, 0, 0]   (wxyz)
+_WRIST3_TO_HAND_POS  = [0, 0, 0.156]          (m, along UR5 TCP Z-axis)
+_WRIST3_TO_HAND_QUAT = [0.7071068, 0, 0, 0.7071068]  (wxyz, Rz(90°))
 ```
 
 The `UR5Bridge` class handles all TCP ↔ hand-frame conversions transparently.
@@ -151,6 +151,36 @@ The `UR5Bridge` class handles all TCP ↔ hand-frame conversions transparently.
 | Min Z | 0 mm (table surface) |
 
 Poses outside these bounds generate warnings in the status area but are **not blocked** — the move still executes. Check workspace before committing to a grasp.
+
+---
+
+## Force Closure Visualization Panel
+
+Click **Force Viz** in the grasp planner UI at any time (sim-only or real-robot mode) to open the contact analysis panel in a separate window.
+
+### Bar chart
+Shows calibrated per-finger contact forces in Newtons.
+When a real hand is connected, real sensor readings are plotted alongside (or instead of) MuJoCo simulated forces.
+The rightmost bar shows the **thumb yaw tangential force** — the component of contact force perpendicular to the thumb's abduction axis, estimated from the yaw motor's back-drive current.
+
+### Grasp wrench space (GWS)
+The 3D scatter plot shows the convex hull of all linearized friction-cone primitives.
+The **Ferrari–Canny Q** metric measures the radius of the largest ball centered at the origin that fits inside the GWS — higher Q means the grasp can resist larger external wrenches.
+
+### Heuristic force closure
+Sensor-only force closure estimate (no simulation geometry required):
+- **Lost** if thumb force < 0.3 N
+- **Lost** if index force < 0.5 N **and** middle force < 0.3 N
+- **Assumed** otherwise
+
+### External wrench check
+Enable **Live Wrench** to specify an applied force [Fx, Fy, Fz] in the world frame.
+Optionally include gravity (object mass × 9.81 N downward).
+The panel reports whether the current GWS can resist the wrench and by what margin (positive = safe).
+
+### Sim geometry toggle
+Check **Sim Geometry** to spawn a MuJoCo subprocess that auto-snaps a contact box to the current fingertip positions and computes contact normals.
+Uncheck to use real sensor forces only with analytically derived contact normals — no subprocess needed.
 
 ---
 
