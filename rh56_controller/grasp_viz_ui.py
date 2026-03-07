@@ -563,6 +563,7 @@ class GraspVizUI(GraspVizCore):
             state_arr=self._viewer_state_arr,
             mp_ctx=self._mp_ctx,
             hand=self._hand,
+            fk=self.fk,
         )
 
     def _on_send_real(self):
@@ -622,6 +623,9 @@ class GraspVizUI(GraspVizCore):
         if q is not None:
             self._real_tracking.value = 1
         self._push_viewer_ctrl()
+        # Overwrite finger ctrl with real hand angles so the viewer shows
+        # the actual hand pose, not the theoretical closure geometry.
+        self._sync_real_hand_to_ctrl(self._custom_ctrl_arr)
         self._schedule_plot_only()  # arm-pose only — do not re-send fingers
         self._update_status(
             f"Pose set: hand({params['grasp_x']*1000:.0f},"
@@ -661,7 +665,13 @@ class GraspVizUI(GraspVizCore):
         threading.Thread(target=_do_move, daemon=True, name="arm-move").start()
 
     def _on_simulate_trajectory(self):
-        self._real_tracking.value = 0
+        # If real joint data is available, seed the viewer arm at the actual robot
+        # configuration so mink IK starts from the correct solution (not home pose).
+        q_real = np.array(self._real_q_arr[:])
+        has_real = not np.all(q_real == 0)
+        if has_real:
+            self._real_tracking.value = 1   # arm follows real joints initially
+
         self._launch_robot_viewer_ours()
 
         self._sim_grasp_gen += 1
@@ -684,8 +694,15 @@ class GraspVizUI(GraspVizCore):
         except (ValueError, AttributeError):
             approach_m = None
 
+        def _sync_then_ik():
+            """Let viewer sync arm from real joints (~1 frame), then hand off to mink IK."""
+            if has_real:
+                time.sleep(0.3)
+            self._real_tracking.value = 0
+
         def _animate_naive():
-            # Arm moves to pose (IK), fingers close linearly via sim_grasp_t
+            # Arm moves to pose via IK (seeded from real config), fingers close linearly.
+            _sync_then_ik()
             self._sim_grasp_t.value = 0.0
             self._push_viewer_ctrl()
             self._update_status("Sim Naive: arm → pose, fingers closing...")
@@ -707,10 +724,9 @@ class GraspVizUI(GraspVizCore):
             if not closures:
                 return
 
-            # Disable sim_grasp_t interpolation — drive ctrl_arr directly
+            _sync_then_ik()  # seed from real joints, then IK takes over
             self._sim_grasp_t.value = 1.0
 
-            # Build approach finger config: all open, thumb_yaw fixed at final
             final_cv  = r_target.ctrl_values
             open_fc   = {k: self.fk.ctrl_min[k] for k in
                          ["pinky", "ring", "middle", "index", "thumb_proximal"]}
@@ -721,11 +737,11 @@ class GraspVizUI(GraspVizCore):
             ctrl = self._build_ctrl_array(r_approach, open_fc)
             self._custom_ctrl_arr[:] = ctrl
             self._update_status(
-                f"Sim Plan: approach width={r_approach.width*1000:.1f}mm → "
-                f"target={r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
+                f"Sim Plan: approach {r_approach.width*1000:.1f}mm → "
+                f"{r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
             time.sleep(2.5)
 
-            # Phase 2: step through remaining waypoints (arm + fingers together)
+            # Phase 2: step through remaining waypoints (arm + fingers)
             for i, r_i in enumerate(closures[1:]):
                 if self._sim_grasp_gen != gen:
                     return
@@ -744,6 +760,7 @@ class GraspVizUI(GraspVizCore):
             except Exception:
                 r_target = r
 
+            _sync_then_ik()
             self._sim_grasp_t.value = 1.0
 
             # Phase 1: thumb to final config, other fingers open, arm to final pose
@@ -758,8 +775,8 @@ class GraspVizUI(GraspVizCore):
             }
             ctrl = self._build_ctrl_array(r_target, thumb_fc)
             self._custom_ctrl_arr[:] = ctrl
-            self._update_status("Sim Thumb Reflex: thumb → final, arm → pose...")
-            time.sleep(2.5)
+            self._update_status("Sim Thumb Reflex: thumb closing, arm → pose...")
+            time.sleep(1.5)
             if self._sim_grasp_gen != gen:
                 return
 
