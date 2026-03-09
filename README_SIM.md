@@ -204,7 +204,7 @@ All XML files live under `h1_mujoco/inspire/`. The hand joint geometry, coupling
 | `inspire_force_scene.xml` | grasp_viz_force_panel | Fixed-base hand + fixed `object` body (no joint, `gravcomp="1"`) whose pose is set at runtime to auto-snap to the current fingertip centroid. |
 | `ur5_inspire.xml` | grasp_viz --robot | UR5e arm + Inspire hand; mink drives arm joints each frame. |
 
-### Joint coupling (equality constraints)
+### Joint coupling (equality/mimic constraints, adapted for own damaged hands...)
 
 The RH56's underactuated linkages are modelled as `<equality>` polycoef constraints. The same coefficients must be replicated manually wherever `mj_kinematics` is called directly (i.e. whenever the full constraint solver is bypassed — see note below).
 
@@ -225,7 +225,7 @@ If you update these coefficients, you must update **all four** locations:
 
 Then delete `.fk_cache.npz` so the FK cache rebuilds.
 
-### Actuator ctrl ranges
+### Actuator ctrl ranges (adapted for our own damaged hand...)
 
 | Actuator | ctrl_min (rad) | ctrl_max (rad) | Notes |
 |---|---|---|---|
@@ -265,5 +265,4 @@ See the **Actuator ctrl ranges** table in the XML Model Files section above.
 ## Further Reading
 
 - [GRASP_VIZ.md](GRASP_VIZ.md) — Grasp geometry implementation notes: closure solver, tilt derivation, and documented failed alternatives
-- [grasp_viz.tex](grasp_viz.tex) — Full mathematical reference: coordinate frames, FK model, tilt derivation, closure equations
 - [THUMB_TANGENTIAL.md](THUMB_TANGENTIAL.md) — Thumb yaw tangential force estimation: calibration procedure, lever arm polynomial, sign conventions
