@@ -55,7 +55,7 @@ _FORCE_CALIB_INV = {
 def _force_N_to_raw(finger_idx: int, force_N: float) -> int:
     if finger_idx in _FORCE_CALIB_INV:
         return _FORCE_CALIB_INV[finger_idx](force_N)
-    return int(force_N * 1000 / 9.81)
+    return max(0, min(1000, int(force_N * 1000 / 9.81)))
 
 
 # ---------------------------------------------------------------------------
