@@ -29,7 +29,7 @@ class GraspLogger:
         self._t0   = time.monotonic()
 
     def log(self, event: str, **data):
-        """Write one event record to the log (thread-safe per file)."""
+        """Write one event record to the log."""
         rec = {"t": round(time.monotonic() - self._t0, 4), "event": event}
         rec.update(data)
         self._file.write(json.dumps(rec, default=_json_default) + "\n")
