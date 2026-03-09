@@ -10,6 +10,9 @@ uv run python -m rh56_controller.grasp_viz
 # Grasp planner + real hand ("Send to Real" checkbox)
 uv run python -m rh56_controller.grasp_viz --port /dev/ttyUSB0
 
+# grasp planner + real hand + real robot + ip
+uv run python -m rh56_controller.grasp_viz --port /dev/ttyUSB0 --real-robot --ur5-ip 192.168.0.4
+
 # Grasp planner + UR5 robot arm (enables Robot: Ours / Robot: Mink buttons)
 uv run python -m rh56_controller.grasp_viz --robot
 
