@@ -216,10 +216,28 @@ class GraspVizUI(GraspVizCore):
         ent = tk.Entry(parent, width=7)
         ent.insert(0, f"{vinit:.1f}")
         ent.grid(row=row, column=2, padx=2)
-        ent.bind("<Return>",   lambda e, s=sl: s.set(
-            float(ent.get() or var.get())))
-        ent.bind("<FocusOut>", lambda e, s=sl: s.set(
-            float(ent.get() or var.get())))
+
+        def _on_entry_commit(event=None, s=sl, v=var, e=ent):
+            text = e.get().strip()
+            if not text:
+                # Empty input: revert to current variable value
+                value = v.get()
+            else:
+                try:
+                    value = float(text)
+                except ValueError:
+                    # Invalid input: revert entry to last valid value
+                    value = v.get()
+                    e.delete(0, tk.END)
+                    e.insert(0, f"{value:.1f}")
+                    return
+            s.set(value)
+            # Normalize entry text to the parsed numeric value
+            e.delete(0, tk.END)
+            e.insert(0, f"{value:.1f}")
+
+        ent.bind("<Return>", _on_entry_commit)
+        ent.bind("<FocusOut>", _on_entry_commit)
         setattr(self, var_attr, var)
         setattr(self, sl_attr,  sl)
         setattr(self, ent_attr, ent)
