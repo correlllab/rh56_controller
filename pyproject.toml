@@ -13,11 +13,9 @@ dependencies = [
     "mujoco>=3.3.6",
     "pyserial",
     "mink",
-]
-
-[project.optional-dependencies]
-real-robot = [
+    "magpie_control",
     "spatialmath-python",
+    "rerun-sdk>=0.21",
 ]
 
 [tool.uv.sources]
