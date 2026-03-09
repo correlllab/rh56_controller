@@ -9,4 +9,4 @@
 	url = https://github.com/correlllab/magpie_control
 [submodule "magpie_force_control"]
 	path = magpie_force_control
-	url = git@github.com:correlllab/magpie_force_control.git
+	url = https://github.com/correlllab/magpie_force_control.git
