@@ -1,7 +1,7 @@
 # ROS2 Port Phase 1 — Completion Summary
 
-**Branch:** `ros`  
-**Date:** March 9, 2026  
+**Branch:** `ros`
+**Date:** March 9, 2026
 **Status:** ✅ Phase 1 Complete — Ready for Hardware Validation
 
 ---
@@ -203,19 +203,19 @@ rerun --connect
 
 ## Known Limitations / Future Work
 
-1. **Concurrent UR5 Control:**  
+1. **Concurrent UR5 Control:**
    GraspViz and force_control both need RTDE access. Coordinate via manual sequencing (grasp first, then activate force control) or implement a motion arbitrator node.
 
-2. **Rerun Unification:**  
+2. **Rerun Unification:**
    Currently grasp_viz publishes to its own rerun app. Ideally all nodes publish to one shared rerun recording for synchronized timeline view.
 
-3. **magpie_control ROS Branch:**  
+3. **magpie_control ROS Branch:**
    Not yet tested. Need to checkout ros branch and validate UR5_Interface ROS wrapper on this hardware.
 
-4. **Hand Command Mirror:**  
+4. **Hand Command Mirror:**
    `--ros-send-hand-cmd` publishes right-hand joint commands to `/hands/cmd`. Left hand repeats last known state. For bimanual, extend to receive explicit left-hand commands.
 
-5. **Action Interface:**  
+5. **Action Interface:**
    Force control wrapper uses start/stop services. Future: add ROS2 action for trajectory-based force profiles.
 
 ---
