@@ -12,6 +12,8 @@ dependencies = [
     "matplotlib",
     "mujoco>=3.3.6",
     "pyserial",
+    "dynamixel-sdk",
+    "anyskin",
     "mink",
     "magpie_control",
     "spatialmath-python",
