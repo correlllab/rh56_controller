@@ -20,11 +20,14 @@ Usage:
     bridge.disconnect()
 """
 
+import logging
 import threading
 import time
 from typing import Optional
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +119,10 @@ class UR5Bridge:
             # Cache initial joint state for the sim viewer snapshot
             self._last_q  = np.array(self._iface.get_joint_angles())
             self._connected = True
-            print(f"[UR5Bridge] Connected to UR5 at {self._ip}")
+            _log.info("Connected to UR5 at %s", self._ip)
             return True
         except Exception as e:
-            print(f"[UR5Bridge] Connect failed: {e}")
+            _log.error("Connect failed: %s", e)
             self._connected = False
             return False
 
@@ -128,10 +131,10 @@ class UR5Bridge:
         if self._iface is not None:
             try:
                 self._iface.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                _log.warning("Error during disconnect: %s", e)
         self._connected = False
-        print("[UR5Bridge] Disconnected.")
+        _log.info("Disconnected.")
 
     @property
     def connected(self) -> bool:
@@ -276,7 +279,7 @@ class UR5Bridge:
             with self._lock:
                 self._iface.ctrl.stopL(decel)
         except Exception as e:
-            print(f"[UR5Bridge] stop() error: {e}")
+            _log.error("stop() error: %s", e)
 
     # ------------------------------------------------------------------
     # Teach mode
@@ -284,22 +287,22 @@ class UR5Bridge:
     def enable_teach_mode(self):
         """Enable teach mode (robot can be guided by hand)."""
         if not self._connected:
-            print("[UR5Bridge] Not connected — cannot enable teach mode.")
+            _log.warning("Not connected — cannot enable teach mode.")
             return
         with self._lock:
             self._iface.toggle_teach_mode()
         self._teach_mode = True
-        print("[UR5Bridge] Teach mode ENABLED.")
+        _log.info("Teach mode ENABLED.")
 
     def disable_teach_mode(self):
         """Exit teach mode and return to normal control."""
         if not self._connected:
-            print("[UR5Bridge] Not connected — cannot disable teach mode.")
+            _log.warning("Not connected — cannot disable teach mode.")
             return
         with self._lock:
             self._iface.toggle_teach_mode()
         self._teach_mode = False
-        print("[UR5Bridge] Teach mode DISABLED.")
+        _log.info("Teach mode DISABLED.")
 
     # ------------------------------------------------------------------
     # Set Pose from Robot — decode TCP → grasp planner parameters
@@ -346,7 +349,7 @@ class UR5Bridge:
                 grasp_y = float(world_T_hand[1, 3]) + mid_w[1]
                 grasp_z = float(world_T_hand[2, 3]) + mid_w[2]
             except Exception as e:
-                print(f"[UR5Bridge] Plane orientation decode failed: {e}")
+                _log.warning("Plane orientation decode failed: %s", e)
 
         return {
             "grasp_x":   grasp_x,

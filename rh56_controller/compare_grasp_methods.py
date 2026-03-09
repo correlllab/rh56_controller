@@ -57,7 +57,7 @@ from .mink_grasp_planner import MinkGraspPlanner, MinkGraspResult
 _HERE      = Path(__file__).parent.parent
 _GRASP_XML = _HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml"
 _RIGHT_XML = _HERE / "h1_mujoco" / "inspire" / "inspire_right.xml"
-_OUT_ROOT  = _HERE / "mink_vs_analytical"
+_OUT_ROOT  = _HERE / "plots" / "mink_vs_analytical"
 
 # ---------------------------------------------------------------------------
 # Ctrl index mapping

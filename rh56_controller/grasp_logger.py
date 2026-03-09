@@ -94,6 +94,9 @@ class GraspLogger:
         except Exception:
             pass
 
+    def __del__(self):
+        self.close()
+
 
 def _json_default(obj):
     """Fallback JSON serialiser for numpy arrays and similar."""

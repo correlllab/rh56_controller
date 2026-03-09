@@ -17,11 +17,14 @@ For world-frame (top-down approach) visualization, apply Rx(π):
   base +X → world +X (closure direction stays horizontal)
 """
 
+import logging
 import os
 import pathlib
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
 
 import mujoco
 from scipy.interpolate import interp1d, RegularGridInterpolator
@@ -130,14 +133,14 @@ class InspireHandFK:
         if cache_valid:
             self._load_tables(_CACHE_PATH)
         else:
-            print("[InspireHandFK] Building FK tables (first run, ~2s)...")
+            _log.info("Building FK tables (first run, ~2 s)…")
             self._build_tables()
             self._save_tables(_CACHE_PATH)
-            print(f"[InspireHandFK] Saved FK cache to {_CACHE_PATH}")
+            _log.info("Saved FK cache to %s", _CACHE_PATH)
 
         # Build interpolators
         self._build_interpolators()
-        print("[InspireHandFK] Ready.")
+        _log.info("InspireHandFK ready.")
 
     # ------------------------------------------------------------------
     # Ctrl range initialisation (reads from loaded MuJoCo model)
@@ -694,8 +697,8 @@ class ClosureGeometry:
         d_trans = self._prox_joint_diameter_at_ctrl(c_trans)
         self._cyl_transition_ctrl      = c_trans
         self._cyl_transition_diameter  = d_trans
-        print(f"[ClosureGeometry] Cylinder thumb-yaw transition: "
-              f"ctrl={c_trans:.3f}  prox_diam={d_trans*1000:.1f} mm")
+        _log.info("Cylinder thumb-yaw transition: ctrl=%.3f  prox_diam=%.1f mm",
+                  c_trans, d_trans * 1000)
 
     # ------------------------------------------------------------------
     # Width/radius range query

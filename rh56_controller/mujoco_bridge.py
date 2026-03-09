@@ -12,6 +12,7 @@ No hardware dependency — import freely for sim-only analysis or as a
 component of real2sim_viz.py.
 """
 
+import logging
 import re
 import numpy as np
 import mujoco
@@ -24,7 +25,8 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
-    print("Warning: scipy not available — force closure analysis disabled")
+
+_log = logging.getLogger(__name__)
 
 
 # ─── Data classes ────────────────────────────────────────────────────────────
@@ -107,6 +109,8 @@ class SimAnalyzer:
         self.xml_path = str(xml_path)
         self.friction_cone_edges = friction_cone_edges
 
+        if not Path(self.xml_path).exists():
+            raise FileNotFoundError(f"MuJoCo XML not found: {self.xml_path}")
         self.model = mujoco.MjModel.from_xml_path(self.xml_path)
         self.data = mujoco.MjData(self.model)
 
@@ -126,9 +130,9 @@ class SimAnalyzer:
         self.sensor_addrs = self._cache_sensor_addrs()
         self.mu = float(self.model.geom_friction[self.box_geom_id, 0])
 
-        print(f"[SimAnalyzer] Loaded: {self.xml_path}")
-        print(f"[SimAnalyzer] friction μ={self.mu:.3f}, cone edges={friction_cone_edges}")
-        print(f"[SimAnalyzer] Tip sites: {self.tip_site_ids}")
+        _log.info("Loaded: %s", self.xml_path)
+        _log.info("friction μ=%.3f, cone edges=%d", self.mu, friction_cone_edges)
+        _log.debug("Tip sites: %s", self.tip_site_ids)
 
     # ── Ctrl range initialisation ─────────────────────────────────────────────
 
@@ -624,6 +628,7 @@ class SimAnalyzer:
         Falls back to 3D force-only analysis when rank < 6.
         """
         if not HAS_SCIPY:
+            _log.warning("scipy not installed — force closure analysis unavailable")
             return False, 0.0
 
         n = len(primitive_wrenches)
