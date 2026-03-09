@@ -61,6 +61,10 @@ class GraspVizCore:
         real_robot: bool = False,
         ur5_ip: Optional[str] = None,
         ur5_speed: float = 0.10,
+        ros_sync: bool = False,
+        ros_publish_hz: float = 20.0,
+        ros_send_hand_cmd: bool = False,
+        rerun_viz: bool = False,
     ) -> None:
         _log.info("Initialising FK model...")
         self.fk      = InspireHandFK(xml_path=xml_path, rebuild=rebuild)
@@ -153,6 +157,26 @@ class GraspVizCore:
         self._init_real_arm(real_robot, ur5_ip, ur5_speed)
         self._init_executor()
 
+        # Optional in-process ROS2 bridge (state publish + command subscribe)
+        self._ros_bridge = None
+        if ros_sync:
+            try:
+                from .grasp_viz_ros import GraspVizRosBridge
+
+                self._ros_bridge = GraspVizRosBridge(
+                    core=self,
+                    publish_hz=ros_publish_hz,
+                    send_hand_cmd=ros_send_hand_cmd,
+                    rerun_enabled=rerun_viz,
+                )
+                ok = self._ros_bridge.start()
+                if ok:
+                    _log.info("ROS bridge enabled.")
+                else:
+                    _log.warning("ROS bridge requested but failed to start.")
+            except Exception as exc:
+                _log.warning("ROS bridge setup failed: %s", exc)
+
         if self._real_robot_mode:
             self._start_viewer_monitor()
 
@@ -233,6 +257,13 @@ class GraspVizCore:
         for stop_event in [self._hand_ours_stop, self._hand_mink_stop,
                            self._robot_ours_stop, self._robot_mink_stop]:
             stop_event.set()
+
+        # 2b. Stop ROS bridge executor thread
+        if self._ros_bridge is not None:
+            try:
+                self._ros_bridge.stop()
+            except Exception as e:
+                _log.warning("Error stopping ROS bridge: %s", e)
 
         # 3. Close the Real Robot connection (Crucial for UR5)
         if self._arm is not None:
@@ -388,6 +419,79 @@ class GraspVizCore:
 
     def _is_cylinder_bad(self) -> bool:
         return self._mode == "cylinder" and self._width_m * 2 < 0.071
+
+    # ------------------------------------------------------------------
+    # ROS bridge helpers
+    # ------------------------------------------------------------------
+    def ros_set_mode(self, label: str) -> None:
+        """Set closure mode from ROS command input."""
+        if label not in MODES:
+            self._update_status(f"ROS ignored invalid mode: {label}")
+            return
+        self._mode = label
+        n = int(label[0]) if label[0].isdigit() else 4
+        wrange = self.closure.width_range(label, n_fingers=n)
+        self._width_range = wrange
+        self._width_m = float(np.clip(self._width_m, wrange[0], wrange[1]))
+        self._width_target_m = float(np.clip(self._width_target_m, wrange[0], wrange[1]))
+        self._recompute()
+        self._update_status(f"ROS mode set: {label}")
+
+    def ros_set_width_m(self, width_m: float) -> None:
+        """Set active solve width from ROS command input."""
+        wmin, wmax = self._width_range
+        self._width_m = float(np.clip(width_m, wmin, wmax))
+        if not self._width_target_edited:
+            self._width_target_m = self._width_m
+        self._recompute()
+
+    def ros_set_target_width_m(self, width_m: float) -> None:
+        """Set grasp execution target width from ROS command input."""
+        wmin, wmax = self._width_range
+        self._width_target_m = float(np.clip(width_m, wmin, wmax))
+        self._width_target_edited = True
+
+    def ros_set_target_pose(self, x_m: float, y_m: float, z_m: float) -> None:
+        """Set target Cartesian hand-base translation from ROS command input."""
+        self._grasp_x = float(x_m)
+        self._grasp_y = float(y_m)
+        self._grasp_z = float(z_m)
+        self._push_viewer_ctrl()
+        self._update_status(
+            f"ROS pose set: x={self._grasp_x*1000:.0f} y={self._grasp_y*1000:.0f} z={self._grasp_z*1000:.0f} mm"
+        )
+
+    def get_ros_snapshot(self) -> Optional[Dict]:
+        """Thread-safe snapshot for ROS2/rerun publishers."""
+        with self._state_lock:
+            r = self._result
+        if r is None:
+            return None
+
+        wtips = r.world_tips(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
+        ctrl = [
+            float(r.ctrl_values.get("pinky", 0.0)),
+            float(r.ctrl_values.get("ring", 0.0)),
+            float(r.ctrl_values.get("middle", 0.0)),
+            float(r.ctrl_values.get("index", 0.0)),
+            float(r.ctrl_values.get("thumb_proximal", 0.0)),
+            float(r.ctrl_values.get("thumb_yaw", 0.0)),
+        ]
+
+        return {
+            "mode": str(r.mode),
+            "width_m": float(r.width),
+            "target_width_m": float(self._width_target_m),
+            "finger_span_m": float(r.finger_span),
+            "tilt_deg": float(r.tilt_deg),
+            "target_pose": {
+                "x": float(self._grasp_x),
+                "y": float(self._grasp_y),
+                "z": float(self._grasp_z),
+            },
+            "tips_world_m": {k: [float(v[0]), float(v[1]), float(v[2])] for k, v in wtips.items()},
+            "ctrl_rad": ctrl,
+        }
 
     # ------------------------------------------------------------------
     # Shared-memory ctrl/state builders

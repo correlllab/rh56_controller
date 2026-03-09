@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'rh56_driver = rh56_controller.rh56_driver:main',
             'hand_bridge_node = rh56_controller.hand_bridge_node:main',
+            'grasp_viz = rh56_controller.grasp_viz:main',
         ],
     },
 )

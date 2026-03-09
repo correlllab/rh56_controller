@@ -71,6 +71,24 @@ uv run python -m rh56_controller.grasp_viz \
     --port /dev/ttyUSB0
 ```
 
+ROS + rerun synchronized mode:
+
+```bash
+uv run python -m rh56_controller.grasp_viz \
+   --robot \
+   --real-robot \
+   --ur5-ip 192.168.0.4 \
+   --port /dev/ttyUSB0 \
+   --ros-sync \
+   --rerun
+```
+
+Or via ROS launch:
+
+```bash
+ros2 launch rh56_controller grasp_viz_ros.launch.py ur5_ip:=192.168.0.4 serial_port:=/dev/ttyUSB0
+```
+
 ### Key CLI flags
 
 | Flag | Default | Description |
@@ -82,6 +100,10 @@ uv run python -m rh56_controller.grasp_viz \
 | `--port DEV` | None | Serial port for the RH56 hand |
 | `--send-real` | off | Start with "Send to Real" hand mirroring enabled |
 | `--no-mink` | off | Skip mink planner (faster startup) |
+| `--ros-sync` | off | Publish planner state on ROS2 and accept ROS command topics |
+| `--ros-publish-hz HZ` | `20` | ROS2 publish rate for bridge topics |
+| `--ros-send-hand-cmd` | off | Publish planned RH56 commands to `hands/cmd` |
+| `--rerun` | off | Enable rerun telemetry stream from planner state |
 
 ---
 

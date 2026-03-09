@@ -10,3 +10,6 @@
 [submodule "magpie_force_control"]
 	path = magpie_force_control
 	url = https://github.com/correlllab/magpie_force_control.git
+[submodule "rerun_rlds_ur5"]
+	path = rerun_rlds_ur5
+	url = https://github.com/badinkajink/rerun_rlds_ur5

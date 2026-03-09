@@ -54,6 +54,14 @@ def main():
                         help="UR5 robot IP address (e.g. 192.168.0.4)")
     parser.add_argument("--ur5-speed", type=float, default=0.10,
                         help="UR5 arm linear speed in m/s (default 0.10)")
+    parser.add_argument("--ros-sync", action="store_true",
+                        help="Enable ROS2 state bridge for grasp_viz")
+    parser.add_argument("--ros-publish-hz", type=float, default=20.0,
+                        help="ROS publish rate in Hz (default 20)")
+    parser.add_argument("--ros-send-hand-cmd", action="store_true",
+                        help="Publish planned right-hand command to hands/cmd")
+    parser.add_argument("--rerun", action="store_true",
+                        help="Enable rerun telemetry stream from grasp_viz")
     args = parser.parse_args()
 
     viz = GraspVizUI(
@@ -66,6 +74,10 @@ def main():
         real_robot=args.real_robot,
         ur5_ip=args.ur5_ip,
         ur5_speed=args.ur5_speed,
+        ros_sync=args.ros_sync,
+        ros_publish_hz=args.ros_publish_hz,
+        ros_send_hand_cmd=args.ros_send_hand_cmd,
+        rerun_viz=args.rerun,
     )
     viz.run()
 
