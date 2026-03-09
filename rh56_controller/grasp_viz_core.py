@@ -173,7 +173,11 @@ class GraspVizCore:
                 if ok:
                     _log.info("ROS bridge enabled.")
                 else:
-                    _log.warning("ROS bridge requested but failed to start.")
+                    err = getattr(self._ros_bridge, "last_error", "")
+                    if err:
+                        _log.warning("ROS bridge requested but failed to start: %s", err)
+                    else:
+                        _log.warning("ROS bridge requested but failed to start.")
             except Exception as exc:
                 _log.warning("ROS bridge setup failed: %s", exc)
 

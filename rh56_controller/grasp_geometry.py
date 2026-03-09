@@ -35,9 +35,36 @@ from scipy.optimize import brentq
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-_HERE = pathlib.Path(__file__).parent.parent   # repo root
-_DEFAULT_XML = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
-_CACHE_PATH  = str(_HERE / "h1_mujoco" / "inspire" / ".fk_cache.npz")
+_HERE = pathlib.Path(__file__).parent.parent
+
+
+def _resolve_default_xml() -> pathlib.Path:
+    # Source-tree layout: <repo>/h1_mujoco/inspire/...
+    src_xml = _HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml"
+    if src_xml.exists():
+        return src_xml
+
+    # ROS installed layout: <install>/share/rh56_controller/h1_mujoco/inspire/...
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_dir = pathlib.Path(get_package_share_directory("rh56_controller"))
+        share_xml = share_dir / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml"
+        if share_xml.exists():
+            return share_xml
+    except Exception:
+        pass
+
+    # Fallback keeps previous behavior for better error reporting downstream.
+    return src_xml
+
+
+_DEFAULT_XML = str(_resolve_default_xml())
+
+# Cache path must be user-writable in ROS install contexts.
+_CACHE_DIR = pathlib.Path.home() / ".cache" / "rh56_controller"
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_CACHE_PATH = str(_CACHE_DIR / "fk_cache.npz")
 
 
 # ---------------------------------------------------------------------------

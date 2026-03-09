@@ -8,11 +8,16 @@ all heavy geometry in GraspVizCore.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
+import traceback
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+
+_log = logging.getLogger(__name__)
 
 
 class GraspVizRosBridge:
@@ -44,9 +49,15 @@ class GraspVizRosBridge:
         self._last_left_q = [0.0] * 6
 
         self._rr = None
+        self._last_error = ""
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     def start(self) -> bool:
         """Start ROS2 node + publisher timer in a background executor thread."""
+        self._last_error = ""
         try:
             import rclpy
             from rclpy.executors import MultiThreadedExecutor
@@ -112,7 +123,9 @@ class GraspVizRosBridge:
             self._setup_rerun()
             self._publish_status("ROS bridge started")
             return True
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{exc}\n{traceback.format_exc(limit=6)}"
+            _log.error("ROS bridge failed to start: %s", self._last_error)
             self.stop()
             return False
 
@@ -258,7 +271,10 @@ class GraspVizRosBridge:
         if not self._rerun_enabled:
             return
         try:
-            import rerun as rr
+            try:
+                import rerun as rr
+            except Exception:
+                from rerun_sdk import rerun as rr
 
             self._rr = rr
             rr.init("grasp_viz_ros", spawn=True)

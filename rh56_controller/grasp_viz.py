@@ -62,7 +62,9 @@ def main():
                         help="Publish planned right-hand command to hands/cmd")
     parser.add_argument("--rerun", action="store_true",
                         help="Enable rerun telemetry stream from grasp_viz")
-    args = parser.parse_args()
+    # ros2 launch injects extra CLI tokens (e.g. --ros-args ...).
+    # Ignore unknown args so this non-rclpy app still works under launch.
+    args, _unknown = parser.parse_known_args()
 
     viz = GraspVizUI(
         xml_path=args.xml,
