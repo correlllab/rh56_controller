@@ -22,6 +22,7 @@ import os
 import pathlib
 import numpy as np
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 _log = logging.getLogger(__name__)
@@ -78,6 +79,30 @@ GRASP_FINGER_SETS: Dict[int, List[str]] = {
     3: ["index", "middle"],
     4: ["index", "middle", "ring"],
     5: ["index", "middle", "ring", "pinky"],
+}
+
+
+# ---------------------------------------------------------------------------
+# GraspMode enum
+# ---------------------------------------------------------------------------
+class GraspMode(str, Enum):
+    """Grasp closure mode identifiers.
+
+    Inherits from str so that existing equality checks against plain strings
+    continue to work:  ``GraspMode.LINE_2F == "2-finger line"``  is ``True``.
+    """
+    LINE_2F  = "2-finger line"
+    PLANE_3F = "3-finger plane"
+    PLANE_4F = "4-finger plane"
+    PLANE_5F = "5-finger plane"
+    CYLINDER = "cylinder"
+
+
+# Map n_fingers → GraspMode for plane closures
+_PLANE_MODES: Dict[int, GraspMode] = {
+    3: GraspMode.PLANE_3F,
+    4: GraspMode.PLANE_4F,
+    5: GraspMode.PLANE_5F,
 }
 
 
@@ -759,7 +784,7 @@ class ClosureGeometry:
             "thumb_yaw":       self.fk.ctrl_max["thumb_yaw_line"],
         }
         return ClosureResult(
-            mode="2-finger line",
+            mode=GraspMode.LINE_2F,
             midpoint=midpoint, width=width,
             finger_span=0.0, cylinder_radius=0.0,
             tip_positions=tips, ctrl_values=ctrl,
@@ -822,7 +847,7 @@ class ClosureGeometry:
         ctrl["thumb_yaw"]      = self.fk.ctrl_max["thumb_yaw"]
 
         return ClosureResult(
-            mode=f"{n_fingers}-finger plane",
+            mode=_PLANE_MODES[n_fingers],
             midpoint=midpoint, width=width,
             finger_span=span, cylinder_radius=0.0,
             tip_positions=tips, ctrl_values=ctrl,
@@ -926,7 +951,7 @@ class ClosureGeometry:
         ctrl["thumb_yaw"]      = float(thumb_yaw)
 
         return ClosureResult(
-            mode="cylinder",
+            mode=GraspMode.CYLINDER,
             midpoint=midpoint, width=width,
             finger_span=span, cylinder_radius=radius,
             tip_positions=tips, ctrl_values=ctrl,

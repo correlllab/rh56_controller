@@ -14,6 +14,7 @@ Subclass GraspVizCore with a UI layer (e.g. GraspVizUI in grasp_viz_ui.py)
 to add interactive controls.
 """
 
+import logging
 import math
 import multiprocessing
 import queue
@@ -24,9 +25,11 @@ from typing import Optional, Dict
 import numpy as np
 
 from .grasp_geometry import (
-    InspireHandFK, ClosureGeometry, ClosureResult,
+    InspireHandFK, ClosureGeometry, ClosureResult, GraspMode,
     CTRL_MAX, NON_THUMB_FINGERS, _DEFAULT_XML, GRASP_FINGER_SETS,
 )
+
+_log = logging.getLogger(__name__)
 from .grasp_viz_workers import (
     _ACTUATOR_ORDER, _DEFAULT_ROBOT_Z, _VIEWER_CTRL_LEN, _VIEWER_STATE_LEN,
     _VIEWER_FINGER_ORDER, _GRASP_SCENE, _ROBOT_SCENE, _RIGHT_SCENE,
@@ -58,13 +61,13 @@ class GraspVizCore:
         real_robot: bool = False,
         ur5_ip: Optional[str] = None,
         ur5_speed: float = 0.10,
-    ):
-        print("[GraspViz] Initialising FK model...")
+    ) -> None:
+        _log.info("Initialising FK model...")
         self.fk      = InspireHandFK(xml_path=xml_path, rebuild=rebuild)
         self.closure = ClosureGeometry(self.fk)
 
         # Grasp state
-        self._mode    = "4-finger plane"
+        self._mode    = GraspMode.PLANE_4F
         self._width_m = 0.040
         # Decoupled target used by GRASP! (can differ from slider after manual edit)
         self._width_target_m      = 0.040
@@ -94,12 +97,7 @@ class GraspVizCore:
         self._hand      = None
         self._send_real = send_real
         if port is not None:
-            try:
-                from .rh56_hand import RH56Hand
-                self._hand = RH56Hand(port=port)
-                print(f"[GraspViz] Connected to real hand on {port}")
-            except Exception as exc:
-                print(f"[GraspViz] Could not connect to real hand: {exc}")
+            self._init_hand(port)
 
         # ---- Multiprocessing viewer state ----
         _mp = multiprocessing.get_context("fork")
@@ -133,21 +131,7 @@ class GraspVizCore:
         self._mink_solve_stop   = threading.Event()
         self._mink_solve_thread: Optional[threading.Thread] = None
 
-        if mink_viz:
-            try:
-                from .mink_grasp_planner import MinkGraspPlanner
-                print("[GraspViz] Loading mink comparison planner...")
-                self._mink_planner = MinkGraspPlanner(
-                    _RIGHT_SCENE, dt=0.005, max_iters=150, conv_thr=5e-3,
-                )
-                self._mink_enabled = True
-                self._mink_solve_thread = threading.Thread(
-                    target=self._mink_solve_loop, daemon=True, name="mink-solve",
-                )
-                self._mink_solve_thread.start()
-                print("[GraspViz] Mink planner ready.")
-            except Exception as exc:
-                print(f"[GraspViz] Could not load mink planner: {exc}")
+        self._init_mink_planner(mink_viz)
 
         # ---- Real robot arm (UR5) ----
         self._arm      = None
@@ -166,42 +150,80 @@ class GraspVizCore:
         # Thread-safe status queue (executor/arm threads → UI poll loop)
         self._status_queue: queue.Queue = queue.Queue()
 
-        if real_robot and ur5_ip is not None:
-            try:
-                from .ur5_bridge import UR5Bridge
-                self._arm = UR5Bridge(ip=ur5_ip, speed=ur5_speed)
-                if self._arm.connect():
-                    self._arm.snapshot_joints(self._real_q_arr)
-                    self._real_tracking.value = 1
-                    print(f"[GraspViz] UR5 arm connected at {ur5_ip}")
-                else:
-                    self._arm = None
-            except Exception as exc:
-                print(f"[GraspViz] UR5 arm setup failed: {exc}")
-                self._arm = None
-
-        if self._arm is not None and self._hand is not None:
-            try:
-                from .grasp_executor import GraspExecutor
-                self._executor = GraspExecutor(
-                    arm=self._arm,
-                    hand=self._hand,
-                    fk=self.fk,
-                    status_cb=lambda s: self._status_queue.put(s),
-                    force_cb=lambda f: self._status_queue.put(f"forces: {f}"),
-                )
-                print("[GraspViz] GraspExecutor ready.")
-            except Exception as exc:
-                print(f"[GraspViz] GraspExecutor setup failed: {exc}")
+        self._init_real_arm(real_robot, ur5_ip, ur5_speed)
+        self._init_executor()
 
         if self._real_robot_mode:
             self._start_viewer_monitor()
 
         self._recompute()
 
-    def cleanup(self):
+    def _init_hand(self, port: str) -> None:
+        """Connect to the real RH56 hand on the given serial port."""
+        try:
+            from .rh56_hand import RH56Hand
+            self._hand = RH56Hand(port=port)
+            _log.info("Connected to real hand on %s", port)
+        except Exception as exc:
+            _log.warning("Could not connect to real hand: %s", exc)
+
+    def _init_mink_planner(self, mink_viz: bool) -> None:
+        """Load the Mink comparison planner and start its solve thread."""
+        if not mink_viz:
+            return
+        try:
+            from .mink_grasp_planner import MinkGraspPlanner
+            _log.info("Loading mink comparison planner...")
+            self._mink_planner = MinkGraspPlanner(
+                _RIGHT_SCENE, dt=0.005, max_iters=150, conv_thr=5e-3,
+            )
+            self._mink_enabled = True
+            self._mink_solve_thread = threading.Thread(
+                target=self._mink_solve_loop, daemon=True, name="mink-solve",
+            )
+            self._mink_solve_thread.start()
+            _log.info("Mink planner ready.")
+        except Exception as exc:
+            _log.warning("Could not load mink planner: %s", exc)
+
+    def _init_real_arm(self, real_robot: bool, ur5_ip: Optional[str],
+                       ur5_speed: float) -> None:
+        """Connect to the UR5 arm if in real-robot mode."""
+        if not real_robot or ur5_ip is None:
+            return
+        try:
+            from .ur5_bridge import UR5Bridge
+            self._arm = UR5Bridge(ip=ur5_ip, speed=ur5_speed)
+            if self._arm.connect():
+                self._arm.snapshot_joints(self._real_q_arr)
+                self._real_tracking.value = 1
+                _log.info("UR5 arm connected at %s", ur5_ip)
+            else:
+                self._arm = None
+        except Exception as exc:
+            _log.warning("UR5 arm setup failed: %s", exc)
+            self._arm = None
+
+    def _init_executor(self) -> None:
+        """Create GraspExecutor when both arm and hand are available."""
+        if self._arm is None or self._hand is None:
+            return
+        try:
+            from .grasp_executor import GraspExecutor
+            self._executor = GraspExecutor(
+                arm=self._arm,
+                hand=self._hand,
+                fk=self.fk,
+                status_cb=lambda s: self._status_queue.put(s),
+                force_cb=lambda f: self._status_queue.put(f"forces: {f}"),
+            )
+            _log.info("GraspExecutor ready.")
+        except Exception as exc:
+            _log.warning("GraspExecutor setup failed: %s", exc)
+
+    def cleanup(self) -> None:
         """Hard shutdown of all hardware and subprocesses."""
-        print("[GraspViz] Cleaning up resources...")
+        _log.info("Cleaning up resources...")
 
         # 1. Stop Mink thread
         self._mink_solve_stop.set()
@@ -215,10 +237,10 @@ class GraspVizCore:
         # 3. Close the Real Robot connection (Crucial for UR5)
         if self._arm is not None:
             try:
-                print("[GraspViz] Closing UR5 connection...")
+                _log.info("Closing UR5 connection...")
                 self._arm.disconnect()
             except Exception as e:
-                print(f"Error closing arm: {e}")
+                _log.error("Error closing arm: %s", e)
 
         # # 4. Close the Real Hand connection
         # if self._hand is not None:
@@ -245,12 +267,12 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     # Closure
     # ------------------------------------------------------------------
-    def _recompute(self):
+    def _recompute(self) -> None:
         """Recompute ClosureResult for current mode + width."""
         try:
             result = self.closure.solve(self._mode, self._width_m)
         except Exception as exc:
-            print(f"[GraspViz] solve failed: {exc}")
+            _log.warning("solve failed: %s", exc)
             result = None
 
         with self._state_lock:
@@ -265,7 +287,7 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     # Sim2Real
     # ------------------------------------------------------------------
-    def _send_real_hand(self):
+    def _send_real_hand(self) -> None:
         if self._hand is None or not self._send_real or self._result is None:
             return
         if self._grasp_hand_locked:
@@ -298,7 +320,7 @@ class GraspVizCore:
         try:
             self._hand.angle_set(real_cmd)
         except Exception as exc:
-            print(f"[GraspViz] angle_set failed: {exc}")
+            _log.warning("angle_set failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Plane / transform helpers
@@ -325,7 +347,7 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     # Viewer monitor (background thread)
     # ------------------------------------------------------------------
-    def _start_viewer_monitor(self):
+    def _start_viewer_monitor(self) -> None:
         """Background thread: disable teach mode when all sim viewers close."""
         def _monitor():
             while True:
@@ -341,7 +363,7 @@ class GraspVizCore:
                     try:
                         self._arm.disable_teach_mode()
                     except Exception as e:
-                        print(f"[GraspViz] monitor teach-disable error: {e}")
+                        _log.warning("monitor teach-disable error: %s", e)
                     self._status_queue.put("Teach mode disabled (all viewers closed)")
                     self._status_queue.put("__reset_teach_btn__")
         t = threading.Thread(target=_monitor, daemon=True, name="viewer-monitor")
@@ -362,7 +384,7 @@ class GraspVizCore:
                 np.array(angles, dtype=float) / 1000.0, 0.0, 1.0)) * rng
             ctrl_arr[6:12] = real_ctrl
         except Exception as exc:
-            print(f"[GraspViz] _sync_real_hand_to_ctrl: {exc}")
+            _log.warning("_sync_real_hand_to_ctrl: %s", exc)
 
     def _is_cylinder_bad(self) -> bool:
         return self._mode == "cylinder" and self._width_m * 2 < 0.071
@@ -408,7 +430,7 @@ class GraspVizCore:
                 state[5 + i * 3: 5 + i * 3 + 3] = wtips[fname]
         return state
 
-    def _push_viewer_ctrl(self):
+    def _push_viewer_ctrl(self) -> None:
         with self._state_lock:
             r = self._result
         if r is None:
@@ -418,7 +440,7 @@ class GraspVizCore:
         self._custom_ctrl_arr[:]  = ctrl
         self._viewer_state_arr[:] = state
 
-    def _push_mink_viewer_ctrl(self):
+    def _push_mink_viewer_ctrl(self) -> None:
         with self._state_lock:
             r = self._result
         with self._mink_lock:
@@ -439,9 +461,9 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     # Viewer process launch helpers
     # ------------------------------------------------------------------
-    def _launch_hand_viewer_ours(self):
+    def _launch_hand_viewer_ours(self) -> None:
         if self._hand_ours_proc is not None and self._hand_ours_proc.is_alive():
-            print("[GraspViz] Hand viewer (Ours) already open.")
+            _log.debug("Hand viewer (Ours) already open.")
             return
         self._hand_ours_stop.clear()
         self._push_viewer_ctrl()
@@ -454,14 +476,14 @@ class GraspVizCore:
         )
         proc.start()
         self._hand_ours_proc = proc
-        print("[GraspViz] Hand viewer (Ours) launched.")
+        _log.info("Hand viewer (Ours) launched.")
 
-    def _launch_hand_viewer_mink(self):
+    def _launch_hand_viewer_mink(self) -> None:
         if not self._mink_enabled or self._mink_planner is None:
-            print("[GraspViz] Mink planner not available.")
+            _log.warning("Mink planner not available.")
             return
         if self._hand_mink_proc is not None and self._hand_mink_proc.is_alive():
-            print("[GraspViz] Hand viewer (Mink) already open.")
+            _log.debug("Hand viewer (Mink) already open.")
             return
         self._hand_mink_stop.clear()
         self._push_mink_viewer_ctrl()
@@ -473,11 +495,11 @@ class GraspVizCore:
         )
         proc.start()
         self._hand_mink_proc = proc
-        print("[GraspViz] Hand viewer (Mink) launched.")
+        _log.info("Hand viewer (Mink) launched.")
 
-    def _launch_robot_viewer_ours(self):
+    def _launch_robot_viewer_ours(self) -> None:
         if self._robot_ours_proc is not None and self._robot_ours_proc.is_alive():
-            print("[GraspViz] Robot viewer (Ours) already open.")
+            _log.debug("Robot viewer (Ours) already open.")
             return
         self._robot_ours_stop.clear()
         self._push_viewer_ctrl()
@@ -497,14 +519,14 @@ class GraspVizCore:
         )
         proc.start()
         self._robot_ours_proc = proc
-        print("[GraspViz] Robot viewer (Ours) launched.")
+        _log.info("Robot viewer (Ours) launched.")
 
-    def _launch_robot_viewer_mink(self):
+    def _launch_robot_viewer_mink(self) -> None:
         if not self._mink_enabled or self._mink_planner is None:
-            print("[GraspViz] Mink planner not available.")
+            _log.warning("Mink planner not available.")
             return
         if self._robot_mink_proc is not None and self._robot_mink_proc.is_alive():
-            print("[GraspViz] Robot viewer (Mink) already open.")
+            _log.debug("Robot viewer (Mink) already open.")
             return
         self._robot_mink_stop.clear()
         self._push_mink_viewer_ctrl()
@@ -523,9 +545,9 @@ class GraspVizCore:
         )
         proc.start()
         self._robot_mink_proc = proc
-        print("[GraspViz] Robot viewer (Mink) launched.")
+        _log.info("Robot viewer (Mink) launched.")
 
-    def _launch_viewer(self):
+    def _launch_viewer(self) -> None:
         if self._robot_mode:
             self._launch_robot_viewer_ours()
         else:
@@ -534,7 +556,7 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     # Mink solve loop (background thread)
     # ------------------------------------------------------------------
-    def _mink_solve_loop(self):
+    def _mink_solve_loop(self) -> None:
         while not self._mink_solve_stop.is_set():
             triggered = self._mink_solve_event.wait(timeout=0.1)
             if not triggered:
@@ -550,7 +572,7 @@ class GraspVizCore:
                     self._mink_result = m_res
                 self._push_mink_viewer_ctrl()
             except Exception as exc:
-                print(f"[Mink] Solve error: {exc}")
+                _log.warning("Mink solve error: %s", exc)
 
     def _run_mink_for_result(self, result: ClosureResult):
         mode = result.mode

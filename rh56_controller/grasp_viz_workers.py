@@ -15,6 +15,8 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
+from .grasp_geometry import GraspMode
+
 # ---------------------------------------------------------------------------
 # File paths
 # ---------------------------------------------------------------------------
@@ -68,11 +70,11 @@ _FINGER_RGBA = {
 }
 
 MODES = [
-    "2-finger line",
-    "3-finger plane",
-    "4-finger plane",
-    "5-finger plane",
-    "cylinder",
+    GraspMode.LINE_2F,
+    GraspMode.PLANE_3F,
+    GraspMode.PLANE_4F,
+    GraspMode.PLANE_5F,
+    GraspMode.CYLINDER,
 ]
 
 # ---------------------------------------------------------------------------
