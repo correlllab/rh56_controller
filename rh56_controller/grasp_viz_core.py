@@ -33,7 +33,7 @@ _log = logging.getLogger(__name__)
 from .grasp_viz_workers import (
     _ACTUATOR_ORDER, _DEFAULT_ROBOT_Z, _VIEWER_CTRL_LEN, _VIEWER_STATE_LEN,
     _VIEWER_FINGER_ORDER, _GRASP_SCENE, _ROBOT_SCENE, _RIGHT_SCENE,
-    _DEFAULT_ROBOT_X, _DEFAULT_ROBOT_Y, _DEFAULT_ROBOT_Z,
+    _DEFAULT_ROBOT_X, _DEFAULT_ROBOT_Y,
     _IK_DT, _IK_MAX_ITERS, _IK_POS_THR, _IK_ORI_THR, _EEFF_LOCAL,
     MODES,
     _worker_jnt_map, _worker_apply_qpos, _worker_add_geoms,
