@@ -3,6 +3,22 @@
 __pycache__/
 *.pyc
 *.pyo
-tests/logs/
+
+# Experiment data and generated outputs (regenerate locally)
+logs/
+logs_old/
+plots/
+mink_vs_analytical/
+mink_vs_analytical_200widths/
+paper/
+
+# Build artifacts
+rh56_controller.egg-info/
+*.egg-info/
+
+# FK cache (auto-regenerated from XML on first run)
+**/.fk_cache.npz
+
+# Tools (private / large)
 tools/sysid.ipynb
 tools/sysid_readme.md

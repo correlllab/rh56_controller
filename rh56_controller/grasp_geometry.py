@@ -17,11 +17,15 @@ For world-frame (top-down approach) visualization, apply Rx(π):
   base +X → world +X (closure direction stays horizontal)
 """
 
+import logging
 import os
 import pathlib
 import numpy as np
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
 
 import mujoco
 from scipy.interpolate import interp1d, RegularGridInterpolator
@@ -79,6 +83,30 @@ GRASP_FINGER_SETS: Dict[int, List[str]] = {
 
 
 # ---------------------------------------------------------------------------
+# GraspMode enum
+# ---------------------------------------------------------------------------
+class GraspMode(str, Enum):
+    """Grasp closure mode identifiers.
+
+    Inherits from str so that existing equality checks against plain strings
+    continue to work:  ``GraspMode.LINE_2F == "2-finger line"``  is ``True``.
+    """
+    LINE_2F  = "2-finger line"
+    PLANE_3F = "3-finger plane"
+    PLANE_4F = "4-finger plane"
+    PLANE_5F = "5-finger plane"
+    CYLINDER = "cylinder"
+
+
+# Map n_fingers → GraspMode for plane closures
+_PLANE_MODES: Dict[int, GraspMode] = {
+    3: GraspMode.PLANE_3F,
+    4: GraspMode.PLANE_4F,
+    5: GraspMode.PLANE_5F,
+}
+
+
+# ---------------------------------------------------------------------------
 # InspireHandFK
 # ---------------------------------------------------------------------------
 class InspireHandFK:
@@ -130,14 +158,14 @@ class InspireHandFK:
         if cache_valid:
             self._load_tables(_CACHE_PATH)
         else:
-            print("[InspireHandFK] Building FK tables (first run, ~2s)...")
+            _log.info("Building FK tables (first run, ~2 s)…")
             self._build_tables()
             self._save_tables(_CACHE_PATH)
-            print(f"[InspireHandFK] Saved FK cache to {_CACHE_PATH}")
+            _log.info("Saved FK cache to %s", _CACHE_PATH)
 
         # Build interpolators
         self._build_interpolators()
-        print("[InspireHandFK] Ready.")
+        _log.info("InspireHandFK ready.")
 
     # ------------------------------------------------------------------
     # Ctrl range initialisation (reads from loaded MuJoCo model)
@@ -694,8 +722,8 @@ class ClosureGeometry:
         d_trans = self._prox_joint_diameter_at_ctrl(c_trans)
         self._cyl_transition_ctrl      = c_trans
         self._cyl_transition_diameter  = d_trans
-        print(f"[ClosureGeometry] Cylinder thumb-yaw transition: "
-              f"ctrl={c_trans:.3f}  prox_diam={d_trans*1000:.1f} mm")
+        _log.info("Cylinder thumb-yaw transition: ctrl=%.3f  prox_diam=%.1f mm",
+                  c_trans, d_trans * 1000)
 
     # ------------------------------------------------------------------
     # Width/radius range query
@@ -756,7 +784,7 @@ class ClosureGeometry:
             "thumb_yaw":       self.fk.ctrl_max["thumb_yaw_line"],
         }
         return ClosureResult(
-            mode="2-finger line",
+            mode=GraspMode.LINE_2F,
             midpoint=midpoint, width=width,
             finger_span=0.0, cylinder_radius=0.0,
             tip_positions=tips, ctrl_values=ctrl,
@@ -819,7 +847,7 @@ class ClosureGeometry:
         ctrl["thumb_yaw"]      = self.fk.ctrl_max["thumb_yaw"]
 
         return ClosureResult(
-            mode=f"{n_fingers}-finger plane",
+            mode=_PLANE_MODES[n_fingers],
             midpoint=midpoint, width=width,
             finger_span=span, cylinder_radius=0.0,
             tip_positions=tips, ctrl_values=ctrl,
@@ -923,7 +951,7 @@ class ClosureGeometry:
         ctrl["thumb_yaw"]      = float(thumb_yaw)
 
         return ClosureResult(
-            mode="cylinder",
+            mode=GraspMode.CYLINDER,
             midpoint=midpoint, width=width,
             finger_span=span, cylinder_radius=radius,
             tip_positions=tips, ctrl_values=ctrl,

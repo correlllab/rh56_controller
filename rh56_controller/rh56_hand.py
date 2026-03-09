@@ -44,7 +44,7 @@ class RH56Hand:
     """
     RH56 Hand Torque Monitor - Combines force sensor readings and torque calculations
     """
-    
+
     def __init__(self, port: str, hand_id: int = 1, baudrate: int = 115200):
         self.ser = serial.Serial(
             port=port,
@@ -102,13 +102,13 @@ class RH56Hand:
     def angle_set(self, angles: List[int]):
         if len(angles) != 6:
             raise ValueError("Need 6")
-        
+
         data = b''
         for angle in angles:
             if not (-1 <= angle <= 1000):
                 raise ValueError("range error")
             data += struct.pack('<h', angle)
-        
+
         # ANGLE_SET: 0x05CE (1486)
         response = self._send_frame(
             command=_CMD_WRITE,
@@ -120,7 +120,7 @@ class RH56Hand:
     def force_act(self) -> Optional[List[int]]:
         """
         Read force sensor values from each finger
-        
+
         Returns:
             Optional[List[int]]: List of force values for 6 fingers, or None if reading fails
             Index mapping:
@@ -130,7 +130,7 @@ class RH56Hand:
             3 - Index finger force (1588-1589)
             4 - Thumb bend force (1590-1591)
             5 - Thumb rotation force (1592-1593)
-            
+
             Force values typically range from 0-1000, higher values indicate greater force
             Unit: g (gram)
         """
@@ -207,7 +207,7 @@ class RH56Hand:
     def temp_read(self) -> Optional[List[int]]:
         """
         Read six temperature values from the hand for each finger actuator.
-        
+
         _ADDR_TEMP = 0x0652 (1618)
         Returns:
             Optional[List[int]]: List of temperature values for 6 fingers, or None if reading fails
@@ -226,25 +226,25 @@ class RH56Hand:
     def status_read(self) -> Optional[List[int]]:
         """
         Read status information for each degree of freedom (DOF).
-        
-        This register group consists of six registers corresponding to the status information 
+
+        This register group consists of six registers corresponding to the status information
         of the dexterous hand for 6 DOF.
-        
+
         Address mapping:
             1612 (0x064C) - STATUS(0): Little finger status
-            1613 (0x064D) - STATUS(1): Ring finger status  
+            1613 (0x064D) - STATUS(1): Ring finger status
             1614 (0x064E) - STATUS(2): Middle finger status
             1615 (0x064F) - STATUS(3): Index finger status
             1616 (0x0650) - STATUS(4): Thumb bending status
             1617 (0x0651) - STATUS(5): Thumb rotation status
-        
+
         Status bit meanings:
             Bit0: Locked-rotor error
             Bit1: Over temperature error
             Bit2: Over-current error
             Bit3: Abnormal operation of the motor
             Bit4: Communication error
-        
+
         Status code meanings:
             0: Unclenching
             1: Grasping
@@ -253,7 +253,7 @@ class RH56Hand:
             5: Stop due to current protection
             6: Stop due to locked-rotor of the actuator
             7: Stop due to actuator fault
-        
+
         Returns:
             Optional[List[int]]: List of status values for 6 fingers, or None if reading fails
             Index mapping:
@@ -292,41 +292,41 @@ class RH56Hand:
     def decode_status(self, status_values: List[int], invert_over_temp: bool = True) -> List[dict]:
         """
         Decode status values into human-readable format.
-        
+
         Args:
             status_values: List of 6 status byte values from status_read()
-            invert_over_temp: If True, inverts the over-temperature bit logic 
+            invert_over_temp: If True, inverts the over-temperature bit logic
                             (1=normal, 0=error) due to apparent hardware behavior
-        
+
         Returns:
             List[dict]: List of decoded status information for each finger
         """
         if len(status_values) != 6:
             raise ValueError("Need 6 status values")
-        
-        finger_names = ["Little finger", "Ring finger", "Middle finger", 
+
+        finger_names = ["Little finger", "Ring finger", "Middle finger",
                        "Index finger", "Thumb bending", "Thumb rotation"]
-        
+
         status_code_meanings = {
             0: "Unclenching",
-            1: "Grasping", 
+            1: "Grasping",
             2: "Stop after reaching the target position",
             3: "Stop after reaching the defined force control value",
             5: "Stop due to current protection",
             6: "Stop due to locked-rotor of the actuator",
             7: "Stop due to actuator fault"
         }
-        
+
         error_bit_meanings = {
             0: "Locked-rotor error",
-            1: "Over temperature error", 
+            1: "Over temperature error",
             2: "Over-current error",
             3: "Abnormal operation of the motor",
             4: "Communication error"
         }
-        
+
         decoded_status = []
-        
+
         for i, status_byte in enumerate(status_values):
             finger_status = {
                 'finger': finger_names[i],
@@ -335,11 +335,11 @@ class RH56Hand:
                 'status_meaning': status_code_meanings.get(status_byte & 0x0F, f"Unknown status code: {status_byte & 0x0F}"),
                 'errors': []
             }
-            
+
             # Check each error bit
             for bit in range(5):  # Bits 0-4
                 bit_is_set = bool(status_byte & (1 << bit))
-                
+
                 # Special handling for over-temperature bit (bit 1)
                 if bit == 1 and invert_over_temp:
                     # Inverted logic: 1 = normal, 0 = error
@@ -349,15 +349,15 @@ class RH56Hand:
                     # Normal logic: 1 = error, 0 = normal
                     if bit_is_set:
                         finger_status['errors'].append(error_bit_meanings[bit])
-            
+
             decoded_status.append(finger_status)
-        
+
         return decoded_status
 
     def print_status(self, status_values: Optional[List[int]] = None, invert_over_temp: bool = True):
         """
         Read and print status information in human-readable format.
-        
+
         Args:
             status_values: Optional status values. If None, will read current status.
             invert_over_temp: If True, inverts over-temperature bit logic
@@ -367,27 +367,27 @@ class RH56Hand:
             if status_values is None:
                 print("Failed to read status information")
                 return
-        
+
         decoded = self.decode_status(status_values, invert_over_temp=invert_over_temp)
-        
+
         print("=== Hand Status Information ===")
         print("Finger           | Status Code | Status Meaning                               | Errors")
         print("-" * 95)
-        
+
         for finger_status in decoded:
             finger = finger_status['finger']
             code = finger_status['status_code']
             meaning = finger_status['status_meaning']
             errors = ", ".join(finger_status['errors']) if finger_status['errors'] else "None"
-            
+
             print(f"{finger:16} | {code:11d} | {meaning:44} | {errors}")
-        
+
         print("-" * 95)
 
     def current_read(self) -> Optional[List[int]]:
         """
         Read current values from each finger actuator.
-        
+
         Returns:
             Optional[List[int]]: List of current values for 6 fingers, or None if reading fails
             Index mapping:
@@ -397,7 +397,7 @@ class RH56Hand:
             3 - Index finger current (1600-1601)
             4 - Thumb bending current (1602-1603)
             5 - Thumb rotation current (1604-1605)
-            
+
             Current values range from 0-1000 mA
             Unit: mA (milliamps)
         """
@@ -443,18 +443,18 @@ class RH56Hand:
     def clear_errors(self) -> Optional[List[int]]:
         """
         Clear all clearable errors in the dexterous hand.
-        
+
         This function clears actuator errors such as:
         - Locked-rotor errors
-        - Over-current errors  
+        - Over-current errors
         - Abnormal operation errors
         - Communication errors
-        
+
         Address: 1004 (0x03EC)
         Default value: 0
         Range: 0-1
         Note: This parameter cannot be saved (non-persistent)
-        
+
         Returns:
             Optional[List[int]]: Response data if successful, None otherwise
         """
@@ -469,7 +469,7 @@ class RH56Hand:
     def clear_errors_and_check_status(self) -> dict:
         """
         Clear errors and then read status to verify clearance.
-        
+
         Returns:
             dict: Contains before/after status and clear operation result
         """
@@ -480,38 +480,38 @@ class RH56Hand:
             'errors_cleared': False,
             'remaining_errors': []
         }
-        
+
         # Read status before clearing
         result['status_before'] = self.status_read()
-        
+
         # Clear errors
         result['clear_response'] = self.clear_errors()
-        
+
         # Wait a moment for the clear to take effect
         import time
         time.sleep(0.1)
-        
+
         # Read status after clearing
         result['status_after'] = self.status_read()
-        
+
         # Check if errors were actually cleared
         if result['status_before'] and result['status_after']:
             before_decoded = self.decode_status(result['status_before'])
             after_decoded = self.decode_status(result['status_after'])
-            
+
             # Count total errors before and after
             errors_before = sum(len(finger['errors']) for finger in before_decoded)
             errors_after = sum(len(finger['errors']) for finger in after_decoded)
-            
+
             result['errors_cleared'] = errors_after < errors_before
-            
+
             # List remaining errors
             for finger in after_decoded:
                 if finger['errors']:
                     result['remaining_errors'].extend([
                         f"{finger['finger']}: {error}" for error in finger['errors']
                     ])
-        
+
         return result
 
     def save_parameters(self):
@@ -521,11 +521,11 @@ class RH56Hand:
             address=_ADDR_SAVE,
             data=bytes([1])
         )
-        
+
     def force_set(self, thresholds: List[int]):
         """
         Set force control thresholds for each finger
-        
+
         Args:
             thresholds: List of 6 threshold values (0-1000) for each finger
                 Index mapping:
@@ -535,24 +535,24 @@ class RH56Hand:
                 3 - Index finger threshold (1504-1505)
                 4 - Thumb bend threshold (1506-1507)
                 5 - Thumb rotation threshold (1508-1509)
-        
+
         Returns:
             Optional[List[int]]: Response data if successful, None otherwise
-        
+
         Note:
-            When setting FORCE_SET(x) to value Y, the finger will stop at this force 
+            When setting FORCE_SET(x) to value Y, the finger will stop at this force
             when moving from open to closed position if FORCE_ACT(x) reaches Y.
             Unit: g (gram)
         """
         if len(thresholds) != 6:
             raise ValueError("Need 6 threshold values")
-        
+
         data = b''
         for threshold in thresholds:
             if not (0 <= threshold <= 1000):
                 raise ValueError("Threshold value must be between 0 and 1000")
             data += struct.pack('<h', threshold)
-        
+
         self.force_limits = thresholds  # Update internal limits
 
         # FORCE_SET: 0x05DA (1498), 12 bytes (6 fingers × 2 bytes)
@@ -577,9 +577,9 @@ class RH56Hand:
                 SPEED_SET(3): Index finger speed - Address 1528-1529
                 SPEED_SET(4): Thumb bend speed - Address 1530-1531
                 SPEED_SET(5): Thumb rotation speed - Address 1532-1533
-            
-            Note: A speed value of 1000 indicates that it takes approximately 800ms 
-                  for the finger to move from its maximum to minimum angle under no load. 
+
+            Note: A speed value of 1000 indicates that it takes approximately 800ms
+                  for the finger to move from its maximum to minimum angle under no load.
                   The actual speed may decrease if the load is significant.
 
         Returns:
@@ -616,9 +616,9 @@ class RH56Hand:
                 CURRENT_LIMIT(3): Index finger current protection - Address 1026-1027
                 CURRENT_LIMIT(4): Thumb bending current protection - Address 1028-1029
                 CURRENT_LIMIT(5): Thumb rotation current protection - Address 1030-1031
-            
-            Note: If current exceeds this value during finger movement, the finger will 
-                  stop moving, and it will be indicated in the finger status register 
+
+            Note: If current exceeds this value during finger movement, the finger will
+                  stop moving, and it will be indicated in the finger status register
                   "STATUS(m)" that the finger stops due to current protection.
                   These parameters can be saved after power failure.
                   Unit: mA.
@@ -648,7 +648,7 @@ class RH56Hand:
     def gesture_force_clb(self, gesture_id: int):
         """
         Calibrate force sensors for a specific gesture
-        
+
         Args:
             gesture_id: The ID of the gesture to calibrate (1-255)
             When gesture_id=1, the hand will perform the following calibration sequence:
@@ -658,13 +658,13 @@ class RH56Hand:
             4. Thumb bends
             5. Thumb opens
             The entire calibration process takes about 6 seconds.
-        
+
         Returns:
             Optional[List[int]]: Response data if successful, None otherwise
         """
         if not (1 <= gesture_id <= 255):
             raise ValueError("Gesture ID must be between 1 and 255")
-        
+
         # GESTURE_FORCE_CLB: 0x03F1 (1009)
         response = self._send_frame(
             command=_CMD_WRITE,
@@ -676,7 +676,7 @@ class RH56Hand:
     def smooth_angle_set(self, target_angles: List[int], steps: int = 30, delay: float = 0.05):
         """
         Smoothly move fingers to target angles by dividing the movement into small steps
-        
+
         Args:
             target_angles: List of target angles (6 values)
             steps: Number of steps to divide the movement into (default 30)
@@ -684,19 +684,19 @@ class RH56Hand:
         """
         if len(target_angles) != 6:
             raise ValueError("Need 6 angle values")
-        
+
         # Read current angles
         current_angles = self.angle_read()
         if current_angles is None:
             raise RuntimeError("Failed to read current angles")
-        
+
         # Calculate angle increment for each step
         angle_steps = []
         for curr, target in zip(current_angles, target_angles):
             diff = target - curr
             step = diff / steps
             angle_steps.append(step)
-        
+
         # Execute step by step
         for i in range(steps):
             next_angles = []
@@ -706,7 +706,7 @@ class RH56Hand:
                 else:
                     next_angle = int(curr + step * (i + 1))
                     next_angles.append(next_angle)
-            
+
             self.angle_set(next_angles)
             time.sleep(delay)
 
@@ -714,40 +714,40 @@ class RH56Hand:
         """
         Set force thresholds based on target Newton readings using the formula:
         torque = 0.1211 * newton + 0.005(for right hand index finger)
-        
+
         Args:
             target_newtons: List of 6 target Newton values for each finger
             finger_lengths: Optional dictionary of finger lengths {finger_index: (l1, l2)}
                           If None, uses default lengths from TorqueCalculator
-        
+
         Returns:
             Optional[List[int]]: Response data if successful, None otherwise
         """
         if len(target_newtons) != 6:
             raise ValueError("Need 6 target Newton values")
-        
+
         # Import here to avoid circular import
         import numpy as np
         from .kinematics import _calculate_kinematics
-        
+
         # Create torque calculator instance
         calculator = TorqueCalculator(self, finger_lengths=finger_lengths)
-        
+
         # Calculate required force thresholds in grams
         force_thresholds = []
         finger_names = ["Pinky", "Ring", "Middle", "Index", "Thumb Bend", "Thumb Rotation"]
-        
+
         print("=== Newton to Grams Conversion Results ===")
         print("Finger         | Target(N) | Calculated(g) | Final(g)")
         print("-" * 55)
-        
+
         for finger_idx, target_newton in enumerate(target_newtons):
             if target_newton < 0:
                 raise ValueError(f"Target Newton value for finger {finger_idx} must be non-negative")
-            
+
             # Apply the given formula: torque = 0.1211 * newton + 0.005
             target_torque = 0.1211 * target_newton + 0.005
-            
+
             # Get current angle for this finger (or use a default angle)
             angles = self.angle_read()
             if angles is None:
@@ -756,39 +756,39 @@ class RH56Hand:
             else:
                 # Convert angle reading (0-1000) to degrees (19-176)
                 alpha_deg = 19 + (angles[finger_idx] / 1000.0) * (176 - 19)
-            
+
             # Get finger-specific lengths
             l1, l2 = calculator.get_finger_lengths(finger_idx)
-            
+
             # Use simulation to get geometric parameters
             kinematics = _calculate_kinematics(l1, l2, alpha_deg)
             d1 = kinematics['d1']
-            
+
             # Calculate required force using inverse torque formula
             # torque = force_newtons * d1 * sin(alpha)
             # Rearranging: force_newtons = torque / (d1 * sin(alpha))
             alpha_rad = np.radians(90)  # Using 90 degrees as in original code
             sin_alpha = np.sin(alpha_rad)
-            
+
             if d1 == 0 or sin_alpha == 0:
                 raise ValueError(f"Invalid geometry for finger {finger_idx}: d1={d1}, sin_alpha={sin_alpha}")
-            
+
             required_force_newtons = target_torque / (d1 * sin_alpha)
-            
+
             # Convert from newtons to grams: N * 1000 / 9.81 = grams
             required_force_grams_raw = (required_force_newtons * 1000) / 9.81
-            
+
             # Ensure the value is within valid range (0-1000)
             required_force_grams = max(0, min(1000, int(required_force_grams_raw)))
             force_thresholds.append(required_force_grams)
-            
+
             # Print conversion details for this finger
             print(f"{finger_names[finger_idx]:14} | {target_newton:8.2f} | {required_force_grams_raw:12.2f} | {required_force_grams:8d}")
-        
+
         print("-" * 55)
         print(f"Total force thresholds set: {force_thresholds}")
         print("=" * 55)
-        
+
         # Set the calculated force thresholds
         return self.force_set(force_thresholds)
 
@@ -796,17 +796,17 @@ class RH56Hand:
         """
         Convert current force readings (grams) to Newton values using the inverse formula:
         newton = (torque - 0.005) / 0.1211
-        
+
         Returns:
             Optional[List[float]]: Newton values for each finger, or None if reading fails
         """
         # Create torque calculator instance
         calculator = TorqueCalculator(self)
-        
+
         try:
             # Get current torques
             torques = calculator.get_all_torques()
-            
+
             # Convert torques to Newton readings using inverse formula
             newton_readings = []
             for torque in torques:
@@ -814,31 +814,31 @@ class RH56Hand:
                 newton = (torque - 0.005) / 0.1211
                 newton = max(0, newton)  # Ensure non-negative
                 newton_readings.append(newton)
-            
+
             return newton_readings
         except Exception as e:
             print(f"Error calculating Newton readings: {e}")
             return None
 
-    def set_newton_target_with_monitoring(self, target_newtons: List[float], 
-                                        finger_lengths: dict = None, 
+    def set_newton_target_with_monitoring(self, target_newtons: List[float],
+                                        finger_lengths: dict = None,
                                         tolerance: float = 0.1,
                                         max_iterations: int = 10):
         """
         Set Newton targets and monitor if they are achieved, with iterative adjustment
-        
+
         Args:
             target_newtons: List of 6 target Newton values for each finger
             finger_lengths: Optional dictionary of finger lengths
             tolerance: Tolerance for Newton reading accuracy
             max_iterations: Maximum number of adjustment iterations
-        
+
         Returns:
             dict: Results with achieved Newton values and iteration count
         """
         if len(target_newtons) != 6:
             raise ValueError("Need 6 target Newton values")
-        
+
         results = {
             'target_newtons': target_newtons,
             'achieved_newtons': None,
@@ -846,40 +846,40 @@ class RH56Hand:
             'iterations': 0,
             'success': False
         }
-        
+
         for iteration in range(max_iterations):
             # Set force thresholds based on current target
             response = self.force_set_by_newton_target(target_newtons, finger_lengths)
-            
+
             if response is None:
                 print(f"Iteration {iteration + 1}: Failed to set force thresholds")
                 continue
-            
+
             # Wait a moment for the hand to respond
-            time.sleep(0.5)
-            
+            time.sleep(0.025)
+
             # Read current Newton values
             current_newtons = self.get_newton_readings_from_forces()
-            
+
             if current_newtons is None:
                 print(f"Iteration {iteration + 1}: Failed to read Newton values")
                 continue
-            
+
             results['achieved_newtons'] = current_newtons
             results['iterations'] = iteration + 1
-            
+
             # Check if targets are achieved within tolerance
             all_within_tolerance = True
             for i, (target, achieved) in enumerate(zip(target_newtons, current_newtons)):
                 if abs(target - achieved) > tolerance:
                     all_within_tolerance = False
                     break
-            
+
             if all_within_tolerance:
                 results['success'] = True
                 print(f"Newton targets achieved in {iteration + 1} iterations")
                 break
-            
+
             # Adjust targets for next iteration (simple proportional adjustment)
             adjustment_factor = 1.1  # 10% adjustment
             for i in range(len(target_newtons)):
@@ -887,250 +887,78 @@ class RH56Hand:
                     target_newtons[i] *= adjustment_factor
                 elif current_newtons[i] > target_newtons[i] + tolerance:
                     target_newtons[i] /= adjustment_factor
-            
+
             print(f"Iteration {iteration + 1}: Adjusting targets. Current: {['%.3f' % x for x in current_newtons]}")
-        
+
         if not results['success']:
             print(f"Failed to achieve Newton targets after {max_iterations} iterations")
-        
-        return results
 
-    def adaptive_force_control(self, target_forces: List[int], target_angles: List[int], 
-                             step_size: int = 50, max_iterations: int = 20):
-        """
-        Advanced force control with adaptive adjustment and gradual positioning
-        
-        Args:
-            target_forces: List of 6 target force values in grams
-            target_angles: List of 6 target angles (0-1000)
-            step_size: Angle reduction step size (default 50)
-            max_iterations: Maximum number of iterations
-        
-        Returns:
-            dict: Results with final readings and adjustment history
-        """
-        if len(target_forces) != 6 or len(target_angles) != 6:
-            raise ValueError("Need 6 values for both forces and angles")
-        
-        finger_names = ["Pinky", "Ring", "Middle", "Index", "Thumb Bend", "Thumb Rotation"]
-        
-        # Record original target forces for comparison
-        original_targets = target_forces.copy()
-        current_targets = target_forces.copy()
-        
-        # Get current angles as starting position
-        current_angles = self.angle_read()
-        if current_angles is None:
-            print("Failed to read initial angles, using default [1000, 1000, 1000, 1000, 1000, 1000]")
-            current_angles = [1000, 1000, 1000, 1000, 1000, 1000]
-        
-        print("=== Adaptive Force Control Started ===")
-        print(f"Original target forces: {original_targets}")
-        print(f"Target angles: {target_angles}")
-        print(f"Starting angles: {current_angles}")
-        print(f"Step size: {step_size}")
-        
-        results = {
-            'original_targets': original_targets,
-            'final_forces': None,
-            'final_angles': None,
-            'iterations': 0,
-            'adjustment_history': []
-        }
-        
-        for iteration in range(max_iterations):
-            print(f"\n--- Iteration {iteration + 1} ---")
-            
-            # Set current force thresholds
-            print(f"Setting force thresholds: {current_targets}")
-            response = self.force_set(current_targets)
-            if not response:
-                print("Failed to set force thresholds")
-                continue
-            
-            # Calculate next angle step
-            next_angles = []
-            angles_at_target = True
-            
-            for i in range(6):
-                if current_angles[i] > target_angles[i]:
-                    # Move towards target by step_size
-                    next_angle = max(target_angles[i], current_angles[i] - step_size)
-                    next_angles.append(next_angle)
-                    if next_angle != target_angles[i]:
-                        angles_at_target = False
-                elif current_angles[i] < target_angles[i]:
-                    # Move towards target by step_size
-                    next_angle = min(target_angles[i], current_angles[i] + step_size)
-                    next_angles.append(next_angle)
-                    if next_angle != target_angles[i]:
-                        angles_at_target = False
-                else:
-                    # Already at target
-                    next_angles.append(target_angles[i])
-            
-            print(f"Moving to angles: {next_angles}")
-            self.angle_set(next_angles)
-            current_angles = next_angles.copy()
-            
-            # Wait for movement to complete
-            time.sleep(2)
-            
-            # Read current forces
-            current_forces = self.force_act()
-            if not current_forces:
-                print("Failed to read current forces")
-                continue
-            
-            print("Current readings vs Original targets vs Current thresholds:")
-            print("Finger      | Current(g) | Original(g) | Threshold(g) | Diff | Action")
-            print("-" * 75)
-            
-            adjustment_made = False
-            iteration_adjustments = []
-            
-            for i, name in enumerate(finger_names):
-                current_force = current_forces[i]
-                original_target = original_targets[i]
-                current_threshold = current_targets[i]
-                diff = abs(current_force - original_target)
-                
-                action = "No change"
-                
-                # Check if current angle is close to target angle (within ±30)
-                angle_close_to_target = abs(current_angles[i] - target_angles[i]) <= 30
-                
-                # Apply adjustment logic
-                if angle_close_to_target:
-                    # Stop force adjustments when angle is close to target
-                    action = f"Angle close to target ({current_angles[i]} vs {target_angles[i]}), force adjustment stopped"
-                elif diff > 100:
-                    # Large difference: don't adjust force until angles reach target
-                    if angles_at_target:
-                        action = "Large diff, angles at target - consider manual adjustment"
-                    else:
-                        action = "Large diff, waiting for angle target"
-                elif 50 < diff <= 100:
-                    # Medium difference: increase threshold by 50g
-                    if current_threshold < 1000:  # Don't exceed maximum
-                        current_targets[i] = min(1000, current_threshold + 50)
-                        action = f"Increased threshold by 50g (was {current_threshold})"
-                        adjustment_made = True
-                    else:
-                        action = "At max threshold (1000g)"
-                else:
-                    # Small difference: no adjustment needed
-                    action = "Within tolerance"
-                
-                print(f"{name:11} | {current_force:10d} | {original_target:11d} | {current_targets[i]:11d} | {diff:4.0f} | {action}")
-                
-                iteration_adjustments.append({
-                    'finger': name,
-                    'current_force': current_force,
-                    'original_target': original_target,
-                    'threshold': current_targets[i],
-                    'diff': diff,
-                    'action': action
-                })
-            
-            results['adjustment_history'].append({
-                'iteration': iteration + 1,
-                'angles': current_angles.copy(),
-                'forces': current_forces.copy(),
-                'thresholds': current_targets.copy(),
-                'adjustments': iteration_adjustments,
-                'angles_at_target': angles_at_target
-            })
-            
-            # Check if we should continue
-            if angles_at_target and not adjustment_made:
-                print(f"\nTarget angles reached and no more adjustments needed")
-                break
-            
-            results['iterations'] = iteration + 1
-        
-        # Final readings
-        final_forces = self.force_act()
-        final_angles = self.angle_read()
-        
-        results['final_forces'] = final_forces
-        results['final_angles'] = final_angles
-        
-        print(f"\n=== Adaptive Force Control Complete ===")
-        print(f"Completed in {results['iterations']} iterations")
-        print(f"Final angles: {final_angles}")
-        print(f"Final forces: {final_forces}")
-        print(f"Final thresholds: {current_targets}")
-        
         return results
 
     def adaptive_force_control_iter(
         self,
         target_forces: List[int],
-        target_angles: List[int], 
-        step_size: int = 50,
-        max_iterations: int = 20
+        target_angles: List[int],
+        step_size = 50, # can also accept a list of step sizes per finger
+        max_iterations: int = 20,
+        speed: Optional[int] = None,
     ):
         if len(target_forces) != 6 or len(target_angles) != 6:
             raise ValueError("Need 6 values for both forces and angles")
-        
-        original_targets = target_forces.copy()
-        current_targets = target_forces.copy()
-        current_angles = self.angle_read() or [1000] * 6
+
+        import numpy as np
+
+        if speed is not None:
+            self.speed_set([speed] * 6)
+
+        target_forces_arr = np.array(target_forces)
+        target_angles_arr = np.array(target_angles)
+        step_size_arr = np.array(step_size)
+        current_angles = np.array(self.angle_read() or [1000] * 6, dtype=float)
 
         for iteration in range(max_iterations):
-            response = self.force_set(current_targets) # set force limit to initial target forces
+            # Set firmware force limit (constant — never bumped, so protection
+            # stays in place for the full phase).
+            response = self.force_set(target_forces)
+            time.sleep(0.10)
             if not response:
                 continue
 
-            # Compute next angles
-            next_angles = []
-            angles_at_target = True
-            import numpy as np
-
-            current_angles = np.array(current_angles)
-            target_angles = np.array(target_angles)
-
-            # Calculate deltas --> clip to step size
-            delta = target_angles - current_angles
-            step = np.clip(delta, -step_size, step_size)
+            # Step angles toward target, clipped to step_size per iteration
+            delta = target_angles_arr - current_angles
+            step = np.clip(delta, -step_size_arr, step_size_arr)
+            print(f"Iteration {iteration + 1}: Current angles: {current_angles}, Target angles: {target_angles_arr}, Step: {step}")
             next_angles = current_angles + step
+            print(f"Iteration {iteration + 1}: Setting angles to: {next_angles}")
+            self.angle_set(np.round(next_angles).astype(int).tolist())
 
-            # Check if we're close enough to target for all fingers
-            angles_at_target = np.all(np.abs(delta) <= step_size)
+            time.sleep(0.10)
 
-            # Send commands and update state
-            self.angle_set(next_angles.tolist())
-            current_angles = next_angles.copy()
-
-            # now that we yield realtime values, this needs to be close to 0
-            # TODO: changed from 2 --> 0.025 but need to play with reducing further
-            time.sleep(0.025)
+            # Read back actual angles so we know if firmware stopped a motor
+            # at the force threshold (actual < commanded in that case).
+            readback = self.angle_read()
+            current_angles = np.array(readback if readback else next_angles,
+                                      dtype=float)
 
             current_forces = self.force_act()
             if not current_forces:
                 continue
 
-            # Adjust thresholds
-            adjustment_made = False
-            for i in range(6):
-                diff = abs(current_forces[i] - original_targets[i])
-                angle_close = abs(current_angles[i] - target_angles[i]) <= 30
-                if angle_close:
-                    continue
-                # elif 50 < diff <= 100: # TODO: why are we only adjusting force targets in this range?
-                else: # let's try this
-                    if current_targets[i] < 1000:
-                        current_targets[i] = min(1000, current_targets[i] + 50)
-                        adjustment_made = True                    
-
             yield {
                 "iteration": iteration + 1,
                 "forces": current_forces.copy(),
-                "angles": current_angles.copy()
+                "angles": current_angles.tolist(),
             }
 
-            if angles_at_target and not adjustment_made:
+            # Stop when every active finger has reached its force threshold.
+            # Inactive fingers (target_force == 0) are considered done immediately.
+            # Angle proximity is NOT a stopping criterion — we must close past the
+            # original geometry target until contact force is actually achieved.
+            all_done = all(
+                target_forces_arr[i] == 0 or current_forces[i] >= target_forces_arr[i]
+                for i in range(6)
+            )
+            if all_done:
                 break
 
         # Final reading
@@ -1139,33 +967,33 @@ class RH56Hand:
         yield {
             "done": True,
             "final_forces": final_forces,
-            "final_angles": final_angles
+            "final_angles": final_angles,
         }
 
 
 def demonstrate_force_calibration(port: str, hand_id: int = 1):
     """
     Demonstrate force sensor calibration process
-    
+
     Args:
         port: Serial port device path
         hand_id: Hand ID, default is 1
     """
     print("Starting force sensor calibration demonstration...")
     hand = RH56Hand(port=port, hand_id=hand_id)
-    
+
     # Read current angles and forces
     print("Pre-calibration angles:", hand.angle_read())
     forces = hand.force_act()
     if forces:
         print("Pre-calibration finger forces:", forces)
-    
+
     input("Press Enter to start calibration...")
-    
+
     # Start calibration
     print("Starting calibration, process will take about 15 seconds...")
     hand.gesture_force_clb(1)
-    
+
     # Wait for calibration process
     print("Calibrating: All fingers opening...")
     time.sleep(3)
@@ -1177,11 +1005,11 @@ def demonstrate_force_calibration(port: str, hand_id: int = 1):
     time.sleep(3)
     print("Calibrating: Thumb opening...")
     time.sleep(3)
-    
+
     # Wait for system stabilization
     print("Calibration complete, waiting for system stabilization...")
     time.sleep(2)
-    
+
     # Read post-calibration forces
     print("Reading post-calibration forces...")
     attempts = 0
@@ -1197,16 +1025,16 @@ def demonstrate_force_calibration(port: str, hand_id: int = 1):
         print(f"Attempt {attempts+1} failed to read forces, retrying...")
         attempts += 1
         time.sleep(1)
-    
+
     if not forces:
         print("Warning: Unable to read post-calibration forces, check device connection")
-    
+
     print("Calibration process complete, recommend saving parameters")
     save = input("Save parameters? (y/n): ")
     if save.lower() == 'y':
         hand.save_parameters()
         print("Parameters saved")
-    
+
     # Add verification test
     test = input("Test post-calibration force sensor response? (y/n): ")
     if test.lower() == 'y':

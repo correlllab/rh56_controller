@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rh56_controller"
 version = "0.0.1"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
     "scipy",
@@ -13,7 +13,11 @@ dependencies = [
     "mujoco>=3.3.6",
     "pyserial",
     "mink",
+    "magpie_control",
+    "spatialmath-python",
+    "rerun-sdk>=0.21",
 ]
 
 [tool.uv.sources]
 mink = { path = "mink" }
+magpie_control = { path = "magpie_control", editable = true }

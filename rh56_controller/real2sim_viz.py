@@ -33,6 +33,7 @@ Controls (MuJoCo viewer):
 """
 
 import argparse
+import logging
 import sys
 import threading
 import time
@@ -41,6 +42,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 # ── Path setup so the script can be run directly ─────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -66,7 +69,7 @@ try:
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
-    print("Warning: matplotlib not available — external visualization disabled")
+    _log.warning("matplotlib not available — external visualization disabled")
 
 try:
     from scipy.spatial import ConvexHull
@@ -103,6 +106,8 @@ FINGER_COLORS_RGB = {
 _FORCE_CALIB: Dict[str, tuple] = {
     "index":  (0.007478, -0.414),
     "middle": (0.006452,  0.018),
+    "pinky": (0.006452,  0.018),
+    "ring": (0.006452,  0.018),
     "thumb":  (0.012547,  0.384),  # thumb_bend channel
     # "ring" and "pinky": TBD — using fallback below
 }
@@ -258,12 +263,12 @@ class Real2SimViz:
             try:
                 from rh56_controller.rh56_hand import RH56Hand
                 self.hand = RH56Hand(port=port, hand_id=hand_id)
-                print(f"[Real2Sim] Connected to real hand on {port} (ID={hand_id})")
+                _log.info("Connected to real hand on %s (ID=%d)", port, hand_id)
                 self.hand.force_set([1000] * 6)
-                print("[Real2Sim] Force limits set to max (1000)")
+                _log.debug("Force limits set to max (1000)")
             except Exception as e:
-                print(f"[Real2Sim] Warning: could not open hand on {port}: {e}")
-                print("[Real2Sim] Falling back to sim-only mode")
+                _log.warning("Could not open hand on %s: %s", port, e)
+                _log.warning("Falling back to sim-only mode")
                 self.hand = None
 
         # Shared state
@@ -293,14 +298,14 @@ class Real2SimViz:
             try:
                 forces_raw = self.hand.force_act()
             except Exception as e:
-                print(f"[Real2Sim] force_act error: {e}")
+                _log.warning("force_act error: %s", e)
 
             angles_raw = None
             if self.show_tangential:
                 try:
                     angles_raw = self.hand.angle_read()
                 except Exception as e:
-                    print(f"[Real2Sim] angle_read error: {e}")
+                    _log.warning("angle_read error: %s", e)
 
             if forces_raw is not None and len(forces_raw) >= 5:
                 real_N: Dict[str, float] = {}
@@ -401,7 +406,7 @@ class Real2SimViz:
                 angles = self.sim.get_ctrl_as_real_angles()
                 self.hand.angle_set(angles)
             except Exception as e:
-                print(f"[Real2Sim] angle_set error: {e}")
+                _log.warning("angle_set error: %s", e)
 
         # Record
         if self.record_path:
@@ -429,12 +434,12 @@ class Real2SimViz:
         glfw = mujoco.glfw.glfw
         if key == glfw.KEY_P:
             self.paused = not self.paused
-            print(f"[Real2Sim] {'Paused' if self.paused else 'Resumed'}")
+            _log.info("%s", "Paused" if self.paused else "Resumed")
         elif key in (glfw.KEY_Q, glfw.KEY_ESCAPE):
             self.running = False
         elif key == glfw.KEY_R:
             self.sim.reset()
-            print("[Real2Sim] Reset to home keyframe")
+            _log.info("Reset to home keyframe")
         elif key == glfw.KEY_S:
             self._print_status()
 
@@ -698,11 +703,11 @@ class Real2SimViz:
 
                 except Exception as e:
                     if self.running:
-                        print(f"[Real2Sim] Viz error: {e}")
+                        _log.error("Viz error: %s", e)
                     time.sleep(0.3)
 
         except Exception as e:
-            print(f"[Real2Sim] Matplotlib thread error: {e}")
+            _log.error("Matplotlib thread error: %s", e)
         finally:
             if fig is not None:
                 try:
@@ -745,7 +750,7 @@ class Real2SimViz:
             num_contacts=num_contacts, object_pos=object_pos,
             real_forces_N=real_forces, sim_sensor_N=sim_sensor,
         )
-        print(f"[Real2Sim] Saved {len(d)} timesteps to {self.record_path}")
+        _log.info("Saved %d timesteps to %s", len(d), self.record_path)
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -795,8 +800,8 @@ class Real2SimViz:
         # Analysis (contacts, wrench cones, ConvexHull) runs once per frame.
         _sim_dt = self.sim.model.opt.timestep
         _steps_per_frame = max(1, round((1 / 60) / _sim_dt))
-        print(f"[Real2Sim] timestep={_sim_dt*1000:.1f} ms  "
-              f"steps_per_frame={_steps_per_frame}")
+        _log.info("timestep=%.1f ms  steps_per_frame=%d",
+                  _sim_dt * 1000, _steps_per_frame)
 
         last_print = 0.0
         try:
@@ -829,13 +834,13 @@ class Real2SimViz:
                 time.sleep(1 / 60)
 
         except KeyboardInterrupt:
-            print("\n[Real2Sim] Interrupted")
+            _log.info("Interrupted")
         finally:
             self.running = False
             if self._viz_thread:
                 self._viz_thread.join(timeout=2.0)
             self._save_recording()
-            print("[Real2Sim] Done")
+            _log.info("Done")
 
 
 # ── Replay ────────────────────────────────────────────────────────────────────
