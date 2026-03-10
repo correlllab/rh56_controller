@@ -35,6 +35,7 @@ from .grasp_viz_core import GraspVizCore
 from .grasp_viz_workers import FINGER_COLORS, MODES
 from .grasp_logger import GraspLogger
 from .grasp_viz_force_panel import ForceVizPanel
+from .force_control_ui import ForceControlUI
 
 # Active finger indices (actuator order: pinky=0 ring=1 middle=2 index=3 thumb_bend=4)
 # per closure mode, used when setting force targets
@@ -284,7 +285,11 @@ class GraspVizUI(GraspVizCore):
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
         tk.Button(outer, text="Force Viz",
                   command=self._open_force_viz_panel).grid(
-            row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
+            row=r, column=0, sticky="ew", padx=2, pady=1)
+        tk.Button(outer, text="Force Control",
+                  bg="#2980b9", fg="white",
+                  command=self._open_force_control_ui).grid(
+            row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
         # Send to Real checkbox
         if self._hand is not None:
@@ -566,6 +571,24 @@ class GraspVizUI(GraspVizCore):
         self._ent_z.insert(0, f"{new_z_mm:.1f}")
         self._push_viewer_ctrl()
         self._schedule_plot_only()  # arm-pose only — do not re-send fingers
+
+    def _open_force_control_ui(self):
+        """Open (or raise) the Force Control debug UI popup."""
+        if hasattr(self, "_fc_ui_win") and self._fc_ui_win is not None:
+            try:
+                self._fc_ui_win._root.lift()
+                return
+            except Exception:
+                self._fc_ui_win = None
+        # Inherit robot IP from connected arm if available
+        robot_ip = "192.168.0.4"
+        if self._arm is not None and hasattr(self._arm, "_ip"):
+            robot_ip = self._arm._ip
+        self._fc_ui_win = ForceControlUI(
+            parent=self._root,
+            robot_ip=robot_ip,
+        )
+        self._fc_ui_win.run()
 
     def _open_force_viz_panel(self):
         """Open (or raise) the Force Viz Toplevel window."""
