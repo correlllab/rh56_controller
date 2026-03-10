@@ -269,3 +269,4 @@ See the **Actuator ctrl ranges** table in the XML Model Files section above.
 
 - [GRASP_VIZ.md](GRASP_VIZ.md) — Grasp geometry implementation notes: closure solver, tilt derivation, and documented failed alternatives
 - [THUMB_TANGENTIAL.md](THUMB_TANGENTIAL.md) — Thumb yaw tangential force estimation: calibration procedure, lever arm polynomial, sign conventions
+- [README_FORCE_CONTROL.md](README_FORCE_CONTROL.md) — Force control UI: usage guide, admittance control fundamentals, Hou & Mason hybrid force-velocity control, frame conventions

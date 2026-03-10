@@ -63,9 +63,15 @@ uv run python -m rh56_controller.grasp_viz --no-mink
 | `uv run python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0` | Sim viewer + real hand mirroring |
 | `uv run python -m rh56_controller.grasp_viz --robot --real-robot --ur5-ip 192.168.0.4 --port /dev/ttyUSB0` | Full sim+real UR5 arm + hand control |
 
-Once the grasp viewer is open, click **Force Viz** to open the force closure analysis panel (works in sim-only or real-hand mode).
+Once the grasp viewer is open, click **Force Viz** to open the force closure analysis panel (works in sim-only or real-hand mode), or click **Force Control** to open the admittance controller debug UI.
+
+```bash
+# Force control UI — standalone (no grasp viewer needed)
+uv run python -m rh56_controller.force_control_ui
+```
 
 For complete real-robot setup, wiring, and operation guide, see [README_REAL.md](README_REAL.md).
+For admittance control concepts and force control UI reference, see [README_FORCE_CONTROL.md](README_FORCE_CONTROL.md).
 
 ---
 
