@@ -318,19 +318,25 @@ class GraspVizUI(GraspVizCore):
                                     command=self._on_teach_mode,
                                     state="normal" if _arm_ok else "disabled")
         self._btn_teach.grid(row=r, column=0, sticky="ew", padx=2, pady=1)
-        tk.Button(parent, text="Set Pose",
-                  command=self._on_set_pose_from_robot,
-                  state="normal" if _arm_ok else "disabled").grid(
-            row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+        self._btn_setpose = tk.Button(parent, text="Set Pose",
+                                      command=self._on_set_pose_from_robot,
+                                      state="normal" if _arm_ok else "disabled")
+        self._btn_setpose.grid(row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
         self._btn_sendarm = tk.Button(parent, text="Send Arm",
                                       command=self._on_send_arm,
                                       state="normal" if _arm_ok else "disabled")
         self._btn_sendarm.grid(row=r, column=0, sticky="ew", padx=2, pady=1)
-        tk.Button(parent, text="Sim Traj",
-                  command=self._on_simulate_trajectory,
-                  state="normal" if _arm_ok else "disabled").grid(
-            row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+        self._btn_simtraj = tk.Button(parent, text="Sim Traj",
+                                      command=self._on_simulate_trajectory,
+                                      state="normal" if _arm_ok else "disabled")
+        self._btn_simtraj.grid(row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+
+        self._btn_reconnect = tk.Button(parent, text="Reconnect Arm",
+                                        command=self._reconnect_arm,
+                                        state="disabled" if _arm_ok else "normal")
+        self._btn_reconnect.grid(row=r, column=0, columnspan=2,
+                                 sticky="ew", padx=2, pady=1); r += 1
 
         ttk.Separator(parent, orient="horizontal").grid(
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
@@ -572,6 +578,28 @@ class GraspVizUI(GraspVizCore):
         self._push_viewer_ctrl()
         self._schedule_plot_only()  # arm-pose only — do not re-send fingers
 
+    def _set_arm_buttons(self, connected: bool):
+        """Enable/disable all arm-dependent buttons based on connection state."""
+        arm_state    = "normal"   if connected else "disabled"
+        reconn_state = "disabled" if connected else "normal"
+        for btn in ("_btn_teach", "_btn_setpose", "_btn_sendarm", "_btn_simtraj"):
+            if hasattr(self, btn):
+                getattr(self, btn).config(state=arm_state)
+        if hasattr(self, "_btn_reconnect"):
+            self._btn_reconnect.config(state=reconn_state)
+
+    def _reconnect_arm(self):
+        """Reconnect the UR5 arm (after it was disconnected for force_control_ui)."""
+        if self._arm is None:
+            return
+        ok = self._arm.connect()
+        self._set_arm_buttons(ok)
+
+    def _on_fc_ui_close(self):
+        """Called when force_control_ui window is closed — reconnect the arm."""
+        self._fc_ui_win = None
+        self._reconnect_arm()
+
     def _open_force_control_ui(self):
         """Open (or raise) the Force Control debug UI popup."""
         if hasattr(self, "_fc_ui_win") and self._fc_ui_win is not None:
@@ -580,13 +608,18 @@ class GraspVizUI(GraspVizCore):
                 return
             except Exception:
                 self._fc_ui_win = None
-        # Inherit robot IP from connected arm if available
+        # Disconnect the arm so the C++ binary can claim the sole RTDE slot.
+        if self._arm is not None and self._arm.connected:
+            self._arm.disconnect()
+            self._set_arm_buttons(False)
+        # Inherit robot IP from arm config if available
         robot_ip = "192.168.0.4"
         if self._arm is not None and hasattr(self._arm, "_ip"):
             robot_ip = self._arm._ip
         self._fc_ui_win = ForceControlUI(
             parent=self._root,
             robot_ip=robot_ip,
+            on_close=self._on_fc_ui_close,
         )
         self._fc_ui_win.run()
 

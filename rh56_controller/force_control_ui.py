@@ -37,11 +37,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import math
 import os
 import pathlib
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -67,6 +69,8 @@ _HERE     = pathlib.Path(__file__).parent
 _REPO     = _HERE.parent
 _LOGS_DIR = _REPO / "logs"
 _DEFAULT_BINARY = str(_REPO / "magpie_force_control" / "build" / "force_control_demo")
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Safety & display constants
@@ -226,11 +230,13 @@ class ForceControlUI:
                  parent: Optional[tk.Widget] = None,
                  robot_ip: str = "192.168.0.4",
                  ft_ip:    str = "192.168.0.3",
-                 binary:   str = _DEFAULT_BINARY):
-        self._parent   = parent
-        self._robot_ip = robot_ip
-        self._ft_ip    = ft_ip
-        self._binary   = binary
+                 binary:   str = _DEFAULT_BINARY,
+                 on_close=None):
+        self._parent    = parent
+        self._robot_ip  = robot_ip
+        self._ft_ip     = ft_ip
+        self._binary    = binary
+        self._on_close_cb = on_close
 
         self._proc: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
@@ -1431,6 +1437,11 @@ class ForceControlUI:
             pass
         plt.close("all")
         self._root.destroy()
+        if self._on_close_cb is not None:
+            try:
+                self._on_close_cb()
+            except Exception as e:
+                _log.warning("on_close callback raised: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -1442,11 +1453,23 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--robot-ip", default="192.168.0.4")
     p.add_argument("--ft-ip",    default="192.168.0.3")
     p.add_argument("--binary",   default=_DEFAULT_BINARY)
+    p.add_argument("--log-file", default=None,
+                   help="Write Python logs to file (default: stderr only)")
+    p.add_argument("--verbose", action="store_true",
+                   help="Enable DEBUG-level logging (default: INFO)")
     return p.parse_args()
 
 
 def main():
     args = _parse_args()
+    _handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if args.log_file:
+        _handlers.append(logging.FileHandler(args.log_file))
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        handlers=_handlers,
+    )
     ui = ForceControlUI(robot_ip=args.robot_ip, ft_ip=args.ft_ip,
                         binary=args.binary)
     ui.run()

@@ -26,7 +26,9 @@ Architecture:
 """
 
 import argparse
+import logging
 import multiprocessing
+import sys
 
 from .grasp_geometry import _DEFAULT_XML
 from .grasp_viz_ui import GraspVizUI
@@ -62,9 +64,22 @@ def main():
                         help="Publish planned right-hand command to hands/cmd")
     parser.add_argument("--rerun", action="store_true",
                         help="Enable rerun telemetry stream from grasp_viz")
+    parser.add_argument("--log-file", default=None,
+                        help="Write Python logs to file (default: stderr only)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Enable DEBUG-level logging (default: INFO)")
     # ros2 launch injects extra CLI tokens (e.g. --ros-args ...).
     # Ignore unknown args so this non-rclpy app still works under launch.
     args, _unknown = parser.parse_known_args()
+
+    _handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if args.log_file:
+        _handlers.append(logging.FileHandler(args.log_file))
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        handlers=_handlers,
+    )
 
     viz = GraspVizUI(
         xml_path=args.xml,
