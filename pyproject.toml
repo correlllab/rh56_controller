@@ -18,6 +18,10 @@ dependencies = [
     "magpie_control",
     "spatialmath-python",
     "rerun-sdk>=0.21",
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
 ]
 
 [tool.uv.sources]
