@@ -174,17 +174,18 @@ class GraspVizUI(GraspVizCore):
         r += 1
 
         # Grasp Z
-        z_max = 400.0 if self._robot_mode else 200.0
-        z_min = 0.0   if self._robot_mode else -200.0
+        _has_arm = self._robot_mode or self._h12_mode
+        z_max = 400.0 if _has_arm else 200.0
+        z_min = 0.0   if _has_arm else -200.0
         r = self._add_slider_row(outer, r, "Grasp Z (mm):",
                                  z_min, z_max, self._grasp_z * 1000, 5.0,
                                  "_var_z", "_sl_z", "_ent_z", self._on_z)
-        if self._robot_mode:
+        if _has_arm:
             btn_up = tk.Button(outer, text="+10cm", command=self._on_move_up)
             btn_up.grid(row=r - 1, column=3, padx=2)
 
-        # X, Y (robot mode only)
-        if self._robot_mode:
+        # X, Y (robot mode or h12 mode)
+        if _has_arm:
             r = self._add_slider_row(outer, r, "Grasp X (mm):",
                                      -850.0, 850.0, self._grasp_x * 1000, 5.0,
                                      "_var_x", "_sl_x", "_ent_x", self._on_x)
@@ -283,6 +284,10 @@ class GraspVizUI(GraspVizCore):
                   state="normal" if _mink_ready else "disabled",
                   command=self._launch_robot_viewer_mink).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+        tk.Button(outer, text="H1-2: Sim",
+                  bg="#1a6b3c", fg="white",
+                  command=self._launch_h12_viewer).grid(
+            row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
         tk.Button(outer, text="Force Viz",
                   command=self._open_force_viz_panel).grid(
             row=r, column=0, sticky="ew", padx=2, pady=1)
@@ -569,7 +574,7 @@ class GraspVizUI(GraspVizCore):
         self._schedule_plot_only()  # arm-pose only — do not re-send fingers
 
     def _on_move_up(self):
-        z_max_mm = 400.0 if self._robot_mode else 200.0
+        z_max_mm = 400.0 if (self._robot_mode or self._h12_mode) else 200.0
         new_z_mm = min(z_max_mm, self._grasp_z * 1000.0 + 100.0)
         self._grasp_z = new_z_mm / 1000.0
         self._sl_z.set(new_z_mm)
@@ -1080,6 +1085,8 @@ class GraspVizUI(GraspVizCore):
             lines.append(f"Plane: Rx={prx_deg:.0f}° Ry={pry_deg:.0f}° Rz={prz_deg:.0f}°")
         if self._robot_mode:
             lines.append(f"[ROBOT] X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f}")
+        elif self._h12_mode:
+            lines.append(f"[H1-2] X={self._grasp_x*1000:.0f} Y={self._grasp_y*1000:.0f}")
         if self._hand is not None:
             lines.append(f"Real: {'ON' if self._send_real else 'off'}")
         lines.append("Ctrl (rad):")

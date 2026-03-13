@@ -12,6 +12,7 @@ Options:
     --rebuild         Force rebuild of FK cache
     --port DEV        Serial port for real hand   (e.g. /dev/ttyUSB0)
     --robot           Enable UR5+hand robot viewer / IK planning
+    --h12             Enable H1-2+hand robot viewer with PINK IK
     --send-real       Start with Send-to-Real enabled (requires --port)
     --no-mink         Skip mink IK comparison planner (faster startup)
     --real-robot      Enable real UR5 arm control (requires --ur5-ip)
@@ -46,6 +47,8 @@ def main():
                         help="Serial port for real hand (e.g. /dev/ttyUSB0)")
     parser.add_argument("--robot", action="store_true",
                         help="Enable UR5+hand robot viewer buttons")
+    parser.add_argument("--h12", action="store_true",
+                        help="Enable H1-2+hand robot viewer with PINK IK")
     parser.add_argument("--send-real", action="store_true",
                         help="Start with Send-to-Real enabled (requires --port)")
     parser.add_argument("--no-mink", action="store_true",
@@ -86,6 +89,7 @@ def main():
         rebuild=args.rebuild,
         port=args.port,
         robot_mode=args.robot,
+        h12_mode=args.h12,
         send_real=args.send_real,
         mink_viz=not args.no_mink,
         real_robot=args.real_robot,

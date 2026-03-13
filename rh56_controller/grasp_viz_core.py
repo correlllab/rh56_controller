@@ -34,10 +34,12 @@ from .grasp_viz_workers import (
     _ACTUATOR_ORDER, _DEFAULT_ROBOT_Z, _VIEWER_CTRL_LEN, _VIEWER_STATE_LEN,
     _VIEWER_FINGER_ORDER, _GRASP_SCENE, _ROBOT_SCENE, _RIGHT_SCENE,
     _DEFAULT_ROBOT_X, _DEFAULT_ROBOT_Y,
+    _DEFAULT_H12_X, _DEFAULT_H12_Y, _DEFAULT_H12_Z,
+    _H12_SCENE,
     _IK_DT, _IK_MAX_ITERS, _IK_POS_THR, _IK_ORI_THR, _EEFF_LOCAL,
     MODES,
     _worker_jnt_map, _worker_apply_qpos, _worker_add_geoms,
-    _hand_viewer_worker, _robot_viewer_worker,
+    _hand_viewer_worker, _robot_viewer_worker, _h12_robot_viewer_worker,
     _mat_to_xyz_euler,
 )
 
@@ -56,6 +58,7 @@ class GraspVizCore:
         rebuild: bool = False,
         port: Optional[str] = None,
         robot_mode: bool = False,
+        h12_mode: bool = False,
         send_real: bool = False,
         mink_viz: bool = True,
         real_robot: bool = False,
@@ -86,9 +89,19 @@ class GraspVizCore:
             robot_mode = True
 
         self._robot_mode = robot_mode
-        self._grasp_x = _DEFAULT_ROBOT_X if robot_mode else 0.0
-        self._grasp_y = _DEFAULT_ROBOT_Y if robot_mode else 0.0
-        self._grasp_z = _DEFAULT_ROBOT_Z if robot_mode else 0.0
+        self._h12_mode   = h12_mode
+        if h12_mode:
+            self._grasp_x = _DEFAULT_H12_X
+            self._grasp_y = _DEFAULT_H12_Y
+            self._grasp_z = _DEFAULT_H12_Z
+        elif robot_mode:
+            self._grasp_x = _DEFAULT_ROBOT_X
+            self._grasp_y = _DEFAULT_ROBOT_Y
+            self._grasp_z = _DEFAULT_ROBOT_Z
+        else:
+            self._grasp_x = 0.0
+            self._grasp_y = 0.0
+            self._grasp_z = 0.0
 
         self._plane_rx = 0.0
         self._plane_ry = 0.0
@@ -119,11 +132,13 @@ class GraspVizCore:
         self._hand_mink_stop  = _mp.Event()
         self._robot_ours_stop = _mp.Event()
         self._robot_mink_stop = _mp.Event()
+        self._h12_stop        = _mp.Event()
 
         self._hand_ours_proc:  Optional[multiprocessing.Process] = None
         self._hand_mink_proc:  Optional[multiprocessing.Process] = None
         self._robot_ours_proc: Optional[multiprocessing.Process] = None
         self._robot_mink_proc: Optional[multiprocessing.Process] = None
+        self._h12_proc:        Optional[multiprocessing.Process] = None
 
         # ---- Mink grasp planner (background thread, not subprocess) ----
         self._state_lock        = threading.Lock()
@@ -371,7 +386,7 @@ class GraspVizCore:
         """Build 4×4 world_T_hand from closure result + current slider state."""
         gz    = self._grasp_z
         wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
-        if self._robot_mode:
+        if self._robot_mode or self._h12_mode:
             wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
         R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
         T = np.eye(4)
@@ -504,7 +519,7 @@ class GraspVizCore:
                            finger_ctrl: Optional[Dict] = None) -> np.ndarray:
         gz    = self._grasp_z
         wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
-        if self._robot_mode:
+        if self._robot_mode or self._h12_mode:
             wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
         fc = finger_ctrl if finger_ctrl is not None else r.ctrl_values
         R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
@@ -524,15 +539,15 @@ class GraspVizCore:
         gz       = self._grasp_z
         mode_idx = MODES.index(r.mode) if r.mode in MODES else 0
         wtips    = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz)
-        if self._robot_mode:
+        if self._robot_mode or self._h12_mode:
             xy_off = np.array([self._grasp_x, self._grasp_y, 0.0])
             wtips  = {f: p + xy_off for f, p in wtips.items()}
         state = np.full(_VIEWER_STATE_LEN, np.nan)
         state[0] = gz
         state[1] = float(mode_idx)
         state[2] = r.cylinder_radius
-        state[3] = self._grasp_x if self._robot_mode else 0.0
-        state[4] = self._grasp_y if self._robot_mode else 0.0
+        state[3] = self._grasp_x if (self._robot_mode or self._h12_mode) else 0.0
+        state[4] = self._grasp_y if (self._robot_mode or self._h12_mode) else 0.0
         for i, fname in enumerate(_VIEWER_FINGER_ORDER):
             if fname in wtips:
                 state[5 + i * 3: 5 + i * 3 + 3] = wtips[fname]
@@ -655,8 +670,29 @@ class GraspVizCore:
         self._robot_mink_proc = proc
         _log.info("Robot viewer (Mink) launched.")
 
+    def _launch_h12_viewer(self) -> None:
+        if self._h12_proc is not None and self._h12_proc.is_alive():
+            _log.debug("H1-2 viewer already open.")
+            return
+        self._h12_stop.clear()
+        self._push_viewer_ctrl()
+        proc = self._mp_ctx.Process(
+            target=_h12_robot_viewer_worker,
+            args=(_H12_SCENE, self._custom_ctrl_arr,
+                  self._viewer_state_arr, self._h12_stop),
+            kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
+                        ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+            daemon=True,
+        )
+        proc.start()
+        self._h12_proc = proc
+        _log.info("H1-2 viewer launched.")
+
     def _launch_viewer(self) -> None:
-        if self._robot_mode:
+        if self._h12_mode:
+            self._launch_h12_viewer()
+        elif self._robot_mode:
             self._launch_robot_viewer_ours()
         else:
             self._launch_hand_viewer_ours()
