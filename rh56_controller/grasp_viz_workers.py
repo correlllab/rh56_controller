@@ -677,9 +677,9 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                         solver=solver, limits=limits, safety_break=False
                     )
                     configuration.integrate_inplace(vel, ik_dt)
-                    for i in non_arm_qidx:
-                        configuration.q[i] = q0[i]
-                    configuration.update()
+                    q_locked = np.array(configuration.q, copy=True)
+                    q_locked[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_locked)
                     err = ee_task.compute_error(configuration)
                     if (np.linalg.norm(err[:3]) < ik_pos_thr and
                             np.linalg.norm(err[3:]) < ik_ori_thr):

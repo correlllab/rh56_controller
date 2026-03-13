@@ -274,7 +274,8 @@ class GraspVizCore:
 
         # 2. Terminate MuJoCo viewer processes
         for stop_event in [self._hand_ours_stop, self._hand_mink_stop,
-                           self._robot_ours_stop, self._robot_mink_stop]:
+                           self._robot_ours_stop, self._robot_mink_stop,
+                           self._h12_stop]:
             stop_event.set()
 
         # 2b. Stop ROS bridge executor thread
@@ -303,7 +304,8 @@ class GraspVizCore:
 
         # 5. Join processes briefly
         for p in [self._hand_ours_proc, self._hand_mink_proc,
-                  self._robot_ours_proc, self._robot_mink_proc]:
+                  self._robot_ours_proc, self._robot_mink_proc,
+                  self._h12_proc]:
             if p and p.is_alive():
                 p.terminate()
 
