@@ -284,10 +284,14 @@ class GraspVizUI(GraspVizCore):
                   state="normal" if _mink_ready else "disabled",
                   command=self._launch_robot_viewer_mink).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
-        tk.Button(outer, text="H1-2: Sim",
+        tk.Button(outer, text="H1-2: Ours",
                   bg="#1a6b3c", fg="white",
                   command=self._launch_h12_viewer).grid(
-            row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
+            row=r, column=0, sticky="ew", padx=2, pady=1)
+        tk.Button(outer, text="H1-2: Mink" if _mink_ready else "H1-2: Mink N/A",
+                  state="normal" if _mink_ready else "disabled",
+                  command=self._launch_h12_viewer_mink).grid(
+            row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
         tk.Button(outer, text="Force Viz",
                   command=self._open_force_viz_panel).grid(
             row=r, column=0, sticky="ew", padx=2, pady=1)

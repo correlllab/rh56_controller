@@ -133,12 +133,14 @@ class GraspVizCore:
         self._robot_ours_stop = _mp.Event()
         self._robot_mink_stop = _mp.Event()
         self._h12_stop        = _mp.Event()
+        self._h12_mink_stop   = _mp.Event()
 
         self._hand_ours_proc:  Optional[multiprocessing.Process] = None
         self._hand_mink_proc:  Optional[multiprocessing.Process] = None
         self._robot_ours_proc: Optional[multiprocessing.Process] = None
         self._robot_mink_proc: Optional[multiprocessing.Process] = None
         self._h12_proc:        Optional[multiprocessing.Process] = None
+        self._h12_mink_proc:   Optional[multiprocessing.Process] = None
 
         # ---- Mink grasp planner (background thread, not subprocess) ----
         self._state_lock        = threading.Lock()
@@ -275,7 +277,7 @@ class GraspVizCore:
         # 2. Terminate MuJoCo viewer processes
         for stop_event in [self._hand_ours_stop, self._hand_mink_stop,
                            self._robot_ours_stop, self._robot_mink_stop,
-                           self._h12_stop]:
+                           self._h12_stop, self._h12_mink_stop]:
             stop_event.set()
 
         # 2b. Stop ROS bridge executor thread
@@ -305,7 +307,7 @@ class GraspVizCore:
         # 5. Join processes briefly
         for p in [self._hand_ours_proc, self._hand_mink_proc,
                   self._robot_ours_proc, self._robot_mink_proc,
-                  self._h12_proc]:
+                  self._h12_proc, self._h12_mink_proc]:
             if p and p.is_alive():
                 p.terminate()
 
@@ -684,12 +686,36 @@ class GraspVizCore:
                   self._viewer_state_arr, self._h12_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
+                        sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
             daemon=True,
         )
         proc.start()
         self._h12_proc = proc
-        _log.info("H1-2 viewer launched.")
+        _log.info("H1-2 viewer (Ours) launched.")
+
+    def _launch_h12_viewer_mink(self) -> None:
+        if not self._mink_enabled or self._mink_planner is None:
+            _log.warning("Mink planner not available.")
+            return
+        if self._h12_mink_proc is not None and self._h12_mink_proc.is_alive():
+            _log.debug("H1-2 viewer (Mink) already open.")
+            return
+        self._h12_mink_stop.clear()
+        self._push_mink_viewer_ctrl()
+        proc = self._mp_ctx.Process(
+            target=_h12_robot_viewer_worker,
+            args=(_H12_SCENE, self._mink_ctrl_arr,
+                  self._viewer_state_arr, self._h12_mink_stop),
+            kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
+                        ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
+                        sim_grasp_t=self._sim_grasp_t,
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+            daemon=True,
+        )
+        proc.start()
+        self._h12_mink_proc = proc
+        _log.info("H1-2 viewer (Mink) launched.")
 
     def _launch_viewer(self) -> None:
         if self._h12_mode:

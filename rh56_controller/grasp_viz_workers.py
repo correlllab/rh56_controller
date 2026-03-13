@@ -236,6 +236,50 @@ def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
     mujoco.mj_kinematics(model, data)
 
 
+def _worker_optional_jnt_map(model: mujoco.MjModel, joint_names: Dict[str, str]) -> dict:
+    """Build a best-effort qpos address map for joints that may or may not exist."""
+    out = {}
+    for key, name in joint_names.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        out[key] = int(model.jnt_qposadr[jid]) if jid >= 0 else -1
+    return out
+
+
+def _worker_apply_inspire_finger_qpos(jm: dict, data: mujoco.MjData,
+                                      finger_ctrl: np.ndarray) -> None:
+    """Apply Inspire hand finger controls to all coupled finger joints."""
+    pinky, ring, middle, index, pitch, yaw = finger_ctrl
+
+    if jm.get("pinky", -1) >= 0:
+        data.qpos[jm["pinky"]] = pinky
+    if jm.get("pinky_inter", -1) >= 0:
+        data.qpos[jm["pinky_inter"]] = -0.15 + 1.1169 * pinky
+
+    if jm.get("ring", -1) >= 0:
+        data.qpos[jm["ring"]] = ring
+    if jm.get("ring_inter", -1) >= 0:
+        data.qpos[jm["ring_inter"]] = -0.15 + 1.1169 * ring
+
+    if jm.get("middle", -1) >= 0:
+        data.qpos[jm["middle"]] = middle
+    if jm.get("middle_inter", -1) >= 0:
+        data.qpos[jm["middle_inter"]] = -0.15 + 1.1169 * middle
+
+    if jm.get("index", -1) >= 0:
+        data.qpos[jm["index"]] = index
+    if jm.get("index_inter", -1) >= 0:
+        data.qpos[jm["index_inter"]] = -0.05 + 1.1169 * index
+
+    if jm.get("thumb_yaw", -1) >= 0:
+        data.qpos[jm["thumb_yaw"]] = yaw
+    if jm.get("thumb_pitch", -1) >= 0:
+        data.qpos[jm["thumb_pitch"]] = pitch
+    if jm.get("thumb_inter", -1) >= 0:
+        data.qpos[jm["thumb_inter"]] = 0.15 + 1.33 * pitch
+    if jm.get("thumb_distal", -1) >= 0:
+        data.qpos[jm["thumb_distal"]] = 0.15 + 0.66 * pitch
+
+
 def _worker_draw_geoms(scn, wtips: Dict[str, np.ndarray],
                        mode: str, cyl_radius: float) -> None:
     """Draw grasp geometry geoms onto scn from pre-computed world-frame tip positions."""
@@ -535,6 +579,7 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                               ik_max_iters: int = 40,
                               ik_pos_thr: float = 5e-3,
                               ik_ori_thr: float = 0.05,
+                              sim_grasp_t=None,
                               ctrl_open_fingers=None) -> None:
     """Subprocess entry: H1-2+hand robot viewer with PINK differential arm IK.
 
@@ -596,6 +641,20 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
         mj_model = mujoco.MjModel.from_xml_path(xml_path)
         mj_data  = mujoco.MjData(mj_model)
         mujoco.mj_resetData(mj_model, mj_data)
+        finger_jm = _worker_optional_jnt_map(mj_model, {
+            "pinky": "pinky_proximal_joint",
+            "pinky_inter": "pinky_intermediate_joint",
+            "ring": "ring_proximal_joint",
+            "ring_inter": "ring_intermediate_joint",
+            "middle": "middle_proximal_joint",
+            "middle_inter": "middle_intermediate_joint",
+            "index": "index_proximal_joint",
+            "index_inter": "index_intermediate_joint",
+            "thumb_yaw": "thumb_proximal_yaw_joint",
+            "thumb_pitch": "thumb_proximal_pitch_joint",
+            "thumb_inter": "thumb_intermediate_joint",
+            "thumb_distal": "thumb_distal_joint",
+        })
 
         # Map H1-2 arm joints: Pinocchio idx_q → MuJoCo jnt_qposadr
         pin_qidx   = []
@@ -654,8 +713,11 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
         with mujoco.viewer.launch_passive(mj_model, mj_data) as v:
             while v.is_running() and not stop_event.is_set():
                 ctrl = np.array(ctrl_arr[:])
-
-                eff_finger = ctrl[6:12]
+                t_grasp = sim_grasp_t.value if sim_grasp_t is not None else 1.0
+                if _ctrl_open is not None and 0.0 <= t_grasp < 1.0:
+                    eff_finger = _ctrl_open + t_grasp * (ctrl[6:12] - _ctrl_open)
+                else:
+                    eff_finger = ctrl[6:12]
 
                 # Convert hand-base target → wrist_yaw target
                 R_hand  = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
@@ -702,6 +764,7 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                         mj_data.ctrl[acid] = val
                     if fjadr >= 0:
                         mj_data.qpos[fjadr] = val
+                _worker_apply_inspire_finger_qpos(finger_jm, mj_data, eff_finger)
 
                 mujoco.mj_forward(mj_model, mj_data)
 
