@@ -13,11 +13,14 @@ Options:
     --port DEV        Serial port for real hand   (e.g. /dev/ttyUSB0)
     --robot           Enable UR5+hand robot viewer / IK planning
     --h12             Enable H1-2+hand robot viewer with PINK IK
+    --bimanual        Enable bimanual mode (both arms; requires --h12)
     --send-real       Start with Send-to-Real enabled (requires --port)
     --no-mink         Skip mink IK comparison planner (faster startup)
     --real-robot      Enable real UR5 arm control (requires --ur5-ip)
     --ur5-ip IP       UR5 robot IP address        (e.g. 192.168.0.4)
     --ur5-speed M/S   UR5 linear speed in m/s     (default: 0.10)
+    --real-h12        Connect to real H1-2 via ROS2 frame_task_server
+    --h12-ros         Enable ROS2 comms for H1-2 sim (no real hardware)
 
 Architecture:
     This file is a thin CLI wrapper.  All state and geometry live in
@@ -49,6 +52,12 @@ def main():
                         help="Enable UR5+hand robot viewer buttons")
     parser.add_argument("--h12", action="store_true",
                         help="Enable H1-2+hand robot viewer with PINK IK")
+    parser.add_argument("--bimanual", action="store_true",
+                        help="Enable bimanual mode in H1-2 viewer (requires --h12)")
+    parser.add_argument("--real-h12", action="store_true",
+                        help="Connect to real H1-2 via ROS2 frame_task_server (requires --h12)")
+    parser.add_argument("--h12-ros", action="store_true",
+                        help="Enable ROS2 comms for H1-2 sim (without real robot)")
     parser.add_argument("--send-real", action="store_true",
                         help="Start with Send-to-Real enabled (requires --port)")
     parser.add_argument("--no-mink", action="store_true",
@@ -84,17 +93,25 @@ def main():
         handlers=_handlers,
     )
 
+    # Mutual exclusion: cannot connect to both real UR5 and real H1-2 simultaneously
+    if args.real_robot and args.real_h12:
+        parser.error("--real-robot and --real-h12 are mutually exclusive. "
+                     "Connect to only one real robot at a time.")
+
     viz = GraspVizUI(
         xml_path=args.xml,
         rebuild=args.rebuild,
         port=args.port,
         robot_mode=args.robot,
         h12_mode=args.h12,
+        bimanual_mode=args.bimanual,
         send_real=args.send_real,
         mink_viz=not args.no_mink,
         real_robot=args.real_robot,
         ur5_ip=args.ur5_ip,
         ur5_speed=args.ur5_speed,
+        real_h12=args.real_h12,
+        h12_ros=args.h12_ros,
         ros_sync=args.ros_sync,
         ros_publish_hz=args.ros_publish_hz,
         ros_send_hand_cmd=args.ros_send_hand_cmd,

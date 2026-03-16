@@ -292,6 +292,19 @@ class GraspVizUI(GraspVizCore):
                   state="normal" if _mink_ready else "disabled",
                   command=self._launch_h12_viewer_mink).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+
+        # Bimanual toggle + viewer (only in h12 mode)
+        if self._h12_mode:
+            self._bimanual_var = tk.BooleanVar(value=self._bimanual_mode)
+            ttk.Checkbutton(outer, text="Bimanual mode",
+                            variable=self._bimanual_var,
+                            command=self._on_bimanual_toggle).grid(
+                row=r, column=0, columnspan=2, sticky="w"); r += 1
+            tk.Button(outer, text="H1-2: Bimanual",
+                      bg="#1a3c6b", fg="white",
+                      command=self._launch_h12_bimanual_viewer).grid(
+                row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
+
         tk.Button(outer, text="Force Viz",
                   command=self._open_force_viz_panel).grid(
             row=r, column=0, sticky="ew", padx=2, pady=1)
@@ -308,7 +321,12 @@ class GraspVizUI(GraspVizCore):
                             command=self._on_send_real).grid(
                 row=r, column=0, columnspan=2, sticky="w"); r += 1
 
-        # ── Real robot panel ──
+        # ── H1-2 real robot panel ──
+        if self._h12_mode and (self._real_h12_mode or self._h12_ros_mode):
+            self._build_h12_real_panel(outer, r)
+            return
+
+        # ── UR5 real robot panel ──
         if self._real_robot_mode:
             self._build_real_robot_panel(outer, r)
             return   # real robot panel manages its own rows
@@ -405,6 +423,94 @@ class GraspVizUI(GraspVizCore):
         self._status_text.grid(row=r, column=0, columnspan=2,
                                sticky="nsew", padx=2, pady=2); r += 1
         parent.rowconfigure(r - 1, weight=1)
+
+    def _build_h12_real_panel(self, parent, start_row):
+        """H1-2 real robot control panel (replaces UR5 panel when --real-h12/--h12-ros)."""
+        r = start_row
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Real H1-2 ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        _h12_ok = getattr(self, "_h12_arm", None) is not None
+
+        self._btn_send_h12 = tk.Button(
+            parent, text="Send H1-2",
+            bg="#1a6b3c" if _h12_ok else "#aaa", fg="white",
+            command=self._on_send_h12,
+            state="normal" if _h12_ok else "disabled")
+        self._btn_send_h12.grid(row=r, column=0, sticky="ew", padx=2, pady=1)
+
+        self._btn_sim_h12 = tk.Button(
+            parent, text="Sim H1-2",
+            bg="#1a3c6b", fg="white",
+            command=self._on_sim_h12)
+        self._btn_sim_h12.grid(row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+
+        self._btn_grasp = tk.Button(
+            parent, text="GRASP!", font=("TkDefaultFont", 10, "bold"),
+            bg="#2ecc71", fg="white",
+            command=self._on_grasp_h12,
+            state="normal" if _h12_ok else "disabled")
+        self._btn_grasp.grid(row=r, column=0, columnspan=2, sticky="ew",
+                             padx=2, pady=4); r += 1
+
+        if not _h12_ok:
+            self._update_status("No H1-2 connection. Start frame_task_server + use --real-h12.")
+
+        ttk.Label(parent, text="── Status ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        self._status_text = scrolledtext.ScrolledText(
+            parent, height=10, width=26, state="disabled",
+            font=("Courier", 7), wrap="word")
+        self._status_text.grid(row=r, column=0, columnspan=2,
+                               sticky="nsew", padx=2, pady=2); r += 1
+        parent.rowconfigure(r - 1, weight=1)
+
+    # ------------------------------------------------------------------
+    # H1-2 control callbacks
+    # ------------------------------------------------------------------
+    def _on_bimanual_toggle(self):
+        self._bimanual_mode = self._bimanual_var.get()
+        arm_label = "right" if self._active_arm() == 0 else "left"
+        self._update_status(
+            f"Bimanual mode {'ON' if self._bimanual_mode else 'OFF'}."
+            + (f" Active arm: {arm_label}" if self._bimanual_mode else ""))
+
+    def _on_send_h12(self):
+        """Send arm to current slider position on real H1-2 via ROS2."""
+        self._update_status("Sending H1-2 arm…")
+        threading.Thread(target=self._send_h12_arm, daemon=True,
+                         name="send-h12").start()
+
+    def _on_sim_h12(self):
+        """Open (or refresh) the H1-2 bimanual/single viewer at current pose."""
+        if self._bimanual_mode:
+            self._launch_h12_bimanual_viewer()
+        else:
+            self._launch_h12_viewer()
+        self._update_status("H1-2 sim viewer launched.")
+
+    def _on_grasp_h12(self):
+        """Execute grasp on real H1-2: send arm then close fingers."""
+        if self._result is None:
+            return
+        self._update_status("H1-2 GRASP! sequence started…")
+        threading.Thread(target=self._execute_h12_grasp, daemon=True,
+                         name="grasp-h12").start()
+
+    def _execute_h12_grasp(self):
+        """Background thread: send arm to pose, then close hand."""
+        self._send_h12_arm()
+        # Close fingers to target width (re-use _send_real_hand)
+        if self._hand is not None:
+            self._width_m = self._width_target_m
+            self._recompute()
+            self._send_real_hand()
+        self._update_status("H1-2 grasp sequence complete.")
 
     # ------------------------------------------------------------------
     # Status queue poll (called every _POLL_MS ms via root.after)

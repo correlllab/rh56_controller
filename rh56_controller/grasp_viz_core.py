@@ -35,11 +35,13 @@ from .grasp_viz_workers import (
     _VIEWER_FINGER_ORDER, _GRASP_SCENE, _ROBOT_SCENE, _RIGHT_SCENE,
     _DEFAULT_ROBOT_X, _DEFAULT_ROBOT_Y,
     _DEFAULT_H12_X, _DEFAULT_H12_Y, _DEFAULT_H12_Z,
-    _H12_SCENE,
+    _H12_SCENE, _H12_BIMANUAL_SCENE,
+    _H12_MIDPLANE_Y,
     _IK_DT, _IK_MAX_ITERS, _IK_POS_THR, _IK_ORI_THR, _EEFF_LOCAL,
     MODES,
     _worker_jnt_map, _worker_apply_qpos, _worker_add_geoms,
-    _hand_viewer_worker, _robot_viewer_worker, _h12_robot_viewer_worker,
+    _hand_viewer_worker, _robot_viewer_worker,
+    _h12_robot_viewer_worker, _h12_bimanual_viewer_worker,
     _mat_to_xyz_euler,
 )
 
@@ -59,11 +61,14 @@ class GraspVizCore:
         port: Optional[str] = None,
         robot_mode: bool = False,
         h12_mode: bool = False,
+        bimanual_mode: bool = False,
         send_real: bool = False,
         mink_viz: bool = True,
         real_robot: bool = False,
         ur5_ip: Optional[str] = None,
         ur5_speed: float = 0.10,
+        real_h12: bool = False,
+        h12_ros: bool = False,
         ros_sync: bool = False,
         ros_publish_hz: float = 20.0,
         ros_send_hand_cmd: bool = False,
@@ -81,15 +86,22 @@ class GraspVizCore:
         self._width_target_edited = False   # True once user has manually set the target
         self._grasp_z = 0.0
         self._result: Optional[ClosureResult] = None
-        self._width_range = (0.015, 0.090)
+        # Compute correct initial range from the closure geometry for the default mode.
+        _n_init = int(str(self._mode)[0]) if str(self._mode)[0].isdigit() else 4
+        self._width_range = self.closure.width_range(str(self._mode), n_fingers=_n_init)
 
         self._real_robot_mode = real_robot
         self._grasp_hand_locked = False  # True after executor runs; blocks slider→hand sends
         if real_robot:
             robot_mode = True
+        if real_h12:
+            h12_mode = True
 
-        self._robot_mode = robot_mode
-        self._h12_mode   = h12_mode
+        self._robot_mode    = robot_mode
+        self._h12_mode      = h12_mode
+        self._bimanual_mode = bimanual_mode and h12_mode
+        self._real_h12_mode = real_h12
+        self._h12_ros_mode  = h12_ros
         if h12_mode:
             self._grasp_x = _DEFAULT_H12_X
             self._grasp_y = _DEFAULT_H12_Y
@@ -128,19 +140,25 @@ class GraspVizCore:
         self._sim_grasp_t       = _mp.Value("d", 1.0)
         self._sim_grasp_gen     = 0
 
-        self._hand_ours_stop  = _mp.Event()
-        self._hand_mink_stop  = _mp.Event()
-        self._robot_ours_stop = _mp.Event()
-        self._robot_mink_stop = _mp.Event()
-        self._h12_stop        = _mp.Event()
-        self._h12_mink_stop   = _mp.Event()
+        self._hand_ours_stop    = _mp.Event()
+        self._hand_mink_stop    = _mp.Event()
+        self._robot_ours_stop   = _mp.Event()
+        self._robot_mink_stop   = _mp.Event()
+        self._h12_stop          = _mp.Event()
+        self._h12_mink_stop     = _mp.Event()
+        self._h12_bimanual_stop = _mp.Event()
 
-        self._hand_ours_proc:  Optional[multiprocessing.Process] = None
-        self._hand_mink_proc:  Optional[multiprocessing.Process] = None
-        self._robot_ours_proc: Optional[multiprocessing.Process] = None
-        self._robot_mink_proc: Optional[multiprocessing.Process] = None
-        self._h12_proc:        Optional[multiprocessing.Process] = None
-        self._h12_mink_proc:   Optional[multiprocessing.Process] = None
+        self._hand_ours_proc:     Optional[multiprocessing.Process] = None
+        self._hand_mink_proc:     Optional[multiprocessing.Process] = None
+        self._robot_ours_proc:    Optional[multiprocessing.Process] = None
+        self._robot_mink_proc:    Optional[multiprocessing.Process] = None
+        self._h12_proc:           Optional[multiprocessing.Process] = None
+        self._h12_mink_proc:      Optional[multiprocessing.Process] = None
+        self._h12_bimanual_proc:  Optional[multiprocessing.Process] = None
+
+        # Bimanual: separate ctrl array for left arm + active-arm selector
+        self._left_ctrl_arr    = _mp.Array("d", _VIEWER_CTRL_LEN)
+        self._active_arm_val   = _mp.Value("i", 0)   # 0=right, 1=left
 
         # ---- Mink grasp planner (background thread, not subprocess) ----
         self._state_lock        = threading.Lock()
@@ -173,6 +191,7 @@ class GraspVizCore:
 
         self._init_real_arm(real_robot, ur5_ip, ur5_speed)
         self._init_executor()
+        self._init_real_h12(real_h12, h12_ros)
 
         # Optional in-process ROS2 bridge (state publish + command subscribe)
         self._ros_bridge = None
@@ -277,7 +296,8 @@ class GraspVizCore:
         # 2. Terminate MuJoCo viewer processes
         for stop_event in [self._hand_ours_stop, self._hand_mink_stop,
                            self._robot_ours_stop, self._robot_mink_stop,
-                           self._h12_stop, self._h12_mink_stop]:
+                           self._h12_stop, self._h12_mink_stop,
+                           self._h12_bimanual_stop]:
             stop_event.set()
 
         # 2b. Stop ROS bridge executor thread
@@ -566,6 +586,8 @@ class GraspVizCore:
         state = self._build_state_array(r)
         self._custom_ctrl_arr[:]  = ctrl
         self._viewer_state_arr[:] = state
+        if self._bimanual_mode:
+            self._update_active_arm()
 
     def _push_mink_viewer_ctrl(self) -> None:
         with self._state_lock:
@@ -717,8 +739,101 @@ class GraspVizCore:
         self._h12_mink_proc = proc
         _log.info("H1-2 viewer (Mink) launched.")
 
+    def _active_arm(self) -> int:
+        """Return 0 (right) or 1 (left) based on grasp Y position and midplane."""
+        return 1 if self._grasp_y > _H12_MIDPLANE_Y else 0
+
+    def _update_active_arm(self) -> None:
+        """Recompute active arm and sync left_ctrl_arr with mirrored grasp target."""
+        arm = self._active_arm()
+        self._active_arm_val.value = arm
+        # Mirror grasp position to left ctrl array so bimanual worker can use it.
+        # For the left arm, the same world-frame grasp_z/x/y applies; only the
+        # wrist→hand transform differs (handled inside the worker).
+        with self._left_ctrl_arr.get_lock():
+            src = list(self._custom_ctrl_arr[:])
+            for i, v in enumerate(src):
+                self._left_ctrl_arr[i] = v
+
+    def _launch_h12_bimanual_viewer(self) -> None:
+        if self._h12_bimanual_proc is not None and self._h12_bimanual_proc.is_alive():
+            _log.debug("H1-2 bimanual viewer already open.")
+            return
+        self._h12_bimanual_stop.clear()
+        self._push_viewer_ctrl()
+        self._update_active_arm()
+        proc = self._mp_ctx.Process(
+            target=_h12_bimanual_viewer_worker,
+            args=(_H12_BIMANUAL_SCENE,
+                  self._custom_ctrl_arr,
+                  self._left_ctrl_arr,
+                  self._active_arm_val,
+                  self._viewer_state_arr,
+                  self._h12_bimanual_stop),
+            kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
+                        sim_grasp_t=self._sim_grasp_t,
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+            daemon=True,
+        )
+        proc.start()
+        self._h12_bimanual_proc = proc
+        _log.info("H1-2 bimanual viewer launched (active arm: %s).",
+                  "right" if self._active_arm() == 0 else "left")
+
+    def _init_real_h12(self, real_h12: bool, h12_ros: bool) -> None:
+        """Connect to the real H1-2 arm via ROS2 if requested."""
+        self._h12_arm = None
+        if not real_h12 and not h12_ros:
+            return
+        try:
+            from .h12_bridge import H12Bridge
+            self._h12_arm = H12Bridge(bimanual=self._bimanual_mode)
+            ok = self._h12_arm.connect()
+            if ok:
+                _log.info("H12Bridge connected (ROS2).")
+            else:
+                _log.warning("H12Bridge failed to connect — check that frame_task_server is running.")
+                self._h12_arm = None
+        except Exception as exc:
+            _log.warning("H12Bridge setup failed: %s", exc)
+
+    def _send_h12_arm(self) -> None:
+        """Send current grasp pose to real H1-2 via ROS2 frame_task action."""
+        if self._h12_arm is None:
+            self._update_status("H12 arm not connected. Start frame_task_server first.")
+            return
+        if self._result is None:
+            return
+        from .grasp_viz_workers import _H12_R_HAND_TO_WRIST, _H12_T_HAND_TO_WRIST
+        from .grasp_viz_workers import _H12_LEFT_R_HAND_TO_WRIST, _H12_LEFT_T_HAND_TO_WRIST
+        R_plane = self._plane_R_matrix()
+        r = self._result
+        R_tilt = ClosureResult._tilt_rot(r.base_tilt_y)
+        R_full = R_plane @ R_tilt
+        p_base = r.world_base(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
+        arm = self._active_arm()
+        if arm == 0:
+            R_wrist = R_full @ _H12_R_HAND_TO_WRIST
+            p_wrist = p_base + R_full @ _H12_T_HAND_TO_WRIST
+            frame   = "right_wrist_yaw_link"
+        else:
+            R_wrist = R_full @ _H12_LEFT_R_HAND_TO_WRIST
+            p_wrist = p_base + R_full @ _H12_LEFT_T_HAND_TO_WRIST
+            frame   = "left_wrist_yaw_link"
+        T = np.eye(4)
+        T[:3, :3] = R_wrist
+        T[:3,  3] = p_wrist
+        self._update_status(f"Sending H1-2 {'right' if arm == 0 else 'left'} arm → {frame}…")
+        try:
+            ok = self._h12_arm.send_arm(frame, T)
+            self._update_status("H1-2 arm move done." if ok else "H1-2 arm move failed.")
+        except Exception as exc:
+            self._update_status(f"H1-2 arm error: {exc}")
+
     def _launch_viewer(self) -> None:
-        if self._h12_mode:
+        if self._h12_mode and self._bimanual_mode:
+            self._launch_h12_bimanual_viewer()
+        elif self._h12_mode:
             self._launch_h12_viewer()
         elif self._robot_mode:
             self._launch_robot_viewer_ours()
