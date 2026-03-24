@@ -59,6 +59,7 @@ class GraspVizCore:
         xml_path: str = _DEFAULT_XML,
         rebuild: bool = False,
         port: Optional[str] = None,
+        hand_id: int = 1,
         robot_mode: bool = False,
         h12_mode: bool = False,
         bimanual_mode: bool = False,
@@ -126,7 +127,7 @@ class GraspVizCore:
         self._hand      = None
         self._send_real = send_real
         if port is not None:
-            self._init_hand(port)
+            self._init_hand(port, hand_id)
 
         # ---- Multiprocessing viewer state ----
         _mp = multiprocessing.get_context("fork")
@@ -159,6 +160,7 @@ class GraspVizCore:
         # Bimanual: separate ctrl array for left arm + active-arm selector
         self._left_ctrl_arr    = _mp.Array("d", _VIEWER_CTRL_LEN)
         self._active_arm_val   = _mp.Value("i", 0)   # 0=right, 1=left
+        self._last_active_arm  = -1
 
         # ---- Mink grasp planner (background thread, not subprocess) ----
         self._state_lock        = threading.Lock()
@@ -222,12 +224,12 @@ class GraspVizCore:
 
         self._recompute()
 
-    def _init_hand(self, port: str) -> None:
+    def _init_hand(self, port: str, hand_id: int = 1) -> None:
         """Connect to the real RH56 hand on the given serial port."""
         try:
             from .rh56_hand import RH56Hand
-            self._hand = RH56Hand(port=port)
-            _log.info("Connected to real hand on %s", port)
+            self._hand = RH56Hand(port=port, hand_id=hand_id)
+            _log.info("Connected to real hand on %s (hand_id=%d)", port, hand_id)
         except Exception as exc:
             _log.warning("Could not connect to real hand: %s", exc)
 
@@ -747,6 +749,13 @@ class GraspVizCore:
         """Recompute active arm and sync left_ctrl_arr with mirrored grasp target."""
         arm = self._active_arm()
         self._active_arm_val.value = arm
+        if arm != self._last_active_arm:
+            arm_label = "left" if arm == 1 else "right"
+            self._update_status(
+                f"H1-2 active arm switched → {arm_label} "
+                f"(target only; press Send H1-2 to execute)."
+            )
+            self._last_active_arm = arm
         # Mirror grasp position to left ctrl array so bimanual worker can use it.
         # For the left arm, the same world-frame grasp_z/x/y applies; only the
         # wrist→hand transform differs (handled inside the worker).
@@ -841,6 +850,13 @@ class GraspVizCore:
         self._update_status(f"H1-2 arm → {frame}…")
         try:
             ok = self._h12_arm.send_arm(frame, T)
+            if not ok:
+                arm = self._active_arm()
+                self._update_status("/frame_task unavailable; trying /dual_arm fallback…")
+                if arm == 0:
+                    ok = self._h12_arm.send_dual_arm(right_T=T, left_T=None)
+                else:
+                    ok = self._h12_arm.send_dual_arm(right_T=None, left_T=T)
             self._update_status("H1-2 arm move done." if ok else "H1-2 arm move failed.")
             return ok
         except Exception as exc:

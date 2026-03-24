@@ -1040,6 +1040,8 @@ class GraspVizUI(GraspVizCore):
     def _on_sim_h12(self):
         """Open (or refresh) the H1-2 viewer at current pose and animate the grasp."""
         if self._bimanual_mode:
+            self._update_active_arm()
+        if self._bimanual_mode:
             self._launch_h12_bimanual_viewer()
         else:
             self._launch_h12_viewer()
@@ -1050,6 +1052,11 @@ class GraspVizUI(GraspVizCore):
         self._sim_grasp_gen += 1
         gen      = self._sim_grasp_gen
         strategy = self._grasp_strategy
+
+        def _set_sim_ctrl(ctrl: np.ndarray):
+            self._custom_ctrl_arr[:] = ctrl
+            if self._bimanual_mode and self._active_arm() == 1:
+                self._update_active_arm()
 
         with self._state_lock:
             r = self._result
@@ -1107,7 +1114,7 @@ class GraspVizUI(GraspVizCore):
 
             r_approach = closures[0]
             ctrl = self._build_ctrl_array(r_approach, open_fc)
-            self._custom_ctrl_arr[:] = ctrl
+            _set_sim_ctrl(ctrl)
             self._update_status(
                 f"Sim Plan: approach {r_approach.width*1000:.1f}mm → "
                 f"{r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
@@ -1117,7 +1124,7 @@ class GraspVizUI(GraspVizCore):
                 if self._sim_grasp_gen != gen:
                     return
                 ctrl = self._build_ctrl_array(r_i)
-                self._custom_ctrl_arr[:] = ctrl
+                _set_sim_ctrl(ctrl)
                 self._update_status(
                     f"Sim Plan: step {i+1}/{len(closures)-1} "
                     f"({r_i.width*1000:.1f}mm)")
@@ -1144,14 +1151,14 @@ class GraspVizUI(GraspVizCore):
                 "thumb_yaw":      final_cv.get("thumb_yaw",      0.0),
             }
             ctrl = self._build_ctrl_array(r_target, thumb_fc)
-            self._custom_ctrl_arr[:] = ctrl
+            _set_sim_ctrl(ctrl)
             self._update_status("Sim Thumb Reflex: thumb closing, arm → pose...")
             time.sleep(1.5)
             if self._sim_grasp_gen != gen:
                 return
 
             ctrl = self._build_ctrl_array(r_target)
-            self._custom_ctrl_arr[:] = ctrl
+            _set_sim_ctrl(ctrl)
             self._update_status("Sim Thumb Reflex: all fingers closing...")
             time.sleep(1.0)
             self._status_queue.put("Sim Thumb Reflex: complete.")

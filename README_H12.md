@@ -171,8 +171,10 @@ directly into the Pinocchio model).  This is the correct mode for sim-only ROS t
 python h12_ros2_controller/ros2/frame_task_server.py --sport
 
 # Terminal 2 — grasp_viz:
-uv run python -m rh56_controller.grasp_viz --h12 --real-h12
+uv run python -m rh56_controller.grasp_viz --h12 --real-h12 --port /dev/ttyUSB0 --hand-id 1
 ```
+
+For the left physical RH56 hand on the same serial bus, use `--hand-id 2`.
 
 ### Full launch sequence
 
@@ -201,6 +203,10 @@ uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
 ```
 
 The `H12Bridge.send_dual_arm()` sends to the `/dual_arm` action.
+
+If your on-robot stack does not expose `/frame_task` (older deployment) but does expose
+`/dual_arm`, `Send H1-2` now falls back automatically to `/dual_arm` for single-arm moves.
+In that case, keep `dual_arm_server.py` running.
 
 ### What runs on what machine
 
@@ -241,6 +247,23 @@ need to return to rest — this is handled by sending a `NamedConfig` action to 
 deactivated arm's rest config.  This sequencing is planned but not yet implemented;
 for the first real robot test, avoid crossing the midplane during a `Send H1-2` call.
 
+### Left/Right physical hand IDs (RH56)
+
+`grasp_viz` connects a single RH56 hand instance from `--port` and `--hand-id`:
+
+- `--hand-id 1` → right hand (default)
+- `--hand-id 2` → left hand
+
+Examples:
+
+```bash
+# Right hand on H1-2
+uv run python -m rh56_controller.grasp_viz --h12 --real-h12 --port /dev/ttyUSB0 --hand-id 1
+
+# Left hand on H1-2
+uv run python -m rh56_controller.grasp_viz --h12 --real-h12 --port /dev/ttyUSB0 --hand-id 2
+```
+
 ---
 
 ## Wrist→Hand Attachment Transforms
@@ -267,7 +290,7 @@ The left-hand convention:  `wrist_x = base_z + 0.054, wrist_y = −base_x, wrist
 | **H1-2: Bimanual** | Opens bimanual viewer (`h1_2_bimanual_inspire.xml`) with PINK IK for both arms |
 | **Bimanual mode** | Toggle: enables left/right arm switching based on Y position |
 | **Send H1-2** | (real-h12 only) Sends FrameTask action to move real arm |
-| **Sim H1-2** | Opens/refreshes sim viewer at current slider-set pose |
+| **Sim H1-2** | Opens/refreshes sim viewer at current slider-set pose; in bimanual mode it follows the currently active arm (Y-sign selection) |
 | **GRASP!** | (real-h12 only) Send arm then close hand to target width |
 
 ---
@@ -313,6 +336,159 @@ Or add the ROS2 site-packages to `uv`'s environment via `.env`:
 # .env (project root)
 PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH
 ```
+
+---
+
+## Real-World Setup & Networking (Laptop GUI + Robot Controllers)
+
+This is the recommended deployment for real robot use:
+
+- **Robot PC** runs ROS2 control/action servers (`frame_task_server.py`, hand node, TF, etc.)
+- **Laptop/workstation** runs `grasp_viz` GUI
+- ROS2 DDS traffic bridges them over Wi-Fi or direct Ethernet
+
+### 1) Preconditions
+
+- Same ROS distro on both machines (e.g. Humble)
+- Same custom message versions on both machines (`custom_ros_messages`, `h12_ros2_model`)
+- Matching `ROS_DOMAIN_ID`
+- `frame_task_server` available on robot (`/frame_task` action)
+- Robot in safe mode / stand / damping as required by Unitree procedures
+
+### 2) Robot-side bringup (SSH terminal)
+
+```bash
+# Robot PC (example)
+ssh unitree@192.168.123.164
+
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+# Recommended DDS settings
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0
+
+# Start real arm action server (single-arm)
+python h12_ros2_controller/ros2/frame_task_server.py --sport
+```
+
+In another robot terminal, verify:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0
+
+ros2 action list
+ros2 topic list | grep -E '(^/tf$|^/tf_static$|right_ee_pose|left_ee_pose|joint_states)'
+```
+
+Expected minimum actions:
+
+- `/frame_task`
+- `/named_config` (optional but useful)
+- `/dual_arm` (optional; needed for bimanual real control)
+
+### 3) Laptop-side GUI bringup
+
+```bash
+# Laptop/workstation
+cd ~/Programs/rh56_controller
+
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0
+
+# Quick discovery check before starting GUI
+ros2 action list | grep frame_task
+
+# Launch GUI (right hand id=1; left hand id=2)
+uv run --active python -m rh56_controller.grasp_viz \
+   --h12 --real-h12 --port /dev/ttyUSB0 --hand-id 1
+```
+
+If `ros2 action list` on laptop cannot see `/frame_task`, DDS/networking is not yet configured correctly.
+
+### 4) Network setup (tested workflow on real H1-2)
+
+This workflow has been reliable in practice:
+
+1. Connect an Ethernet cable from the **yellow internet port on the router attached to the H1-2** to a known-good Ethernet port on your lab Ethernet switch.
+2. Power on the robot.
+3. On your laptop, join Wi-Fi network **`HumanoidNetwork5G`** using the correct password.
+4. Source your ROS environments on the laptop and confirm discovery:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0
+
+ros2 topic list
+ros2 service list
+ros2 action list
+```
+
+If the humanoid PC is already configured to auto-start ROS/control processes, topics/services/actions should be visible from your local machine once networking is up.
+
+#### Alternative: direct Ethernet (fallback)
+
+If Wi-Fi discovery is flaky, connect laptop directly to the robot-side network and assign a static IP on the same subnet (for example `192.168.123.10/24`), then verify:
+
+```bash
+ping 192.168.123.164
+```
+
+### 5) Internet access on the humanoid PC
+
+To provide internet access on the H1-2 computer itself:
+
+```bash
+ssh unitree@192.168.123.164
+# enter password
+
+./start_internet.sh
+```
+
+You can also adjust Ethernet settings from the humanoid PC side, but the exact step-by-step procedure is not documented here yet.
+
+### 6) End-to-end smoke test
+
+On laptop GUI:
+
+1. Launch with `--h12 --real-h12`
+2. Verify status shows H12 bridge connected
+3. Move sliders (in bimanual mode, watch active-arm switch status line)
+4. Press **Sim H1-2** (sim preview only)
+5. Press **Send H1-2** (real arm motion)
+6. Use **Set Pose** to read back and sync sliders
+
+### 7) Troubleshooting checklist
+
+- `H12 arm not connected` in GUI:
+   - Robot server not running, wrong ROS env, or DDS discovery failure.
+- `/frame_task` missing on laptop but present on robot:
+   - Mismatched `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=1`, blocked multicast, or different ROS distro/workspace versions.
+- GUI starts but no ROS2 actions visible:
+   - Ensure `source /opt/ros/...` and `source ~/ros2_ws/install/setup.bash` were run in the same shell before `uv run --active`.
+- Robot and laptop can ping but still no discovery:
+   - Check that both sides use the same `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, and `ROS_LOCALHOST_ONLY=0`.
+   - Re-join `HumanoidNetwork5G` and retry discovery commands.
+   - Prefer direct Ethernet as a fallback path.
+
+### 8) Recommended terminal layout during experiments
+
+- **Robot terminal A:** `frame_task_server.py --sport`
+- **Robot terminal B:** `ros2 action list` / `ros2 topic hz ...` monitoring
+- **Laptop terminal A:** `grasp_viz` GUI
+- **Laptop terminal B:** quick ROS2 checks (`ros2 action list`, `ros2 topic echo ...`)
 
 ---
 

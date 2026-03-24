@@ -11,6 +11,7 @@ Options:
     --xml PATH        Path to inspire_right.xml (default: bundled)
     --rebuild         Force rebuild of FK cache
     --port DEV        Serial port for real hand   (e.g. /dev/ttyUSB0)
+    --hand-id N       RH56 hand ID on bus (right=1, left=2)
     --robot           Enable UR5+hand robot viewer / IK planning
     --h12             Enable H1-2+hand robot viewer with PINK IK
     --bimanual        Enable bimanual mode (both arms; requires --h12)
@@ -48,6 +49,8 @@ def main():
                         help="Force rebuild of FK cache")
     parser.add_argument("--port", default=None,
                         help="Serial port for real hand (e.g. /dev/ttyUSB0)")
+    parser.add_argument("--hand-id", type=int, default=1,
+                        help="RH56 hand ID on bus (right=1, left=2; default 1)")
     parser.add_argument("--robot", action="store_true",
                         help="Enable UR5+hand robot viewer buttons")
     parser.add_argument("--h12", action="store_true",
@@ -102,6 +105,7 @@ def main():
         xml_path=args.xml,
         rebuild=args.rebuild,
         port=args.port,
+        hand_id=args.hand_id,
         robot_mode=args.robot,
         h12_mode=args.h12,
         bimanual_mode=args.bimanual,
