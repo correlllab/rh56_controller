@@ -447,6 +447,13 @@ class GraspVizUI(GraspVizCore):
             command=self._on_sim_h12)
         self._btn_sim_h12.grid(row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
+        self._btn_setpose_h12 = tk.Button(
+            parent, text="Set Pose",
+            command=self._on_set_pose_from_h12,
+            state="normal" if _h12_ok else "disabled")
+        self._btn_setpose_h12.grid(row=r, column=0, columnspan=2, sticky="ew",
+                                   padx=2, pady=1); r += 1
+
         ttk.Separator(parent, orient="horizontal").grid(
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
 
@@ -460,6 +467,32 @@ class GraspVizUI(GraspVizCore):
 
         if not _h12_ok:
             self._update_status("No H1-2 connection. Start frame_task_server + use --real-h12.")
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Strategy ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        self._strategy_var = tk.StringVar(value=self._grasp_strategy)
+        for s in ["Naive", "Plan", "Thumb Reflex"]:
+            tk.Radiobutton(parent, text=s, variable=self._strategy_var, value=s,
+                           command=self._on_strategy_radio).grid(
+                row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Parameters ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        for label, attr, default in [
+            ("Force (N):",     "_ent_force",    "0"),
+            ("Step (mm):",     "_ent_step",     "10"),
+            ("Approach (mm):", "_ent_approach", ""),
+        ]:
+            ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w")
+            ent = tk.Entry(parent, width=9)
+            ent.insert(0, default)
+            ent.grid(row=r, column=1, sticky="ew", padx=2)
+            setattr(self, attr, ent)
+            r += 1
 
         ttk.Label(parent, text="── Status ──", foreground="#555").grid(
             row=r, column=0, columnspan=2, sticky="w"); r += 1
@@ -486,14 +519,6 @@ class GraspVizUI(GraspVizCore):
         threading.Thread(target=self._send_h12_arm, daemon=True,
                          name="send-h12").start()
 
-    def _on_sim_h12(self):
-        """Open (or refresh) the H1-2 bimanual/single viewer at current pose."""
-        if self._bimanual_mode:
-            self._launch_h12_bimanual_viewer()
-        else:
-            self._launch_h12_viewer()
-        self._update_status("H1-2 sim viewer launched.")
-
     def _on_grasp_h12(self):
         """Execute grasp on real H1-2: send arm then close fingers."""
         if self._result is None:
@@ -502,15 +527,164 @@ class GraspVizUI(GraspVizCore):
         threading.Thread(target=self._execute_h12_grasp, daemon=True,
                          name="grasp-h12").start()
 
+    def _h12_read_params(self):
+        """Read force_N, step_mm, approach_m from UI widgets (safe from bg thread)."""
+        try:
+            force_N = float(getattr(self, "_ent_force", None) and
+                            self._ent_force.get().strip() or "0")
+        except (ValueError, AttributeError):
+            force_N = 0.0
+        try:
+            step_mm = float(getattr(self, "_ent_step", None) and
+                            self._ent_step.get().strip() or "10")
+        except (ValueError, AttributeError):
+            step_mm = 10.0
+        try:
+            s = getattr(self, "_ent_approach", None)
+            approach_m = float(s.get().strip()) / 1000.0 if s and s.get().strip() else None
+        except (ValueError, AttributeError):
+            approach_m = None
+        return force_N, step_mm, approach_m
+
+    def _h12_close_fingers(self, cmd, force_N: float, active_fingers=None):
+        """
+        Send finger close command with optional force-adaptive stop.
+
+        If force_N > 0 and a hand is connected: sets the per-finger force limit,
+        sends the position command, then polls force_act() until any active
+        calibrated finger reaches the threshold (mirrors GraspExecutor behaviour).
+        """
+        if self._hand is None:
+            return
+        from .grasp_executor import _force_N_to_raw, _FORCE_CALIB
+        if force_N > 0.0:
+            self._hand.force_set([_force_N_to_raw(i, force_N) for i in range(6)])
+        self._hand.angle_set(cmd)
+        if force_N <= 0.0:
+            return
+        # Poll force_act until threshold reached on any active calibrated finger
+        self._update_status(f"H1-2: monitoring force (threshold {force_N:.1f} N)…")
+        while True:
+            raw = self._hand.force_act()
+            if raw is None:
+                time.sleep(0.05)
+                continue
+            for idx, (a, b) in _FORCE_CALIB.items():
+                if active_fingers is not None and idx not in active_fingers:
+                    continue
+                f_N = max(0.0, a * raw[idx] + b)
+                if f_N >= force_N:
+                    self._update_status(
+                        f"H1-2: force threshold reached (finger[{idx}]={f_N:.2f} N)")
+                    return
+            time.sleep(0.05)
+
     def _execute_h12_grasp(self):
-        """Background thread: send arm to pose, then close hand."""
+        """Background thread: dispatch to the selected strategy."""
+        strategy = self._grasp_strategy
+        if strategy == "Plan":
+            self._execute_h12_plan()
+        elif strategy == "Thumb Reflex":
+            self._execute_h12_thumb_reflex()
+        else:
+            self._execute_h12_naive()
+
+    def _execute_h12_naive(self):
+        """H1-2 Naive: arm → pose, then close fingers (with optional force stop)."""
+        force_N, _, _ = self._h12_read_params()
+        active_fingers = _MODE_ACTIVE_FINGERS.get(self._mode, [2, 3, 4])
         self._send_h12_arm()
-        # Close fingers to target width (re-use _send_real_hand)
+        with self._state_lock:
+            r = self._result
+        if r is not None:
+            self._h12_close_fingers(self._h12_finger_cmd(r), force_N, active_fingers)
+        self._update_status("H1-2 Naive complete.")
+
+    def _execute_h12_plan(self):
+        """H1-2 Plan: fingers → approach, arm → approach, then step arm+fingers."""
+        force_N, step_mm, approach_m = self._h12_read_params()
+        active_fingers = _MODE_ACTIVE_FINGERS.get(self._mode, [2, 3, 4])
+
+        r_target = self.closure.solve(self._mode, self._width_target_m)
+        closures = self._compute_plan_closures(step_mm, r_target, approach_m)
+        if not closures:
+            self._execute_h12_naive()
+            return
+
+        r_approach = closures[0]
+        # Phase 1: fingers to approach config (no force limit on approach)
         if self._hand is not None:
-            self._width_m = self._width_target_m
-            self._recompute()
-            self._send_real_hand()
-        self._update_status("H1-2 grasp sequence complete.")
+            self._hand.angle_set(self._h12_finger_cmd(r_approach))
+        # Phase 2: arm to approach pose
+        self._update_status(f"H1-2 Plan: approach {r_approach.width*1000:.1f} mm…")
+        self._h12_send_arm_for_result(r_approach)
+        # Phase 3: step through waypoints; force control only on final step
+        for i, r_i in enumerate(closures[1:], 1):
+            is_last = (i == len(closures) - 1)
+            self._update_status(
+                f"H1-2 Plan: step {i}/{len(closures)-1} → {r_i.width*1000:.1f} mm")
+            self._h12_send_arm_for_result(r_i)
+            fn = force_N if is_last else 0.0
+            self._h12_close_fingers(self._h12_finger_cmd(r_i), fn, active_fingers)
+            if not is_last:
+                time.sleep(0.2)
+        self._update_status("H1-2 Plan complete.")
+
+    def _execute_h12_thumb_reflex(self):
+        """H1-2 Thumb Reflex: thumb to final, arm, then all fingers (with force stop)."""
+        force_N, _, _ = self._h12_read_params()
+        active_fingers = _MODE_ACTIVE_FINGERS.get(self._mode, [2, 3, 4])
+        with self._state_lock:
+            r = self._result
+        if r is None:
+            return
+        final_cmd = self._h12_finger_cmd(r)
+        # Phase 1: thumb to final config, all other fingers open
+        if self._hand is not None:
+            thumb_cmd = [1000, 1000, 1000, 1000, final_cmd[4], final_cmd[5]]
+            self._hand.angle_set(thumb_cmd)
+            time.sleep(0.4)
+        # Phase 2: arm to final pose
+        self._send_h12_arm()
+        # Phase 3: all fingers close (with optional force stop)
+        self._h12_close_fingers(final_cmd, force_N, active_fingers)
+        self._update_status("H1-2 Thumb Reflex complete.")
+
+    def _on_set_pose_from_h12(self):
+        """Read current H1-2 wrist pose via TF and set sliders to match."""
+        if getattr(self, "_h12_arm", None) is None:
+            self._update_status("No H1-2 connection.")
+            return
+        with self._state_lock:
+            r = self._result
+        params = self.decode_h12_pose_to_grasp_params(current_result=r)
+        if not params:
+            self._update_status("Failed to read H1-2 arm pose — is frame_task_server running?")
+            return
+        self._grasp_x  = params["grasp_x"]
+        self._grasp_y  = params["grasp_y"]
+        self._grasp_z  = params["grasp_z"]
+        self._plane_rx = params["plane_rx"]
+        self._plane_ry = params["plane_ry"]
+        self._plane_rz = params["plane_rz"]
+        # Sync sliders
+        if hasattr(self, "_sl_x"):
+            self._sl_x.set(self._grasp_x * 1000)
+        if hasattr(self, "_sl_y"):
+            self._sl_y.set(self._grasp_y * 1000)
+        if hasattr(self, "_sl_z"):
+            self._sl_z.set(np.clip(self._grasp_z * 1000, 0.0, 2000.0))
+        if hasattr(self, "_sl_rx"):
+            self._sl_rx.set(np.degrees(self._plane_rx))
+        if hasattr(self, "_sl_ry"):
+            self._sl_ry.set(np.degrees(self._plane_ry))
+        if hasattr(self, "_sl_rz"):
+            self._sl_rz.set(np.degrees(self._plane_rz))
+        self._push_viewer_ctrl()
+        self._schedule_plot_only()
+        self._update_status(
+            f"Pose set: hand({params['grasp_x']*1000:.0f},"
+            f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm")
 
     # ------------------------------------------------------------------
     # Status queue poll (called every _POLL_MS ms via root.after)
@@ -860,9 +1034,19 @@ class GraspVizUI(GraspVizCore):
         has_real = not np.all(q_real == 0)
         if has_real:
             self._real_tracking.value = 1   # arm follows real joints initially
-
         self._launch_robot_viewer_ours()
+        self._start_sim_animation(has_real=has_real)
 
+    def _on_sim_h12(self):
+        """Open (or refresh) the H1-2 viewer at current pose and animate the grasp."""
+        if self._bimanual_mode:
+            self._launch_h12_bimanual_viewer()
+        else:
+            self._launch_h12_viewer()
+        self._start_sim_animation(has_real=False)
+
+    def _start_sim_animation(self, has_real: bool = False):
+        """Animate the current grasp strategy in the active sim viewer."""
         self._sim_grasp_gen += 1
         gen      = self._sim_grasp_gen
         strategy = self._grasp_strategy
@@ -887,10 +1071,10 @@ class GraspVizUI(GraspVizCore):
             """Let viewer sync arm from real joints (~1 frame), then hand off to mink IK."""
             if has_real:
                 time.sleep(0.3)
-            self._real_tracking.value = 0
+            if hasattr(self, "_real_tracking"):
+                self._real_tracking.value = 0
 
         def _animate_naive():
-            # Arm moves to pose via IK (seeded from real config), fingers close linearly.
             _sync_then_ik()
             self._sim_grasp_t.value = 0.0
             self._push_viewer_ctrl()
@@ -913,15 +1097,14 @@ class GraspVizUI(GraspVizCore):
             if not closures:
                 return
 
-            _sync_then_ik()  # seed from real joints, then IK takes over
+            _sync_then_ik()
             self._sim_grasp_t.value = 1.0
 
-            final_cv  = r_target.ctrl_values
-            open_fc   = {k: self.fk.ctrl_min[k] for k in
-                         ["pinky", "ring", "middle", "index", "thumb_proximal"]}
+            final_cv = r_target.ctrl_values
+            open_fc  = {k: self.fk.ctrl_min[k] for k in
+                        ["pinky", "ring", "middle", "index", "thumb_proximal"]}
             open_fc["thumb_yaw"] = final_cv.get("thumb_yaw", 0.0)
 
-            # Phase 1: fingers to approach config, arm to approach pose
             r_approach = closures[0]
             ctrl = self._build_ctrl_array(r_approach, open_fc)
             self._custom_ctrl_arr[:] = ctrl
@@ -930,7 +1113,6 @@ class GraspVizUI(GraspVizCore):
                 f"{r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
             time.sleep(2.5)
 
-            # Phase 2: step through remaining waypoints (arm + fingers)
             for i, r_i in enumerate(closures[1:]):
                 if self._sim_grasp_gen != gen:
                     return
@@ -952,7 +1134,6 @@ class GraspVizUI(GraspVizCore):
             _sync_then_ik()
             self._sim_grasp_t.value = 1.0
 
-            # Phase 1: thumb to final config, other fingers open, arm to final pose
             final_cv = r_target.ctrl_values
             thumb_fc = {
                 "pinky":          self.fk.ctrl_min["pinky"],
@@ -969,7 +1150,6 @@ class GraspVizUI(GraspVizCore):
             if self._sim_grasp_gen != gen:
                 return
 
-            # Phase 2: all fingers close
             ctrl = self._build_ctrl_array(r_target)
             self._custom_ctrl_arr[:] = ctrl
             self._update_status("Sim Thumb Reflex: all fingers closing...")

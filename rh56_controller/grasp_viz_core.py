@@ -797,20 +797,15 @@ class GraspVizCore:
         except Exception as exc:
             _log.warning("H12Bridge setup failed: %s", exc)
 
-    def _send_h12_arm(self) -> None:
-        """Send current grasp pose to real H1-2 via ROS2 frame_task action."""
-        if self._h12_arm is None:
-            self._update_status("H12 arm not connected. Start frame_task_server first.")
-            return
-        if self._result is None:
-            return
+    def _h12_arm_T(self, r: "ClosureResult"):
+        """Compute 4×4 wrist target pose for a given closure result."""
         from .grasp_viz_workers import _H12_R_HAND_TO_WRIST, _H12_T_HAND_TO_WRIST
         from .grasp_viz_workers import _H12_LEFT_R_HAND_TO_WRIST, _H12_LEFT_T_HAND_TO_WRIST
         R_plane = self._plane_R_matrix()
-        r = self._result
-        R_tilt = ClosureResult._tilt_rot(r.base_tilt_y)
-        R_full = R_plane @ R_tilt
-        p_base = r.world_base(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
+        R_tilt  = ClosureResult._rot_matrix(r.base_tilt_y)
+        R_full  = R_plane @ R_tilt
+        p_base  = r.world_base(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
+        p_base  = p_base + np.array([self._grasp_x, self._grasp_y, 0.0])
         arm = self._active_arm()
         if arm == 0:
             R_wrist = R_full @ _H12_R_HAND_TO_WRIST
@@ -823,12 +818,93 @@ class GraspVizCore:
         T = np.eye(4)
         T[:3, :3] = R_wrist
         T[:3,  3] = p_wrist
-        self._update_status(f"Sending H1-2 {'right' if arm == 0 else 'left'} arm → {frame}…")
+        return T, frame
+
+    def _h12_finger_cmd(self, r: "ClosureResult"):
+        """Convert a closure result to a real-hand angle_set list (6 ints, 0–1000)."""
+        finger_ctrl = np.array([
+            r.ctrl_values.get(a, self.fk.ctrl_min[a]) for a in _ACTUATOR_ORDER
+        ])
+        ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+        ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])
+        rng = ctrl_max - ctrl_min
+        return np.round(
+            (1.0 - np.clip((finger_ctrl - ctrl_min) / np.where(rng > 0, rng, 1.0), 0.0, 1.0)) * 1000
+        ).astype(int).tolist()
+
+    def _h12_send_arm_for_result(self, r: "ClosureResult") -> bool:
+        """Send arm to the pose implied by closure result r.  Returns True on success."""
+        if self._h12_arm is None:
+            self._update_status("H12 arm not connected.")
+            return False
+        T, frame = self._h12_arm_T(r)
+        self._update_status(f"H1-2 arm → {frame}…")
         try:
             ok = self._h12_arm.send_arm(frame, T)
             self._update_status("H1-2 arm move done." if ok else "H1-2 arm move failed.")
+            return ok
         except Exception as exc:
             self._update_status(f"H1-2 arm error: {exc}")
+            return False
+
+    def _send_h12_arm(self) -> None:
+        """Send current grasp pose to real H1-2 via ROS2 frame_task action."""
+        if self._h12_arm is None:
+            self._update_status("H12 arm not connected. Start frame_task_server first.")
+            return
+        if self._result is None:
+            return
+        self._h12_send_arm_for_result(self._result)
+
+    def decode_h12_pose_to_grasp_params(self, current_result=None) -> dict:
+        """
+        Read the current H1-2 wrist pose via ROS2 TF and decode it into
+        grasp_viz_core slider parameters.
+
+        Returns dict with keys: grasp_x, grasp_y, grasp_z, plane_rx, plane_ry, plane_rz
+        (same shape as UR5Bridge.decode_tcp_to_grasp_params).
+        """
+        if self._h12_arm is None:
+            return {}
+        arm = self._active_arm()
+        frame = "right_wrist_yaw_link" if arm == 0 else "left_wrist_yaw_link"
+        from .grasp_viz_workers import (
+            _H12_R_WRIST_TO_HAND, _H12_T_WRIST_TO_HAND,
+            _H12_LEFT_R_WRIST_TO_HAND, _H12_LEFT_T_WRIST_TO_HAND,
+        )
+        R_wrist_to_hand = _H12_R_WRIST_TO_HAND if arm == 0 else _H12_LEFT_R_WRIST_TO_HAND
+        T_wrist_to_hand = _H12_T_WRIST_TO_HAND if arm == 0 else _H12_LEFT_T_WRIST_TO_HAND
+
+        world_T_wrist = self._h12_arm.get_wrist_pose(frame)
+        if world_T_wrist is None:
+            return {}
+
+        # Convert wrist pose → hand-base pose
+        R_wrist = world_T_wrist[:3, :3]
+        p_wrist = world_T_wrist[:3,  3]
+        R_hand  = R_wrist @ R_wrist_to_hand
+        p_hand  = p_wrist + R_wrist @ T_wrist_to_hand
+
+        # Recover plane angles and slider grasp_z (mirrors UR5 decode logic)
+        grasp_x = float(p_hand[0])
+        grasp_y = float(p_hand[1])
+        grasp_z = float(p_hand[2])
+        plane_rx = plane_ry = plane_rz = 0.0
+        if current_result is not None:
+            try:
+                R_tilt  = ClosureResult._rot_matrix(current_result.base_tilt_y)
+                R_plane = R_hand @ R_tilt.T
+                plane_rx, plane_ry, plane_rz = _mat_to_xyz_euler(R_plane)
+                mid_w   = R_hand @ current_result.midpoint
+                grasp_x = float(p_hand[0]) + mid_w[0]
+                grasp_y = float(p_hand[1]) + mid_w[1]
+                grasp_z = float(p_hand[2]) + mid_w[2]
+            except Exception as exc:
+                _log.warning("H12 plane decode failed: %s", exc)
+        return {
+            "grasp_x": grasp_x, "grasp_y": grasp_y, "grasp_z": grasp_z,
+            "plane_rx": plane_rx, "plane_ry": plane_ry, "plane_rz": plane_rz,
+        }
 
     def _launch_viewer(self) -> None:
         if self._h12_mode and self._bimanual_mode:
