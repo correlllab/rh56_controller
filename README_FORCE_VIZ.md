@@ -5,6 +5,8 @@ Inspire hand in real time, visualizing the **real2sim gap** that arises from
 having only normal force readings on the hardware versus full 3D contact
 wrenches in simulation.
 
+*Key Assumpion*: We resolve the real scalar forces (mapped from motor current) as perfectly normal forces from the contact sites on the hand fingertip sites (in the MJCF). This is a flawed but workable assumption for antipodal grasps, even with adaptive control altering the grasp. More complex grasp-object geometry and interactions cannot operate under this assumption and the grasp quality analysis described below are likely to be uninformative.
+
 ## Files
 
 | File | Role |
