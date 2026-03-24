@@ -30,7 +30,12 @@ sudo apt install -y librtde librtde-dev
 From repo root:
 ```bash
 cd /home/humanoid/Programs/rh56_controller
-tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310 --telemetry
+tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry
+```
+
+Arm-only variant (no RH56 serial hand stack):
+```bash
+tools/setup_uv_env.sh --profile real-h12-ros --python 3.10 --env .venv310 --telemetry
 ```
 
 Or run the helper:
@@ -38,11 +43,13 @@ Or run the helper:
 ./tools/setup_ros2_uv310.sh
 ```
 
+The helper is a thin wrapper around `tools/setup_uv_env.sh` and defaults to `real-h12-hand-ros`.
+
 Verify core imports in one place:
 ```bash
 source /opt/ros/humble/setup.bash
 source .venv310/bin/activate
-python -c "import rclpy, mujoco, mink, magpie_control, spatialmath; print('OK')"
+python -c "import rclpy, mujoco, serial, pinocchio, pink, meshcat; print('OK')"
 ```
 
 ## 3. Build ROS packages in this workspace
@@ -216,7 +223,7 @@ source install/setup.bash
 - Use motion arbiter and avoid simultaneously commanding UR5 from multiple nodes.
 
 5. `No module named 'serial'` in grasp viz:
-- Re-run `./tools/setup_ros2_uv310.sh` (or `tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310`) to install runtime deps into `.venv310`.
+- Re-run `./tools/setup_ros2_uv310.sh` (or `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310`) to install runtime deps into `.venv310`.
 
 6. `enable_hand_driver:=true` but `custom_ros_messages` not available:
 - `rh56_system.launch.py` now logs a warning and skips `rh56_driver` instead of crashing.

@@ -9,19 +9,16 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
+# Thin convenience wrapper around the canonical installer.
+# Default here is the combined H1-2 + RH56 ROS workflow.
 "$ROOT_DIR/tools/setup_uv_env.sh" \
-  --profile real-ur5-ros \
+  --profile real-h12-hand-ros \
   --python 3.10 \
   --env .venv310 \
   --telemetry
-
-# Ensure critical ROS/runtime deps are present in this venv even if lock state
-# changes or submodule dependency metadata drifts.
-uv pip install --python .venv310/bin/python \
-  splines pyserial psutil Pillow scipy \
-  spatialmath-python ur-rtde rerun-sdk
 
 echo ""
 echo "Environment ready at $ROOT_DIR/.venv310"
 echo "Activate with: source .venv310/bin/activate"
 echo "Use with ROS: source /opt/ros/humble/setup.bash && source .venv310/bin/activate"
+echo "Arm-only variant: tools/setup_uv_env.sh --profile real-h12-ros --python 3.10 --env .venv310 --telemetry"

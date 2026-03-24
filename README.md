@@ -50,6 +50,40 @@ cd rh56_controller
 | Real H1-2 arm only (+ROS workflow) | 3.10 | `real-h12-ros` | `tools/setup_uv_env.sh --profile real-h12-ros --python 3.10 --env .venv310 --telemetry` |
 | Real H1-2 + real hand (+ROS workflow) | 3.10 | `real-h12-hand-ros` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
 
+### Dependency matrix (profiles by stack/runtime/python)
+
+| Robot stack | Runtime | Python | Profiles |
+|:--|:--|:--:|:--|
+| hand | sim | 3.12 | `sim-core`, `sim-hand` |
+| ur5 | sim | 3.12 | `sim-ur5` |
+| h12 | sim | 3.12 | `sim-h12`, `sim-h12-ur5` |
+| hand + ur5 | real | 3.12 | `real-ur5` |
+| hand + ur5 | ros | 3.10 | `real-ur5-ros` |
+| h12 (arm-only) | ros | 3.10 | `real-h12-ros` |
+| h12 + hand | ros | 3.10 | `real-h12-hand-ros` |
+| all stacks | mixed | 3.10/3.12 | `full` |
+
+Validate imports for any profile with:
+
+```bash
+python tools/check_profile_imports.py --list
+python tools/check_profile_imports.py --profile real-h12-hand-ros
+```
+
+Packaging note:
+- `pyproject.toml` is canonical for uv/profile dependency management.
+- `setup.py` is retained for ROS/ament package installation metadata.
+
+### Docs entry points
+
+| Topic | Guide |
+|:--|:--|
+| Top-level install/run | [README.md](README.md) |
+| ROS2 workflows | [README_ROS2.md](README_ROS2.md) |
+| Sim workflows | [README_SIM.md](README_SIM.md) |
+| H1-2 specific workflows | [README_H12.md](README_H12.md) |
+| Real hardware runbook | [README_REAL.md](README_REAL.md) |
+
 ### 3) Run with the matching environment
 
 ```bash
