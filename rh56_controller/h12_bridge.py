@@ -6,10 +6,17 @@ Wraps the h12_ros2_controller ROS2 action servers:
   - /dual_arm      (DualArm action)     — bimanual (both arms simultaneously)
   - /named_config  (NamedConfig action) — go to a named configuration
 
-Because rclpy is only available for Python 3.10 and uv runs Python 3.12,
+Because rclpy is only available for Python 3.10 and uv often runs Python 3.12,
 this bridge spawns h12_ros_proxy.py as a subprocess under Python 3.10
-(with the ROS2 environment sourced) and communicates via newline-delimited
+(with ROS2 setup scripts sourced) and communicates via newline-delimited
 JSON over stdin/stdout.
+
+Portability overrides:
+    RH56_H12_PYTHON=/path/to/python3.10
+    RH56_H12_SETUP_SCRIPTS=/path/ros/setup.bash:/path/ws/install/setup.bash
+or:
+    RH56_H12_ROS_SETUP=/path/ros/setup.bash
+    RH56_H12_WS_SETUP=/path/ws/install/setup.bash
 
 Usage (from grasp_viz_core):
     bridge = H12Bridge(bimanual=False)
@@ -24,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -40,21 +48,60 @@ _log = logging.getLogger(__name__)
 
 _PROXY_SCRIPT = str(Path(__file__).parent / "h12_ros_proxy.py")
 
-# ROS environment needed by the subprocess
-_ROS_SETUP = "/opt/ros/humble/setup.bash"
-_WS_CTRL_SETUP = os.path.expanduser("~/ws_ctrl/install/setup.bash")
+_DEFAULT_ROS_SETUP = "/opt/ros/humble/setup.bash"
+_DEFAULT_WS_SETUP = os.path.expanduser("~/ws_ctrl/install/setup.bash")
+_DEFAULT_PROXY_PYTHON = "/usr/bin/python3.10"
 
-_PYTHON310 = "/usr/bin/python3.10"
+
+def _configured_proxy_python() -> str:
+    """
+    Python executable used for the proxy subprocess.
+
+    Override with:
+      RH56_H12_PYTHON=/path/to/python3.10
+    """
+    return os.environ.get("RH56_H12_PYTHON", _DEFAULT_PROXY_PYTHON)
+
+
+def _configured_setup_scripts() -> list[str]:
+    """
+    Setup scripts to source before launching the ROS2 proxy.
+
+    Override options:
+      1) RH56_H12_SETUP_SCRIPTS="/path/a.sh:/path/b.sh"
+      2) RH56_H12_ROS_SETUP=/path/ros/setup.bash
+         RH56_H12_WS_SETUP=/path/ws/install/setup.bash
+    """
+    scripts_env = os.environ.get("RH56_H12_SETUP_SCRIPTS", "").strip()
+    if scripts_env:
+        candidates = [s for s in scripts_env.split(os.pathsep) if s]
+    else:
+        candidates = [
+            os.environ.get("RH56_H12_ROS_SETUP", _DEFAULT_ROS_SETUP),
+            os.environ.get("RH56_H12_WS_SETUP", _DEFAULT_WS_SETUP),
+        ]
+
+    scripts: list[str] = []
+    for script in candidates:
+        if script and Path(script).exists():
+            scripts.append(script)
+        elif script:
+            _log.warning("H12Bridge: setup script not found (skipping): %s", script)
+    return scripts
 
 
 def _build_proxy_env() -> dict:
     """Return an os.environ copy with ROS2 paths injected."""
-    # Source both setup files in a subshell and extract the environment
-    cmd = (
-        f"source {_ROS_SETUP} 2>/dev/null && "
-        f"source {_WS_CTRL_SETUP} 2>/dev/null && "
-        "env"
+    scripts = _configured_setup_scripts()
+    if not scripts:
+        _log.warning("H12Bridge: no valid setup scripts; using current environment only.")
+        return dict(os.environ)
+
+    source_cmd = " && ".join(
+        [f"source {shlex.quote(script)} 2>/dev/null" for script in scripts]
     )
+    cmd = f"{source_cmd} && env"
+
     try:
         out = subprocess.check_output(
             ["bash", "-c", cmd], text=True, timeout=10
@@ -106,8 +153,9 @@ class H12Bridge:
         """Spawn the proxy subprocess and send 'connect'.  Returns True on success."""
         try:
             env = _build_proxy_env()
+            proxy_python = _configured_proxy_python()
             self._proc = subprocess.Popen(
-                [_PYTHON310, "-u", _PROXY_SCRIPT],
+                [proxy_python, "-u", _PROXY_SCRIPT],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -115,6 +163,7 @@ class H12Bridge:
                 env=env,
                 bufsize=1,  # line-buffered
             )
+            _log.info("H12Bridge: launching proxy with %s", proxy_python)
             self._connected = True
 
             # Background thread to read proxy stdout

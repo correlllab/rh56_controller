@@ -11,9 +11,93 @@ dependencies = [
     "scipy",
     "matplotlib",
     "mujoco>=3.3.6",
+]
+
+[project.optional-dependencies]
+# RH56 hardware serial stack (real hand)
+hand = [
     "pyserial",
-    "dynamixel-sdk",
-    "anyskin",
+]
+
+# UR5 + RTDE bridge stack
+ur5 = [
+    "magpie_control",
+    "spatialmath-python",
+]
+
+# Mink differential IK planner/comparison
+mink = [
+    "mink",
+]
+
+# H1-2 simulation stack (Pinocchio + PINK + Meshcat)
+h12 = [
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
+]
+
+# Optional telemetry/logging
+telemetry = [
+    "rerun-sdk>=0.21",
+]
+
+# ROS2 Python dependencies are provided by the ROS distro (apt/rosdep),
+# but this extra is kept as a semantic selector for install profiles/docs.
+ros = []
+
+# Convenience bundles
+sim-hand = [
+    "mink",
+]
+sim-ur5 = [
+    "mink",
+]
+sim-h12 = [
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
+]
+sim-h12-ur5 = [
+    "mink",
+    "magpie_control",
+    "spatialmath-python",
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
+]
+
+# Real-world profiles
+real-robot = [
+    "pyserial",
+    "mink",
+    "magpie_control",
+    "spatialmath-python",
+]
+real-ur5-ros = [
+    "pyserial",
+    "mink",
+    "magpie_control",
+    "spatialmath-python",
+]
+real-h12-ros = [
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
+]
+real-h12-hand-ros = [
+    "pyserial",
+    "pin>=3.7.0",
+    "pin-pink>=4.1.0",
+    "meshcat>=0.3.2",
+    "meshcat-shapes>=1.0.0",
+]
+full = [
+    "pyserial",
     "mink",
     "magpie_control",
     "spatialmath-python",

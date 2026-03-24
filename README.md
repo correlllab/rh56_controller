@@ -27,32 +27,90 @@ It includes calibrated force mapping, dynamic step-response characterization, hi
 
 ## Installation (uv)
 
-This repository uses [uv](https://docs.astral.sh/uv/) as the package manager.  `uv` automatically manages a virtual environment and resolves the vendored `mink` dependency (differential IK library) from the local `mink/` subdirectory.
+This repository now uses **profile-based installation** so users can install only what they need (instead of one giant environment).
+
+### 1) Clone and install uv
 
 ```bash
-# Install uv (one-time, if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone and set up the environment
 git clone --recurse-submodules https://github.com/correlllab/rh56_controller.git
 cd rh56_controller
-uv sync          # creates .venv and installs all dependencies
-
-# Run any module through the managed environment
-uv run python -m rh56_controller.grasp_viz
-uv run python -m rh56_controller.grasp_viz --robot
 ```
 
-`uv sync` installs:
-- `numpy`, `scipy`, `matplotlib` — numerical + plotting stack
-- `mujoco >= 3.3.6` — physics simulation and passive viewers
-- `mink` (from `./mink/`) — differential IK for arm + hand planning
-- `pyserial` — real-hand USB/serial communication
+### 2) Choose a profile
 
-To run without the mink planner (e.g., hardware-only use without simulation):
+| Goal | Python | Profile | Command |
+|:--|:--:|:--|:--|
+| Pure sim (minimal) | 3.12 | `sim-core` | `tools/setup_uv_env.sh --profile sim-core --python 3.12 --env .venv312` |
+| Sim hand-only (+mink, no serial deps) | 3.12 | `sim-hand` | `tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312` |
+| Sim + UR5 | 3.12 | `sim-ur5` | `tools/setup_uv_env.sh --profile sim-ur5 --python 3.12 --env .venv312` |
+| Sim + H1-2 | 3.12 | `sim-h12` | `tools/setup_uv_env.sh --profile sim-h12 --python 3.12 --env .venv312` |
+| Sim + H1-2 + UR5 | 3.12 | `sim-h12-ur5` | `tools/setup_uv_env.sh --profile sim-h12-ur5 --python 3.12 --env .venv312` |
+| Real hand + UR5 (+ROS workflow) | 3.10 | `real-ur5-ros` | `tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310 --telemetry` |
+| Real H1-2 arm only (+ROS workflow) | 3.10 | `real-h12-ros` | `tools/setup_uv_env.sh --profile real-h12-ros --python 3.10 --env .venv310 --telemetry` |
+| Real H1-2 + real hand (+ROS workflow) | 3.10 | `real-h12-hand-ros` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
+
+### 3) Run with the matching environment
+
 ```bash
-uv run python -m rh56_controller.grasp_viz --no-mink
+# Sim / non-ROS workflows
+source .venv312/bin/activate
+uv run python -m rh56_controller.grasp_viz
+
+# ROS2 Humble workflows (Python 3.10)
+source /opt/ros/humble/setup.bash
+source .venv310/bin/activate
+uv run python -m rh56_controller.grasp_viz --ros-sync
 ```
+
+### 4) Quick env switching
+
+```bash
+# switch to sim env
+source .venv312/bin/activate
+
+# switch to ROS env
+source /opt/ros/humble/setup.bash
+source .venv310/bin/activate
+```
+
+### 5) Environment variables (what you must set)
+
+For single-machine ROS usage, usually none are required beyond sourcing setup scripts.
+
+For multi-machine ROS (recommended for H1-2 real robot), set these on **both** machines:
+
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0   # choose one value and keep it identical on all hosts
+```
+
+For H1-2 bridge portability (only if your paths differ from defaults), set:
+
+```bash
+export RH56_H12_PYTHON=/usr/bin/python3.10
+export RH56_H12_SETUP_SCRIPTS=/opt/ros/humble/setup.bash:$HOME/ws_ctrl/install/setup.bash
+```
+
+Equivalent split form:
+
+```bash
+export RH56_H12_ROS_SETUP=/opt/ros/humble/setup.bash
+export RH56_H12_WS_SETUP=$HOME/ws_ctrl/install/setup.bash
+```
+
+### Optional: raw uv commands (without helper script)
+
+```bash
+# minimal sim
+UV_PROJECT_ENVIRONMENT=.venv312 uv sync
+
+# UR5 + real hand profile
+UV_PROJECT_ENVIRONMENT=.venv310 uv sync --extra real-ur5-ros --extra ros --extra telemetry
+```
+
+> ROS Python packages (`rclpy`, message interfaces) are provided by ROS distro tooling (`apt`/`rosdep`/`colcon`), not by pip.
 
 ### Grasp Planner — Quick Reference
 

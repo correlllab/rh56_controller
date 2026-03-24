@@ -337,6 +337,32 @@ Or add the ROS2 site-packages to `uv`'s environment via `.env`:
 PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH
 ```
 
+### H12 proxy portability overrides
+
+`h12_bridge.py` now supports environment overrides so different machines/workspaces
+can launch the ROS proxy without editing code:
+
+```bash
+# Python executable for h12_ros_proxy subprocess
+export RH56_H12_PYTHON=/usr/bin/python3.10
+
+# Option A: explicit ordered list of setup scripts (':' separated)
+export RH56_H12_SETUP_SCRIPTS=/opt/ros/humble/setup.bash:$HOME/ws_ctrl/install/setup.bash
+
+# Option B: set individually
+export RH56_H12_ROS_SETUP=/opt/ros/humble/setup.bash
+export RH56_H12_WS_SETUP=$HOME/ws_ctrl/install/setup.bash
+```
+
+What is required vs optional:
+
+- **Required**: `RH56_H12_PYTHON` only if `/usr/bin/python3.10` is not valid on your host.
+- **Required**: setup-script override only if defaults do not exist (`/opt/ros/humble/setup.bash`, `$HOME/ws_ctrl/install/setup.bash`).
+- **Optional**: none, when defaults are valid and your shell already has ROS env sourced.
+
+If none of the configured/default setup scripts exist, the bridge falls back to the
+current environment and logs a warning.
+
 ---
 
 ## Real-World Setup & Networking (Laptop GUI + Robot Controllers)

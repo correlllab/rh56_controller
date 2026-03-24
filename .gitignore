@@ -15,6 +15,13 @@ paper/
 # Build artifacts
 rh56_controller.egg-info/
 *.egg-info/
+build/
+install/
+log/
+*.colcon*
+
+# Local workspace artifacts
+.claude/
 
 # FK cache (auto-regenerated from XML on first run)
 **/.fk_cache.npz

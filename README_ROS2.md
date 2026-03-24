@@ -1,6 +1,6 @@
 # ROS2 One-Stop Setup and Run Guide
 
-This guide standardizes the project on a single Python 3.10 `uv` environment for ROS2 Humble workflows.
+This guide standardizes ROS2 Humble workflows on the Python 3.10 profile environment (`.venv310`).
 
 ## 1. Prerequisites
 
@@ -25,13 +25,12 @@ sudo apt update
 sudo apt install -y librtde librtde-dev
 ```
 
-## 2. Create the single uv Python 3.10 environment
+## 2. Create the ROS profile environment (Python 3.10)
 
 From repo root:
 ```bash
 cd /home/humanoid/Programs/rh56_controller
-uv venv --python 3.10 .venv310
-UV_PROJECT_ENVIRONMENT=.venv310 uv sync
+tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310 --telemetry
 ```
 
 Or run the helper:
@@ -71,6 +70,32 @@ source install/setup.bash
 Verify package discovery:
 ```bash
 ros2 pkg list | grep -E '^(rh56_controller|magpie_force_control_ros)$'
+```
+
+## 3.1 Required environment variables
+
+For single-machine ROS usage, sourcing setup scripts is typically enough.
+
+For multi-machine ROS networking, set these on every host participating in DDS:
+
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export ROS_DOMAIN_ID=0
+```
+
+If you use H1-2 via `H12Bridge` and your machine paths differ from defaults, set:
+
+```bash
+export RH56_H12_PYTHON=/usr/bin/python3.10
+export RH56_H12_SETUP_SCRIPTS=/opt/ros/humble/setup.bash:$HOME/ws_ctrl/install/setup.bash
+```
+
+Alternative split form:
+
+```bash
+export RH56_H12_ROS_SETUP=/opt/ros/humble/setup.bash
+export RH56_H12_WS_SETUP=$HOME/ws_ctrl/install/setup.bash
 ```
 
 ## 4. Build C++ force controller binary
@@ -190,8 +215,8 @@ source install/setup.bash
 4. Concurrent UR5 control conflicts:
 - Use motion arbiter and avoid simultaneously commanding UR5 from multiple nodes.
 
-5. `No module named 'anyskin'` in grasp viz:
-- Re-run `./tools/setup_ros2_uv310.sh` to install runtime deps into `.venv310`.
+5. `No module named 'serial'` in grasp viz:
+- Re-run `./tools/setup_ros2_uv310.sh` (or `tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310`) to install runtime deps into `.venv310`.
 
 6. `enable_hand_driver:=true` but `custom_ros_messages` not available:
 - `rh56_system.launch.py` now logs a warning and skips `rh56_driver` instead of crashing.

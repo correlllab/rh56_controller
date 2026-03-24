@@ -2,6 +2,11 @@
 
 ## Quick Reference
 
+Environment recommendation:
+- Use `.venv312` for sim-only workflows (`sim-core`, `sim-hand`, `sim-ur5`, `sim-h12`).
+- Use `.venv310` + `source /opt/ros/humble/setup.bash` for ROS2 Humble workflows.
+- Helper: `tools/setup_uv_env.sh --profile <name> --python <3.10|3.12> --env .venvXXX`
+
 ```bash
 ## the below four uv-run commands also work gracefully without uv installation, mink just won't be enabled
 # Grasp planner (no hardware); mink IK comparison loaded by default
@@ -11,7 +16,7 @@ uv run python -m rh56_controller.grasp_viz
 uv run python -m rh56_controller.grasp_viz --port /dev/ttyUSB0
 
 # grasp planner + real hand + real robot + ip
-uv run python -m rh56_controller.grasp_viz --port /dev/ttyUSB0 --real-robot --ur5-ip 192.168.0.4
+uv run python -m rh56_controller.grasp_viz --robot --port /dev/ttyUSB0 --real-robot --ur5-ip 192.168.0.4
 
 # Grasp planner + UR5 robot arm (enables Robot: Ours / Robot: Mink buttons)
 uv run python -m rh56_controller.grasp_viz --robot

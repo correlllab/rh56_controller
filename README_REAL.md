@@ -37,6 +37,11 @@ git submodule update --init --recursive
 uv sync --extra real-robot
 ```
 
+Equivalent helper command:
+```bash
+tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312 --telemetry
+```
+
 This installs `magpie_control` (from `./magpie_control/`), `spatialmath`, and `ur_rtde` in addition to the base packages.
 
 > **Note:** `ur_rtde` is a native extension.  If `uv sync` fails to build it, install it via pip into the venv:
