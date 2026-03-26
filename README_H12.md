@@ -170,8 +170,9 @@ directly into the Pinocchio model).  This is the correct mode for sim-only ROS t
 # Terminal 1 — h12_ros2_controller (real robot mode, sourced workspace):
 python h12_ros2_controller/ros2/frame_task_server.py --sport
 
-# Terminal 2 — grasp_viz:
-uv run python -m rh56_controller.grasp_viz --h12 --real-h12 --port /dev/ttyUSB0 --hand-id 1
+# Terminal 2 — grasp_viz (source both ROS setups first):
+source /opt/ros/humble/setup.bash && source ~/ws_ctrl/install/setup.bash
+UV_PROJECT_ENVIRONMENT=.venv310 uv run python -m rh56_controller.grasp_viz --h12 --real-h12
 ```
 
 For the left physical RH56 hand on the same serial bus, use `--hand-id 2`.
@@ -199,7 +200,8 @@ For the left physical RH56 hand on the same serial bus, use `--hand-id 2`.
 # Use dual_arm_server instead:
 python h12_ros2_controller/ros2/dual_arm_server.py --sport
 
-uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
+source /opt/ros/humble/setup.bash && source ~/ws_ctrl/install/setup.bash
+UV_PROJECT_ENVIRONMENT=.venv310 uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
 ```
 
 The `H12Bridge.send_dual_arm()` sends to the `/dual_arm` action.
@@ -320,48 +322,42 @@ source install/setup.bash
 
 ### Run with ROS2
 
-`grasp_viz` itself does **not** call `rclpy.init()` at startup.  `H12Bridge.connect()`
-calls it lazily when `--real-h12` or `--h12-ros` is given.  Because `uv run` creates
-an isolated Python environment, the ROS2 Python packages must be on the system path.
-One reliable way:
+`H12Bridge` imports `rclpy` directly — **no subprocess bridge**.  This means:
+
+1. `rclpy` must be importable in the Python environment you launch from.
+2. **Both** the base ROS setup **and** the `ws_ctrl` workspace setup must be sourced
+   before launching — sourcing only `/opt/ros/humble/setup.bash` is not enough.
+
+**Verified working command (on this machine):**
 
 ```bash
-source ~/ros2_ws/install/setup.bash
-uv run --active python -m rh56_controller.grasp_viz --h12 --real-h12
+source /opt/ros/humble/setup.bash
+source ~/ws_ctrl/install/setup.bash
+UV_PROJECT_ENVIRONMENT=.venv310 uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
 ```
 
-Or add the ROS2 site-packages to `uv`'s environment via `.env`:
+`UV_PROJECT_ENVIRONMENT=.venv310` tells uv to use the Python 3.10 virtual environment
+(`.venv310/`) where mujoco, mink, and scipy are installed, and which gains access to
+`rclpy` / `geometry_msgs` / `sensor_msgs` via the `PYTHONPATH` set by the ROS setup scripts.
 
-```
-# .env (project root)
-PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH
-```
-
-### H12 proxy portability overrides
-
-`h12_bridge.py` now supports environment overrides so different machines/workspaces
-can launch the ROS proxy without editing code:
-
-```bash
-# Python executable for h12_ros_proxy subprocess
-export RH56_H12_PYTHON=/usr/bin/python3.10
-
-# Option A: explicit ordered list of setup scripts (':' separated)
-export RH56_H12_SETUP_SCRIPTS=/opt/ros/humble/setup.bash:$HOME/ws_ctrl/install/setup.bash
-
-# Option B: set individually
-export RH56_H12_ROS_SETUP=/opt/ros/humble/setup.bash
-export RH56_H12_WS_SETUP=$HOME/ws_ctrl/install/setup.bash
-```
-
-What is required vs optional:
-
-- **Required**: `RH56_H12_PYTHON` only if `/usr/bin/python3.10` is not valid on your host.
-- **Required**: setup-script override only if defaults do not exist (`/opt/ros/humble/setup.bash`, `$HOME/ws_ctrl/install/setup.bash`).
-- **Optional**: none, when defaults are valid and your shell already has ROS env sourced.
-
-If none of the configured/default setup scripts exist, the bridge falls back to the
-current environment and logs a warning.
+> **Why does sourcing `ws_ctrl/install/setup.bash` matter?**
+>
+> The workspace overlay configures the DDS (CycloneDDS) participant — setting the correct
+> RMW implementation, network interface, and discovery peers.  Without it, rclpy can
+> create nodes and call action servers (which use direct point-to-point connections) but
+> **topic subscriptions silently receive no messages**: the DDS participant cannot join
+> the multicast group used by `dual_arm_server`'s publishers.  Sourcing the workspace
+> overlay brings the DDS configuration into alignment so `/right_ee_pose` and
+> `/left_ee_pose` callbacks fire correctly.
+>
+> **Why does `H12Bridge` create a 0.5 s timer that does nothing?**
+>
+> With CycloneDDS + `MultiThreadedExecutor`, if the executor's wait-set contains only
+> subscriptions and no timers, the wait-set is never internally woken up — subscription
+> callbacks never fire even though the topic is publishing.  A silent heartbeat timer
+> forces the wait-set to wake at least twice per second, after which the executor
+> processes any pending subscription data.  This is a known quirk of how rclpy maps
+> onto CycloneDDS on Ubuntu 22.04 / Humble.
 
 ---
 

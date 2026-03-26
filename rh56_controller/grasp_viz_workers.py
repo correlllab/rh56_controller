@@ -128,6 +128,15 @@ _H12_LEFT_HOME_Q = np.array([-0.3, -0.2, 0.0, 1.4, 0.0, 0.0, 0.0])
 # Midplane: Y > 0 → left side, Y < 0 → right side (H1-2 world frame, robot faces +X)
 _H12_MIDPLANE_Y = 0.0
 
+# H12 pelvis frame convention: +Y forward, +X right.
+# Grasp-planner world frame convention: +X forward, +Y left.
+# Apply to positions/rotations read from /right_ee_pose or /left_ee_pose (pelvis → world).
+# Inverse (world → pelvis) is simply the transpose (rotation matrix is orthogonal).
+_R_PELVIS_TO_WORLD = np.array([[ 0., 1., 0.],
+                                [-1., 0., 0.],
+                                [ 0., 0., 1.]])   # Rz(-90°)
+_R_WORLD_TO_PELVIS = _R_PELVIS_TO_WORLD.T         # Rz(+90°)
+
 # Colour palette per finger (matplotlib / tkinter)
 FINGER_COLORS = {
     "thumb":  "#e74c3c",

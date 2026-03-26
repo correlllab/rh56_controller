@@ -364,7 +364,7 @@ class GraspVizCore:
     # Sim2Real
     # ------------------------------------------------------------------
     def _send_real_hand(self) -> None:
-        if self._hand is None or not self._send_real or self._result is None:
+        if (self._hand is None and self._h12_arm is None) or not self._send_real or self._result is None:
             return
         if self._grasp_hand_locked:
             return
@@ -393,10 +393,17 @@ class GraspVizCore:
             real_cmd[2] = 1000
             real_cmd[3] = 1000
 
-        try:
-            self._hand.angle_set(real_cmd)
-        except Exception as exc:
-            _log.warning("angle_set failed: %s", exc)
+        if self._h12_arm is not None:
+            arm = "right" if self._active_arm() == 0 else "left"
+            try:
+                self._h12_arm.send_hand_cmd([v / 1000.0 for v in real_cmd], arm=arm)
+            except Exception as exc:
+                _log.warning("H12 send_hand_cmd failed: %s", exc)
+        else:
+            try:
+                self._hand.angle_set(real_cmd)
+            except Exception as exc:
+                _log.warning("angle_set failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Plane / transform helpers
@@ -824,9 +831,11 @@ class GraspVizCore:
             R_wrist = R_full @ _H12_LEFT_R_HAND_TO_WRIST
             p_wrist = p_base + R_full @ _H12_LEFT_T_HAND_TO_WRIST
             frame   = "left_wrist_yaw_link"
+        # Convert from planner world frame (+X forward) → H12 pelvis frame (+Y forward)
+        from .grasp_viz_workers import _R_WORLD_TO_PELVIS
         T = np.eye(4)
-        T[:3, :3] = R_wrist
-        T[:3,  3] = p_wrist
+        T[:3, :3] = _R_WORLD_TO_PELVIS @ R_wrist
+        T[:3,  3] = _R_WORLD_TO_PELVIS @ p_wrist
         return T, frame
 
     def _h12_finger_cmd(self, r: "ClosureResult"):
@@ -887,17 +896,18 @@ class GraspVizCore:
         from .grasp_viz_workers import (
             _H12_R_WRIST_TO_HAND, _H12_T_WRIST_TO_HAND,
             _H12_LEFT_R_WRIST_TO_HAND, _H12_LEFT_T_WRIST_TO_HAND,
+            _R_PELVIS_TO_WORLD,
         )
         R_wrist_to_hand = _H12_R_WRIST_TO_HAND if arm == 0 else _H12_LEFT_R_WRIST_TO_HAND
         T_wrist_to_hand = _H12_T_WRIST_TO_HAND if arm == 0 else _H12_LEFT_T_WRIST_TO_HAND
 
-        world_T_wrist = self._h12_arm.get_wrist_pose(frame)
-        if world_T_wrist is None:
+        pelvis_T_wrist = self._h12_arm.get_wrist_pose(frame)
+        if pelvis_T_wrist is None:
             return {}
 
-        # Convert wrist pose → hand-base pose
-        R_wrist = world_T_wrist[:3, :3]
-        p_wrist = world_T_wrist[:3,  3]
+        # H12 publishes in pelvis frame (+Y forward). Convert to planner world frame (+X forward).
+        R_wrist = _R_PELVIS_TO_WORLD @ pelvis_T_wrist[:3, :3]
+        p_wrist = _R_PELVIS_TO_WORLD @ pelvis_T_wrist[:3,  3]
         R_hand  = R_wrist @ R_wrist_to_hand
         p_hand  = p_wrist + R_wrist @ T_wrist_to_hand
 

@@ -313,10 +313,10 @@ class GraspVizUI(GraspVizCore):
                   command=self._open_force_control_ui).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
-        # Send to Real checkbox
-        if self._hand is not None:
+        # Send to Real checkbox (serial hand or H12 ROS hand)
+        if self._hand is not None or getattr(self, "_h12_arm", None) is not None:
             self._send_real_var = tk.BooleanVar(value=self._send_real)
-            ttk.Checkbutton(outer, text="Send to Real",
+            ttk.Checkbutton(outer, text="Send Hand (Real)",
                             variable=self._send_real_var,
                             command=self._on_send_real).grid(
                 row=r, column=0, columnspan=2, sticky="w"); r += 1
