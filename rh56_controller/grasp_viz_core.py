@@ -17,9 +17,13 @@ to add interactive controls.
 import logging
 import math
 import multiprocessing
+import os
 import queue
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Dict
 
 import numpy as np
@@ -187,6 +191,9 @@ class GraspVizCore:
         _mp2 = multiprocessing.get_context("fork")
         self._real_q_arr    = _mp2.Array("d", 6)
         self._real_tracking = _mp2.Value("b", 0)
+        self._h12_right_q_arr = _mp2.Array("d", 7)
+        self._h12_left_q_arr  = _mp2.Array("d", 7)
+        self._h12_real_tracking = _mp2.Value("b", 0)
 
         # Thread-safe status queue (executor/arm threads → UI poll loop)
         self._status_queue: queue.Queue = queue.Queue()
@@ -194,6 +201,7 @@ class GraspVizCore:
         self._init_real_arm(real_robot, ur5_ip, ur5_speed)
         self._init_executor()
         self._init_real_h12(real_h12, h12_ros)
+        self._h12_gravity_comp_proc: Optional[subprocess.Popen] = None
 
         # Optional in-process ROS2 bridge (state publish + command subscribe)
         self._ros_bridge = None
@@ -308,6 +316,12 @@ class GraspVizCore:
                 self._ros_bridge.stop()
             except Exception as e:
                 _log.warning("Error stopping ROS bridge: %s", e)
+
+        # 2c. Stop H1-2 gravity compensation subprocess if active
+        try:
+            self.stop_h12_gravity_compensation()
+        except Exception as e:
+            _log.warning("Error stopping H1-2 gravity compensation: %s", e)
 
         # 3. Close the Real Robot connection (Crucial for UR5)
         if self._arm is not None:
@@ -550,13 +564,17 @@ class GraspVizCore:
     # ------------------------------------------------------------------
     def _build_ctrl_array(self, r: ClosureResult,
                            finger_ctrl: Optional[Dict] = None) -> np.ndarray:
-        gz    = self._grasp_z
-        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
-        if self._robot_mode or self._h12_mode:
-            wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
         fc = finger_ctrl if finger_ctrl is not None else r.ctrl_values
-        R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
-        rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_full)
+        if self._h12_mode:
+            wbase = np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
+            rot_x, rot_y, rot_z = _mat_to_xyz_euler(self._plane_R_matrix())
+        else:
+            gz    = self._grasp_z
+            wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+            if self._robot_mode:
+                wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
+            R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
+            rot_x, rot_y, rot_z = _mat_to_xyz_euler(R_full)
         return np.array([
             wbase[0], wbase[1], wbase[2],
             rot_x, rot_y, rot_z,
@@ -718,7 +736,9 @@ class GraspVizCore:
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
                         sim_grasp_t=self._sim_grasp_t,
-                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers),
+                        real_right_q_arr=self._h12_right_q_arr,
+                        real_tracking=self._h12_real_tracking),
             daemon=True,
         )
         proc.start()
@@ -741,7 +761,9 @@ class GraspVizCore:
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
                         sim_grasp_t=self._sim_grasp_t,
-                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers),
+                        real_right_q_arr=self._h12_right_q_arr,
+                        real_tracking=self._h12_real_tracking),
             daemon=True,
         )
         proc.start()
@@ -788,7 +810,10 @@ class GraspVizCore:
                   self._h12_bimanual_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         sim_grasp_t=self._sim_grasp_t,
-                        ctrl_open_fingers=tuple(self._ctrl_open_fingers)),
+                        ctrl_open_fingers=tuple(self._ctrl_open_fingers),
+                        real_right_q_arr=self._h12_right_q_arr,
+                        real_left_q_arr=self._h12_left_q_arr,
+                        real_tracking=self._h12_real_tracking),
             daemon=True,
         )
         proc.start()
@@ -808,28 +833,104 @@ class GraspVizCore:
             if ok:
                 _log.info("H12Bridge connected (ROS2).")
             else:
-                _log.warning("H12Bridge failed to connect — check that frame_task_server is running.")
+                _log.warning("H12Bridge failed to connect — check that dual_arm server is running.")
                 self._h12_arm = None
         except Exception as exc:
             _log.warning("H12Bridge setup failed: %s", exc)
 
+    def _resolve_h12_gravity_comp_script(self) -> Optional[Path]:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = (repo_root / "h12_ros2_controller" / "h12_ros2_controller"
+                  / "example" / "gravity_compensation.py")
+        return script if script.exists() else None
+
+    def _stream_h12_gc_output(self, proc: subprocess.Popen) -> None:
+        if proc.stdout is None:
+            return
+        try:
+            for line in proc.stdout:
+                msg = line.strip()
+                if msg:
+                    self._status_queue.put(f"[H1-2 GC] {msg}")
+        except Exception as exc:
+            _log.debug("H1-2 GC output stream ended: %s", exc)
+
+    def is_h12_gravity_comp_active(self) -> bool:
+        proc = self._h12_gravity_comp_proc
+        return proc is not None and proc.poll() is None
+
+    def start_h12_gravity_compensation(self, sport_mode: bool = True) -> bool:
+        if self.is_h12_gravity_comp_active():
+            self._update_status("H1-2 gravity compensation already active.")
+            return True
+
+        script = self._resolve_h12_gravity_comp_script()
+        if script is None:
+            self._update_status("H1-2 gravity compensation script not found.")
+            return False
+
+        workdir = script.parents[2]
+        mode_flag = "--sport" if sport_mode else "--debug"
+        cmd = [sys.executable, str(script), mode_flag]
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(workdir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+        except Exception as exc:
+            self._update_status(f"Failed to start H1-2 gravity compensation: {exc}")
+            return False
+
+        self._h12_gravity_comp_proc = proc
+        threading.Thread(
+            target=self._stream_h12_gc_output,
+            args=(proc,),
+            daemon=True,
+            name="h12-gravity-comp-log",
+        ).start()
+        self._update_status("H1-2 gravity compensation enabled.")
+        return True
+
+    def stop_h12_gravity_compensation(self) -> bool:
+        proc = self._h12_gravity_comp_proc
+        if proc is None:
+            return True
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            self._update_status("H1-2 gravity compensation disabled.")
+        self._h12_gravity_comp_proc = None
+        return True
+
+    def toggle_h12_gravity_compensation(self, sport_mode: bool = True) -> bool:
+        if self.is_h12_gravity_comp_active():
+            self.stop_h12_gravity_compensation()
+            return False
+        return self.start_h12_gravity_compensation(sport_mode=sport_mode)
+
     def _h12_arm_T(self, r: "ClosureResult"):
         """Compute 4×4 wrist target pose for a given closure result."""
-        from .grasp_viz_workers import _H12_R_HAND_TO_WRIST, _H12_T_HAND_TO_WRIST
-        from .grasp_viz_workers import _H12_LEFT_R_HAND_TO_WRIST, _H12_LEFT_T_HAND_TO_WRIST
-        R_plane = self._plane_R_matrix()
-        R_tilt  = ClosureResult._rot_matrix(r.base_tilt_y)
-        R_full  = R_plane @ R_tilt
-        p_base  = r.world_base(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
-        p_base  = p_base + np.array([self._grasp_x, self._grasp_y, 0.0])
+        R_wrist = self._plane_R_matrix()
+        p_wrist = np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
         arm = self._active_arm()
         if arm == 0:
-            R_wrist = R_full @ _H12_R_HAND_TO_WRIST
-            p_wrist = p_base + R_full @ _H12_T_HAND_TO_WRIST
             frame   = "right_wrist_yaw_link"
         else:
-            R_wrist = R_full @ _H12_LEFT_R_HAND_TO_WRIST
-            p_wrist = p_base + R_full @ _H12_LEFT_T_HAND_TO_WRIST
             frame   = "left_wrist_yaw_link"
         # Convert from planner world frame (+X forward) → H12 pelvis frame (+Y forward)
         from .grasp_viz_workers import _R_WORLD_TO_PELVIS
@@ -855,17 +956,13 @@ class GraspVizCore:
         if self._h12_arm is None:
             self._update_status("H12 arm not connected.")
             return False
+        if self.is_h12_gravity_comp_active():
+            self._update_status("H1-2 gravity compensation is active. Disable it before sending arm goals.")
+            return False
         T, frame = self._h12_arm_T(r)
         self._update_status(f"H1-2 arm → {frame}…")
         try:
             ok = self._h12_arm.send_arm(frame, T)
-            if not ok:
-                arm = self._active_arm()
-                self._update_status("/frame_task unavailable; trying /dual_arm fallback…")
-                if arm == 0:
-                    ok = self._h12_arm.send_dual_arm(right_T=T, left_T=None)
-                else:
-                    ok = self._h12_arm.send_dual_arm(right_T=None, left_T=T)
             self._update_status("H1-2 arm move done." if ok else "H1-2 arm move failed.")
             return ok
         except Exception as exc:
@@ -873,15 +970,15 @@ class GraspVizCore:
             return False
 
     def _send_h12_arm(self) -> None:
-        """Send current grasp pose to real H1-2 via ROS2 frame_task action."""
+        """Send current grasp pose to real H1-2 via ROS2 actions."""
         if self._h12_arm is None:
-            self._update_status("H12 arm not connected. Start frame_task_server first.")
+            self._update_status("H12 arm not connected. Start dual_arm server first.")
             return
         if self._result is None:
             return
         self._h12_send_arm_for_result(self._result)
 
-    def decode_h12_pose_to_grasp_params(self, current_result=None) -> dict:
+    def decode_h12_pose_to_grasp_params(self, current_result=None, include_offsets: bool = True) -> dict:
         """
         Read the current H1-2 wrist pose via ROS2 TF and decode it into
         grasp_viz_core slider parameters.
@@ -908,29 +1005,62 @@ class GraspVizCore:
         # H12 publishes in pelvis frame (+Y forward). Convert to planner world frame (+X forward).
         R_wrist = _R_PELVIS_TO_WORLD @ pelvis_T_wrist[:3, :3]
         p_wrist = _R_PELVIS_TO_WORLD @ pelvis_T_wrist[:3,  3]
-        R_hand  = R_wrist @ R_wrist_to_hand
-        p_hand  = p_wrist + R_wrist @ T_wrist_to_hand
+        if include_offsets:
+            R_ref = R_wrist @ R_wrist_to_hand
+            p_ref = p_wrist + R_wrist @ T_wrist_to_hand
+        else:
+            R_ref = R_wrist
+            p_ref = p_wrist
 
         # Recover plane angles and slider grasp_z (mirrors UR5 decode logic)
-        grasp_x = float(p_hand[0])
-        grasp_y = float(p_hand[1])
-        grasp_z = float(p_hand[2])
+        grasp_x = float(p_ref[0])
+        grasp_y = float(p_ref[1])
+        grasp_z = float(p_ref[2])
         plane_rx = plane_ry = plane_rz = 0.0
-        if current_result is not None:
+        if not include_offsets:
+            try:
+                plane_rx, plane_ry, plane_rz = _mat_to_xyz_euler(R_ref)
+            except Exception as exc:
+                _log.warning("H12 wrist orientation decode failed: %s", exc)
+        elif current_result is not None:
             try:
                 R_tilt  = ClosureResult._rot_matrix(current_result.base_tilt_y)
-                R_plane = R_hand @ R_tilt.T
+                R_plane = R_ref @ R_tilt.T
                 plane_rx, plane_ry, plane_rz = _mat_to_xyz_euler(R_plane)
-                mid_w   = R_hand @ current_result.midpoint
-                grasp_x = float(p_hand[0]) + mid_w[0]
-                grasp_y = float(p_hand[1]) + mid_w[1]
-                grasp_z = float(p_hand[2]) + mid_w[2]
+                mid_w   = R_ref @ current_result.midpoint
+                grasp_x = float(p_ref[0]) + mid_w[0]
+                grasp_y = float(p_ref[1]) + mid_w[1]
+                grasp_z = float(p_ref[2]) + mid_w[2]
             except Exception as exc:
                 _log.warning("H12 plane decode failed: %s", exc)
         return {
             "grasp_x": grasp_x, "grasp_y": grasp_y, "grasp_z": grasp_z,
             "plane_rx": plane_rx, "plane_ry": plane_ry, "plane_rz": plane_rz,
         }
+
+    def seed_h12_joints_from_bridge(self, timeout: float = 1.0) -> bool:
+        """Read /joint_states and seed shared right/left arm joint arrays for H1-2 viewers."""
+        if self._h12_arm is None:
+            return False
+        try:
+            from .grasp_viz_workers import _H12_ARM_JOINTS, _H12_LEFT_ARM_JOINTS
+            qmap = self._h12_arm.get_joint_states(timeout=timeout)
+            if not qmap:
+                self._h12_real_tracking.value = 0
+                return False
+            right_vals = [qmap.get(name) for name in _H12_ARM_JOINTS]
+            left_vals = [qmap.get(name) for name in _H12_LEFT_ARM_JOINTS]
+            if any(v is None for v in right_vals + left_vals):
+                self._h12_real_tracking.value = 0
+                return False
+            self._h12_right_q_arr[:] = [float(v) for v in right_vals]
+            self._h12_left_q_arr[:] = [float(v) for v in left_vals]
+            self._h12_real_tracking.value = 1
+            return True
+        except Exception as exc:
+            _log.warning("Failed to seed H1-2 joints from bridge: %s", exc)
+            self._h12_real_tracking.value = 0
+            return False
 
     def _launch_viewer(self) -> None:
         if self._h12_mode and self._bimanual_mode:

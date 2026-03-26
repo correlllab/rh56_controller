@@ -176,7 +176,10 @@ class GraspVizUI(GraspVizCore):
         # Grasp Z
         _has_arm = self._robot_mode or self._h12_mode
         z_max = 400.0 if _has_arm else 200.0
-        z_min = 0.0   if _has_arm else -200.0
+        if self._h12_mode:
+            z_min = -400.0
+        else:
+            z_min = 0.0 if _has_arm else -200.0
         r = self._add_slider_row(outer, r, "Grasp Z (mm):",
                                  z_min, z_max, self._grasp_z * 1000, 5.0,
                                  "_var_z", "_sl_z", "_ent_z", self._on_z)
@@ -454,6 +457,16 @@ class GraspVizUI(GraspVizCore):
         self._btn_setpose_h12.grid(row=r, column=0, columnspan=2, sticky="ew",
                                    padx=2, pady=1); r += 1
 
+        self._btn_gravity_h12 = tk.Button(
+            parent,
+            text="Gravity Comp",
+            command=self._on_toggle_h12_gravity_comp,
+            state="normal" if _h12_ok else "disabled",
+        )
+        self._btn_gravity_h12.grid(row=r, column=0, columnspan=2, sticky="ew",
+                                   padx=2, pady=1); r += 1
+        self._refresh_h12_gravity_button()
+
         ttk.Separator(parent, orient="horizontal").grid(
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
 
@@ -466,7 +479,7 @@ class GraspVizUI(GraspVizCore):
                              padx=2, pady=4); r += 1
 
         if not _h12_ok:
-            self._update_status("No H1-2 connection. Start frame_task_server + use --real-h12.")
+            self._update_status("No H1-2 connection. Start dual_arm server + use --real-h12.")
 
         ttk.Separator(parent, orient="horizontal").grid(
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
@@ -518,6 +531,28 @@ class GraspVizUI(GraspVizCore):
         self._update_status("Sending H1-2 arm…")
         threading.Thread(target=self._send_h12_arm, daemon=True,
                          name="send-h12").start()
+
+    def _refresh_h12_gravity_button(self):
+        if not hasattr(self, "_btn_gravity_h12"):
+            return
+        active = self.is_h12_gravity_comp_active()
+        if active:
+            self._btn_gravity_h12.config(text="GC ACTIVE", bg="#ff4444", fg="white")
+        else:
+            self._btn_gravity_h12.config(text="Gravity Comp", bg="#f0f0f0", fg="black")
+
+    def _on_toggle_h12_gravity_comp(self):
+        if getattr(self, "_h12_arm", None) is None:
+            self._update_status("No H1-2 connection.")
+            return
+        self._update_status("Toggling H1-2 gravity compensation…")
+
+        def _do_toggle():
+            self.toggle_h12_gravity_compensation(sport_mode=True)
+            self._status_queue.put("__refresh_h12_gravity_btn__")
+
+        threading.Thread(target=_do_toggle, daemon=True,
+                         name="toggle-h12-gravity").start()
 
     def _on_grasp_h12(self):
         """Execute grasp on real H1-2: send arm then close fingers."""
@@ -657,10 +692,11 @@ class GraspVizUI(GraspVizCore):
             return
         with self._state_lock:
             r = self._result
-        params = self.decode_h12_pose_to_grasp_params(current_result=r)
+        params = self.decode_h12_pose_to_grasp_params(current_result=r, include_offsets=False)
         if not params:
-            self._update_status("Failed to read H1-2 arm pose — is frame_task_server running?")
+            self._update_status("Failed to read H1-2 arm pose — is dual_arm server running?")
             return
+        q_ok = self.seed_h12_joints_from_bridge(timeout=1.0)
         self._grasp_x  = params["grasp_x"]
         self._grasp_y  = params["grasp_y"]
         self._grasp_z  = params["grasp_z"]
@@ -673,7 +709,7 @@ class GraspVizUI(GraspVizCore):
         if hasattr(self, "_sl_y"):
             self._sl_y.set(self._grasp_y * 1000)
         if hasattr(self, "_sl_z"):
-            self._sl_z.set(np.clip(self._grasp_z * 1000, 0.0, 2000.0))
+            self._sl_z.set(np.clip(self._grasp_z * 1000, -400.0, 400.0))
         if hasattr(self, "_sl_rx"):
             self._sl_rx.set(np.degrees(self._plane_rx))
         if hasattr(self, "_sl_ry"):
@@ -682,9 +718,14 @@ class GraspVizUI(GraspVizCore):
             self._sl_rz.set(np.degrees(self._plane_rz))
         self._push_viewer_ctrl()
         self._schedule_plot_only()
-        self._update_status(
-            f"Pose set: hand({params['grasp_x']*1000:.0f},"
-            f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm")
+        if q_ok:
+            self._update_status(
+                f"Pose set: wrist({params['grasp_x']*1000:.0f},"
+                f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm + joint seed")
+        else:
+            self._update_status(
+                f"Pose set: wrist({params['grasp_x']*1000:.0f},"
+                f"{params['grasp_y']*1000:.0f},{params['grasp_z']*1000:.0f})mm (no joint_states)")
 
     # ------------------------------------------------------------------
     # Status queue poll (called every _POLL_MS ms via root.after)
@@ -704,6 +745,8 @@ class GraspVizUI(GraspVizCore):
                     self._manual_teach_override = False
                     if hasattr(self, "_btn_teach"):
                         self._btn_teach.config(text="Teach Mode", bg="#f0f0f0")
+                elif msg == "__refresh_h12_gravity_btn__":
+                    self._refresh_h12_gravity_button()
                 else:
                     self._append_status(msg)
         except queue.Empty:
