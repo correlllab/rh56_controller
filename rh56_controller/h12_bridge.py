@@ -1,289 +1,194 @@
 """
-h12_bridge.py — ROS2 client bridge for real H1-2 arm control.
+h12_bridge.py — Direct rclpy bridge for H1-2 arm + hand control.
 
-Wraps the h12_ros2_controller ROS2 action servers:
-  - /frame_task    (FrameTask action)   — single arm: right or left
-  - /dual_arm      (DualArm action)     — bimanual (both arms simultaneously)
-  - /named_config  (NamedConfig action) — go to a named configuration
+Requires rclpy to be importable (source /opt/ros/humble/setup.bash before running).
 
-Because rclpy is only available for Python 3.10 and uv often runs Python 3.12,
-this bridge spawns h12_ros_proxy.py as a subprocess under Python 3.10
-(with ROS2 setup scripts sourced) and communicates via newline-delimited
-JSON over stdin/stdout.
+Run with:
+    source /opt/ros/humble/setup.bash
+    UV_PROJECT_ENVIRONMENT=.venv310 uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
 
-Portability overrides:
-    RH56_H12_PYTHON=/path/to/python3.10
-    RH56_H12_SETUP_SCRIPTS=/path/ros/setup.bash:/path/ws/install/setup.bash
-or:
-    RH56_H12_ROS_SETUP=/path/ros/setup.bash
-    RH56_H12_WS_SETUP=/path/ws/install/setup.bash
+Actions used:
+  /frame_task   (custom_ros_messages/FrameTask)  — single arm
+  /dual_arm     (custom_ros_messages/DualArm)    — bimanual
+  /named_config (custom_ros_messages/NamedConfig)
 
-Usage (from grasp_viz_core):
-    bridge = H12Bridge(bimanual=False)
-    bridge.connect()                   # spawns proxy; returns True on success
-    bridge.send_arm("right_wrist_yaw_link", T_4x4)
-    bridge.send_named_config("home")
-    bridge.disconnect()
+Topics subscribed:
+  /right_ee_pose  (geometry_msgs/PoseStamped)
+  /left_ee_pose   (geometry_msgs/PoseStamped)
+
+Topics published:
+  /right_hand_cmd  (std_msgs/Float64MultiArray)  — 6 floats, [0=close .. 1=open]
+  /left_hand_cmd   (std_msgs/Float64MultiArray)  — same
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import shlex
-import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Optional
 import numpy as np
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Locate proxy script and Python 3.10 interpreter
-# ---------------------------------------------------------------------------
-
-_PROXY_SCRIPT = str(Path(__file__).parent / "h12_ros_proxy.py")
-
-_DEFAULT_ROS_SETUP = "/opt/ros/humble/setup.bash"
-_DEFAULT_WS_SETUP = os.path.expanduser("~/ws_ctrl/install/setup.bash")
-_DEFAULT_PROXY_PYTHON = "/usr/bin/python3.10"
-
-
-def _configured_proxy_python() -> str:
-    """
-    Python executable used for the proxy subprocess.
-
-    Override with:
-      RH56_H12_PYTHON=/path/to/python3.10
-    """
-    return os.environ.get("RH56_H12_PYTHON", _DEFAULT_PROXY_PYTHON)
-
-
-def _configured_setup_scripts() -> list[str]:
-    """
-    Setup scripts to source before launching the ROS2 proxy.
-
-    Override options:
-      1) RH56_H12_SETUP_SCRIPTS="/path/a.sh:/path/b.sh"
-      2) RH56_H12_ROS_SETUP=/path/ros/setup.bash
-         RH56_H12_WS_SETUP=/path/ws/install/setup.bash
-    """
-    scripts_env = os.environ.get("RH56_H12_SETUP_SCRIPTS", "").strip()
-    if scripts_env:
-        candidates = [s for s in scripts_env.split(os.pathsep) if s]
-    else:
-        candidates = [
-            os.environ.get("RH56_H12_ROS_SETUP", _DEFAULT_ROS_SETUP),
-            os.environ.get("RH56_H12_WS_SETUP", _DEFAULT_WS_SETUP),
-        ]
-
-    scripts: list[str] = []
-    for script in candidates:
-        if script and Path(script).exists():
-            scripts.append(script)
-        elif script:
-            _log.warning("H12Bridge: setup script not found (skipping): %s", script)
-    return scripts
-
-
-def _build_proxy_env() -> dict:
-    """Return an os.environ copy with ROS2 paths injected."""
-    scripts = _configured_setup_scripts()
-    if not scripts:
-        _log.warning("H12Bridge: no valid setup scripts; using current environment only.")
-        return dict(os.environ)
-
-    source_cmd = " && ".join(
-        [f"source {shlex.quote(script)} 2>/dev/null" for script in scripts]
-    )
-    cmd = f"{source_cmd} && env"
-
-    try:
-        out = subprocess.check_output(
-            ["bash", "-c", cmd], text=True, timeout=10
-        )
-    except Exception as exc:
-        _log.warning("H12Bridge: could not source ROS env: %s", exc)
-        return dict(os.environ)
-
-    env = {}
-    for line in out.splitlines():
-        if "=" in line:
-            k, _, v = line.partition("=")
-            env[k] = v
-    # Merge with current env so PATH etc. are not lost
-    merged = dict(os.environ)
-    merged.update(env)
-    return merged
-
-
-# ---------------------------------------------------------------------------
-# H12Bridge
-# ---------------------------------------------------------------------------
 
 class H12Bridge:
     """
-    Thin proxy client for H1-2 arm control.
+    Direct rclpy client for H1-2 arm + Inspire hand control.
 
-    Spawns h12_ros_proxy.py under Python 3.10 and communicates via JSON
-    over stdin/stdout.  All action calls are synchronous within their own
-    thread — callers should use threading.Thread to avoid blocking the UI.
+    Call connect() once (requires rclpy importable), then use:
+      get_wrist_pose(frame_name)  → 4×4 np.ndarray or None
+      send_arm(frame_name, T)     → bool
+      send_dual_arm(right_T, left_T) → bool
+      send_hand_cmd(values, arm)  → None   (values: 6 floats in [0,1])
+      send_named_config(name)     → bool
+      disconnect()
     """
 
     def __init__(self, bimanual: bool = False) -> None:
         self._bimanual   = bimanual
-        self._proc: Optional[subprocess.Popen] = None
-        self._lock       = threading.Lock()
-        self._pending: dict[int, threading.Event] = {}
-        self._results:  dict[int, dict] = {}
-        self._msg_id    = 0
-        self._connected = False
-        self.last_error = ""
-        self._reader_thread: Optional[threading.Thread] = None
+        self._node       = None
+        self._executor   = None
+        self._spin_thread: Optional[threading.Thread] = None
+        self._connected  = False
+        self.last_error  = ""
+        self._ee_poses: dict[str, object] = {}
+        self._right_hand_pub = None
+        self._left_hand_pub  = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """Spawn the proxy subprocess and send 'connect'.  Returns True on success."""
         try:
-            env = _build_proxy_env()
-            proxy_python = _configured_proxy_python()
-            self._proc = subprocess.Popen(
-                [proxy_python, "-u", _PROXY_SCRIPT],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-                bufsize=1,  # line-buffered
-            )
-            _log.info("H12Bridge: launching proxy with %s", proxy_python)
+            import rclpy
+            from rclpy.node import Node
+            from rclpy.executors import MultiThreadedExecutor
+            from geometry_msgs.msg import PoseStamped
+            from std_msgs.msg import Float64MultiArray
+
+            if not rclpy.ok():
+                rclpy.init()
+
+            self._node = Node("grasp_viz_h12")
+
+            # Subscribe to EE poses published by dual_arm_server at 100 Hz.
+            # Only log the first message per side to avoid 100 Hz log flooding.
+            def _right_cb(msg):
+                if "right_wrist_yaw_link" not in self._ee_poses:
+                    _log.info("H12Bridge: /right_ee_pose first msg pos=[%.3f,%.3f,%.3f]",
+                              msg.pose.position.x, msg.pose.position.y, msg.pose.position.z)
+                self._ee_poses["right_wrist_yaw_link"] = msg
+            def _left_cb(msg):
+                if "left_wrist_yaw_link" not in self._ee_poses:
+                    _log.info("H12Bridge: /left_ee_pose first msg received")
+                self._ee_poses["left_wrist_yaw_link"] = msg
+            self._node.create_subscription(PoseStamped, "/right_ee_pose", _right_cb, 10)
+            self._node.create_subscription(PoseStamped, "/left_ee_pose",  _left_cb,  10)
+
+            # Joint states for IK seeding — optional, skip if sensor_msgs unavailable
+            try:
+                from sensor_msgs.msg import JointState
+                self._node.create_subscription(
+                    JointState, "/joint_states",
+                    lambda msg: setattr(self, "_joint_state_msg", msg), 10)
+            except ImportError:
+                _log.warning("H12Bridge: sensor_msgs not available, /joint_states disabled")
+
+            # Publishers for hand commands (hand_controller_node subscribes)
+            self._right_hand_pub = self._node.create_publisher(
+                Float64MultiArray, "/right_hand_cmd", 10)
+            self._left_hand_pub = self._node.create_publisher(
+                Float64MultiArray, "/left_hand_cmd", 10)
+
+            # Heartbeat timer: without at least one timer, some DDS/rclpy builds never
+            # wake the executor's wait-set for subscriptions — callbacks would silently
+            # never fire even though topics are publishing.
+            self._node.create_timer(0.5, lambda: None)
+
+            self._executor = MultiThreadedExecutor()
+            self._executor.add_node(self._node)
+
             self._connected = True
+            self._spin_thread = threading.Thread(
+                target=self._spin_loop, daemon=True, name="h12-spin")
+            self._spin_thread.start()
 
-            # Background thread to read proxy stdout
-            self._reader_thread = threading.Thread(
-                target=self._reader_loop, daemon=True, name="h12-proxy-reader")
-            self._reader_thread.start()
-
-            # Background thread to log proxy stderr
-            threading.Thread(
-                target=self._stderr_loop, daemon=True, name="h12-proxy-stderr"
-            ).start()
-
-            ok = self._call({"cmd": "connect"}, timeout=15.0)
-            if ok:
-                _log.info("H12Bridge: proxy connected (ROS2).")
-            else:
-                _log.warning("H12Bridge: proxy connect failed: %s", self.last_error)
-                self._connected = False
-            return ok
+            _log.info("H12Bridge: connected (ROS2 direct).")
+            return True
         except Exception as exc:
             self.last_error = str(exc)
             _log.warning("H12Bridge.connect failed: %s", exc)
             return False
 
-    def disconnect(self) -> None:
-        if self._connected and self._proc is not None:
-            try:
-                self._call({"cmd": "disconnect"}, timeout=3.0)
-            except Exception:
-                pass
-        self._connected = False
-        if self._proc is not None:
-            try:
-                self._proc.stdin.close()
-                self._proc.wait(timeout=3.0)
-            except Exception:
-                pass
-            self._proc = None
-
-    def _reader_loop(self):
-        """Read JSON replies from proxy stdout and wake waiting callers."""
+    def _spin_loop(self):
         try:
-            for line in self._proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    _log.debug("H12Bridge: bad proxy reply: %r", line)
-                    continue
-                msg_id = msg.get("id", -1)
-                with self._lock:
-                    self._results[msg_id] = msg
-                    ev = self._pending.get(msg_id)
-                if ev is not None:
-                    ev.set()
+            self._executor.spin()
         except Exception as exc:
-            _log.debug("H12Bridge reader loop exited: %s", exc)
-        finally:
-            self._connected = False
+            _log.error("H12Bridge spin loop crashed: %s", exc, exc_info=True)
 
-    def _stderr_loop(self):
+    def disconnect(self) -> None:
+        self._connected = False
+        if self._executor is not None:
+            try:
+                self._executor.shutdown()
+            except Exception:
+                pass
+        if self._node is not None:
+            try:
+                self._node.destroy_node()
+            except Exception:
+                pass
         try:
-            for line in self._proc.stderr:
-                _log.info("h12-proxy: %s", line.rstrip())
+            import rclpy
+            if rclpy.ok():
+                rclpy.shutdown()
         except Exception:
             pass
 
     # ------------------------------------------------------------------
-    # RPC helper
+    # Pose query (reads from cached topic subscription)
     # ------------------------------------------------------------------
 
-    def _next_id(self) -> int:
-        with self._lock:
-            self._msg_id += 1
-            return self._msg_id
+    def get_joint_states(self, timeout: float = 2.0) -> Optional[dict]:
+        """
+        Return latest joint states as {joint_name: angle_rad}, or None if not yet received.
+        Waits up to `timeout` seconds for the first message.
+        """
+        t0 = time.monotonic()
+        while self._joint_state_msg is None and time.monotonic() - t0 < timeout:
+            time.sleep(0.05)
+        msg = self._joint_state_msg
+        if msg is None:
+            return None
+        return {name: float(pos) for name, pos in zip(msg.name, msg.position)}
 
-    def _call_raw(self, msg: dict, timeout: float = 15.0) -> Optional[dict]:
-        """Send a command and return the full reply dict, or None on error/timeout."""
-        if self._proc is None or self._proc.poll() is not None:
-            self.last_error = "proxy process not running"
+    def get_wrist_pose(self, frame_name: str,
+                       base_frame: str = "pelvis",
+                       timeout: float = 5.0) -> Optional[np.ndarray]:
+        """Return 4×4 world→wrist transform (pelvis frame), or None on failure."""
+        from scipy.spatial.transform import Rotation
+
+        t0 = time.monotonic()
+        while frame_name not in self._ee_poses and time.monotonic() - t0 < timeout:
+            time.sleep(0.05)
+
+        msg = self._ee_poses.get(frame_name)
+        if msg is None:
+            self.last_error = f"No pose received for {frame_name} within {timeout}s"
+            _log.info("H12Bridge.get_wrist_pose FAILED: %s", self.last_error)
             return None
 
-        msg_id = self._next_id()
-        msg["id"] = msg_id
-
-        ev = threading.Event()
-        with self._lock:
-            self._pending[msg_id] = ev
-
-        try:
-            line = json.dumps(msg) + "\n"
-            self._proc.stdin.write(line)
-            self._proc.stdin.flush()
-        except Exception as exc:
-            self.last_error = str(exc)
-            with self._lock:
-                self._pending.pop(msg_id, None)
-            return None
-
-        if not ev.wait(timeout=timeout + 5.0):
-            self.last_error = f"timeout waiting for id={msg_id}"
-            with self._lock:
-                self._pending.pop(msg_id, None)
-                self._results.pop(msg_id, None)
-            return None
-
-        with self._lock:
-            result = self._results.pop(msg_id, {})
-            self._pending.pop(msg_id, None)
-
-        if not result.get("ok", False):
-            self.last_error = result.get("error", "unknown error")
-        return result
-
-    def _call(self, msg: dict, timeout: float = 15.0) -> bool:
-        """Send a command to the proxy and wait for its reply."""
-        result = self._call_raw(msg, timeout)
-        return result is not None and result.get("ok", False)
+        p = msg.pose.position
+        q = msg.pose.orientation
+        R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+        T = np.eye(4)
+        T[:3, :3] = R
+        T[:3,  3] = [p.x, p.y, p.z]
+        _log.info("H12Bridge.get_wrist_pose OK [%s]: pos=[%.3f, %.3f, %.3f]",
+                  frame_name, p.x, p.y, p.z)
+        return T
 
     # ------------------------------------------------------------------
     # Single-arm: FrameTask action
@@ -291,21 +196,34 @@ class H12Bridge:
 
     def send_arm(self, frame_name: str, T: np.ndarray,
                  timeout: float = 15.0) -> bool:
-        """
-        Move a single arm so that `frame_name` reaches pose `T` (4×4 matrix,
-        world frame).  Blocks until the action completes or times out.
+        try:
+            from rclpy.action import ActionClient
+            from custom_ros_messages.action import FrameTask
 
-        frame_name: "right_wrist_yaw_link" or "left_wrist_yaw_link"
-        """
-        if not self._connected:
-            _log.warning("H12Bridge not connected.")
+            client = ActionClient(self._node, FrameTask, "frame_task")
+            if not client.wait_for_server(timeout_sec=5.0):
+                self.last_error = "frame_task server not available"
+                _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
+                return False
+
+            pose = _mat_to_pose(T)
+            goal = FrameTask.Goal()
+            goal.frame_names   = [frame_name]
+            goal.frame_targets = [pose]
+
+            _log.info("H12Bridge.send_arm → %s pos=[%.3f, %.3f, %.3f]",
+                      frame_name, T[0, 3], T[1, 3], T[2, 3])
+            ok = _send_action(client, goal, timeout)
+            if ok:
+                _log.info("H12Bridge.send_arm OK")
+            else:
+                self.last_error = "goal rejected or timed out"
+                _log.warning("H12Bridge.send_arm FAILED")
+            return ok
+        except Exception as exc:
+            self.last_error = str(exc)
+            _log.warning("H12Bridge.send_arm FAILED: %s", exc)
             return False
-        return self._call({
-            "cmd": "send_arm",
-            "frame_name": frame_name,
-            "T": T.tolist(),
-            "timeout": timeout,
-        }, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Dual-arm: DualArm action
@@ -315,68 +233,120 @@ class H12Bridge:
                       right_T: Optional[np.ndarray],
                       left_T:  Optional[np.ndarray],
                       timeout: float = 15.0) -> bool:
-        """
-        Move both arms simultaneously via the /dual_arm action.
-        Pass None to leave an arm at its current pose.
-        """
-        if not self._connected:
-            _log.warning("H12Bridge not connected.")
-            return False
-        return self._call({
-            "cmd": "send_dual_arm",
-            "right_T": right_T.tolist() if right_T is not None else None,
-            "left_T":  left_T.tolist()  if left_T  is not None else None,
-            "timeout": timeout,
-        }, timeout=timeout)
-
-    # ------------------------------------------------------------------
-    # Pose query
-    # ------------------------------------------------------------------
-
-    def get_wrist_pose(self, frame_name: str,
-                       base_frame: str = "world",
-                       timeout: float = 5.0) -> Optional[np.ndarray]:
-        """
-        Return the current 4×4 world→wrist transform via ROS2 TF, or None on failure.
-
-        frame_name: "right_wrist_yaw_link" or "left_wrist_yaw_link"
-        """
-        if not self._connected:
-            _log.warning("H12Bridge not connected.")
-            return None
-        result = self._call_raw({
-            "cmd": "get_wrist_pose",
-            "frame_name": frame_name,
-            "base_frame": base_frame,
-            "timeout": timeout,
-        }, timeout=timeout)
-        if result is None or not result.get("ok"):
-            return None
         try:
-            return np.array(result["T"])
+            from rclpy.action import ActionClient
+            from custom_ros_messages.action import DualArm
+
+            client = ActionClient(self._node, DualArm, "dual_arm")
+            if not client.wait_for_server(timeout_sec=5.0):
+                self.last_error = "dual_arm server not available"
+                _log.warning("H12Bridge.send_dual_arm FAILED: %s", self.last_error)
+                return False
+
+            goal = DualArm.Goal()
+            if right_T is not None:
+                goal.right_target = _mat_to_pose(right_T)
+                goal.move_right   = True
+            if left_T is not None:
+                goal.left_target = _mat_to_pose(left_T)
+                goal.move_left   = True
+
+            _log.info("H12Bridge.send_dual_arm right=%s left=%s",
+                      "yes" if right_T is not None else "no",
+                      "yes" if left_T  is not None else "no")
+            ok = _send_action(client, goal, timeout)
+            if ok:
+                _log.info("H12Bridge.send_dual_arm OK")
+            else:
+                self.last_error = "goal rejected or timed out"
+                _log.warning("H12Bridge.send_dual_arm FAILED")
+            return ok
         except Exception as exc:
-            _log.warning("H12Bridge.get_wrist_pose: bad T in reply: %s", exc)
-            return None
+            self.last_error = str(exc)
+            _log.warning("H12Bridge.send_dual_arm FAILED: %s", exc)
+            return False
 
     # ------------------------------------------------------------------
-    # Named configuration (e.g. "home", "rest")
+    # Hand control
+    # ------------------------------------------------------------------
+
+    def send_hand_cmd(self, values: list, arm: str = "right") -> None:
+        """
+        Publish hand command.
+
+        values: 6 floats in [0, 1], order [pinky, ring, middle, index, thumb_bend, thumb_yaw]
+                0.0 = fully closed, 1.0 = fully open.
+        arm: "right" or "left"
+        """
+        from std_msgs.msg import Float64MultiArray
+        msg = Float64MultiArray()
+        msg.data = [float(v) for v in values]
+        pub = self._right_hand_pub if arm == "right" else self._left_hand_pub
+        if pub is not None:
+            pub.publish(msg)
+            _log.info("H12Bridge.send_hand_cmd arm=%s vals=%s",
+                      arm, [f"{v:.2f}" for v in values])
+
+    # ------------------------------------------------------------------
+    # Named configuration
     # ------------------------------------------------------------------
 
     def send_named_config(self, name: str, timeout: float = 15.0) -> bool:
-        """Send the robot to a named configuration defined in h12_ros2_controller."""
-        if not self._connected:
-            _log.warning("H12Bridge not connected.")
+        try:
+            from rclpy.action import ActionClient
+            from custom_ros_messages.action import NamedConfig
+
+            client = ActionClient(self._node, NamedConfig, "named_config")
+            if not client.wait_for_server(timeout_sec=5.0):
+                self.last_error = "named_config server not available"
+                return False
+
+            goal = NamedConfig.Goal()
+            goal.config_name = name
+            ok = _send_action(client, goal, timeout)
+            if not ok:
+                self.last_error = "goal rejected or timed out"
+            return ok
+        except Exception as exc:
+            self.last_error = str(exc)
             return False
-        return self._call({
-            "cmd": "send_named_config",
-            "name": name,
-            "timeout": timeout,
-        }, timeout=timeout)
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
 
-    @property
-    def connected(self) -> bool:
-        return self._connected
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _mat_to_pose(T: np.ndarray):
+    from geometry_msgs.msg import Pose
+    from scipy.spatial.transform import Rotation
+    p = Pose()
+    p.position.x = float(T[0, 3])
+    p.position.y = float(T[1, 3])
+    p.position.z = float(T[2, 3])
+    q = Rotation.from_matrix(T[:3, :3]).as_quat()  # xyzw
+    p.orientation.x = float(q[0])
+    p.orientation.y = float(q[1])
+    p.orientation.z = float(q[2])
+    p.orientation.w = float(q[3])
+    return p
+
+
+def _send_action(client, goal, timeout: float) -> bool:
+    """Send an action goal and block until done. Returns True on success."""
+    done  = threading.Event()
+    ok    = [False]
+
+    def _on_result(future):
+        ok[0] = True
+        done.set()
+
+    def _on_goal(future):
+        gh = future.result()
+        if not gh or not gh.accepted:
+            done.set()
+            return
+        gh.get_result_async().add_done_callback(_on_result)
+
+    client.send_goal_async(goal).add_done_callback(_on_goal)
+    done.wait(timeout=timeout)
+    return ok[0]

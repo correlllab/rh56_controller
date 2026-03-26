@@ -62,12 +62,15 @@ class Proxy:
         self._executor = None
         self._spin_thread = None
         self._connected = False
+        self._tf_buffer = None
+        self._tf_listener = None
 
     def connect(self, msg_id):
         try:
             import rclpy
             from rclpy.node import Node
             from rclpy.executors import SingleThreadedExecutor
+            from geometry_msgs.msg import PoseStamped
 
             if not rclpy.ok():
                 rclpy.init()
@@ -75,6 +78,15 @@ class Proxy:
             self._node = Node("grasp_viz_h12_proxy")
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
+
+            # Persistent subscriptions — populated by the spin thread
+            self._ee_poses: dict[str, object] = {}
+            self._node.create_subscription(
+                PoseStamped, "/right_ee_pose",
+                lambda msg: self._ee_poses.__setitem__("right_wrist_yaw_link", msg), 1)
+            self._node.create_subscription(
+                PoseStamped, "/left_ee_pose",
+                lambda msg: self._ee_poses.__setitem__("left_wrist_yaw_link", msg), 1)
 
             self._connected = True
             self._spin_thread = threading.Thread(
@@ -166,40 +178,29 @@ class Proxy:
             _reply(msg_id, False, str(exc))
 
     def get_wrist_pose(self, msg_id, frame_name, base_frame, timeout):
+        """Read wrist pose from cached /right_ee_pose or /left_ee_pose topic."""
         try:
-            import rclpy
-            from tf2_ros import Buffer, TransformListener
-            from geometry_msgs.msg import TransformStamped
             import numpy as np
             from scipy.spatial.transform import Rotation
 
-            tf_buffer   = Buffer()
-            tf_listener = TransformListener(tf_buffer, self._node)  # noqa: F841
-
-            # Poll until transform is available
             t0 = time.monotonic()
-            ts: TransformStamped = None
-            while time.monotonic() - t0 < timeout:
-                try:
-                    ts = tf_buffer.lookup_transform(
-                        base_frame, frame_name,
-                        rclpy.time.Time(),
-                        timeout=rclpy.duration.Duration(seconds=0.5),
-                    )
-                    break
-                except Exception:
-                    self._executor.spin_once(timeout_sec=0.1)
+            while frame_name not in self._ee_poses and time.monotonic() - t0 < timeout:
+                time.sleep(0.05)
 
-            if ts is None:
-                _reply(msg_id, False, f"TF lookup {base_frame}→{frame_name} timed out")
+            msg = self._ee_poses.get(frame_name)
+            if msg is None:
+                topic = "/right_ee_pose" if "right" in frame_name else "/left_ee_pose"
+                _reply(msg_id, False, f"No message on {topic} within {timeout}s")
                 return
 
-            t = ts.transform.translation
-            q = ts.transform.rotation  # xyzw convention in geometry_msgs
+            p = msg.pose.position
+            q = msg.pose.orientation
             R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
             T = np.eye(4)
             T[:3, :3] = R
-            T[:3,  3] = [t.x, t.y, t.z]
+            T[:3,  3] = [p.x, p.y, p.z]
+            sys.stderr.write(f"[proxy] pose ok: {frame_name} pos=[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]\n")
+            sys.stderr.flush()
             line = json.dumps({"id": msg_id, "ok": True, "error": "", "T": T.tolist()})
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
