@@ -632,7 +632,9 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                               ik_pos_thr: float = 5e-3,
                               ik_ori_thr: float = 0.05,
                               sim_grasp_t=None,
-                              ctrl_open_fingers=None) -> None:
+                              ctrl_open_fingers=None,
+                              real_right_q_arr=None,
+                              real_tracking=None) -> None:
     """Subprocess entry: H1-2+hand robot viewer with PINK differential arm IK.
 
     Uses pinocchio + pink directly (no unitree SDK dependency).
@@ -771,11 +773,21 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                 else:
                     eff_finger = ctrl[6:12]
 
-                # Convert hand-base target → wrist_yaw target
-                R_hand  = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
-                p_hand  = ctrl[0:3]
-                R_wrist = R_hand @ _H12_R_HAND_TO_WRIST
-                p_wrist = p_hand + R_hand @ _H12_T_HAND_TO_WRIST
+                # Optional real-joint seed from /joint_states (H1-2 right arm)
+                if (
+                    real_tracking is not None and real_right_q_arr is not None
+                    and real_tracking.value
+                ):
+                    q_seed = np.array(configuration.q, copy=True)
+                    q_real = np.array(real_right_q_arr[:])
+                    for pidx, qv in zip(pin_qidx, q_real):
+                        q_seed[pidx] = qv
+                    q_seed[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_seed)
+
+                # H1-2 ctrl pose is a direct wrist_yaw target.
+                R_wrist = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+                p_wrist = ctrl[0:3]
 
                 T_wrist          = np.eye(4)
                 T_wrist[:3, :3]  = R_wrist
@@ -842,7 +854,10 @@ def _h12_bimanual_viewer_worker(
         ik_dt: float = 0.05,
         ik_max_iters: int = 40,
         sim_grasp_t=None,
-        ctrl_open_fingers=None) -> None:
+        ctrl_open_fingers=None,
+        real_right_q_arr=None,
+        real_left_q_arr=None,
+        real_tracking=None) -> None:
     """Bimanual H1-2 viewer: runs PINK IK for both arms independently.
 
     The active arm (determined by active_arm_val) tracks the grasp target.
@@ -1007,30 +1022,49 @@ def _h12_bimanual_viewer_worker(
                 left_ctrl  = np.array(left_ctrl_arr[:])
                 active_arm = active_arm_val.value   # 0=right, 1=left
                 t_grasp    = sim_grasp_t.value if sim_grasp_t is not None else 1.0
+                use_real_seed = (
+                    real_tracking is not None
+                    and real_right_q_arr is not None
+                    and real_left_q_arr is not None
+                    and real_tracking.value
+                )
+
+                if use_real_seed:
+                    q_seed = np.array(configuration.q, copy=True)
+                    q_right = np.array(real_right_q_arr[:])
+                    q_left = np.array(real_left_q_arr[:])
+                    for pidx, qv in zip(r_pin_qidx, q_right):
+                        q_seed[pidx] = qv
+                    for pidx, qv in zip(l_pin_qidx, q_left):
+                        q_seed[pidx] = qv
+                    q_seed[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_seed)
 
                 # ---- Right arm target ----
                 if active_arm == 0:
-                    # Active: track grasp target
-                    R_h = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
-                    p_h = ctrl[0:3]
-                    R_w = R_h @ _H12_R_HAND_TO_WRIST
-                    p_w = p_h + R_h @ _H12_T_HAND_TO_WRIST
+                    # Active: track direct wrist target pose.
+                    R_w = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+                    p_w = ctrl[0:3]
                     T_r = np.eye(4); T_r[:3, :3] = R_w; T_r[:3, 3] = p_w
                 else:
-                    # Inactive: return to rest
-                    T_r = r_rest_T
+                    # Inactive: hold real arm if available, otherwise return to rest.
+                    if use_real_seed:
+                        T_r = configuration.data.oMf[model.getFrameId(_H12_EE_FRAME)].homogeneous.copy()
+                    else:
+                        T_r = r_rest_T
 
                 # ---- Left arm target ----
                 if active_arm == 1:
-                    # Active: track grasp target using left-hand transform
-                    R_h = _Rx(left_ctrl[3]) @ _Ry(left_ctrl[4]) @ _Rz(left_ctrl[5])
-                    p_h = left_ctrl[0:3]
-                    R_w = R_h @ _H12_LEFT_R_HAND_TO_WRIST
-                    p_w = p_h + R_h @ _H12_LEFT_T_HAND_TO_WRIST
+                    # Active: track direct wrist target pose.
+                    R_w = _Rx(left_ctrl[3]) @ _Ry(left_ctrl[4]) @ _Rz(left_ctrl[5])
+                    p_w = left_ctrl[0:3]
                     T_l = np.eye(4); T_l[:3, :3] = R_w; T_l[:3, 3] = p_w
                 else:
-                    # Inactive: return to rest
-                    T_l = l_rest_T
+                    # Inactive: hold real arm if available, otherwise return to rest.
+                    if use_real_seed:
+                        T_l = configuration.data.oMf[model.getFrameId(_H12_LEFT_EE_FRAME)].homogeneous.copy()
+                    else:
+                        T_l = l_rest_T
 
                 r_ee_task.set_target(pin.SE3(T_r))
                 l_ee_task.set_target(pin.SE3(T_l))

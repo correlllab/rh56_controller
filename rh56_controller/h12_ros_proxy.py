@@ -64,13 +64,15 @@ class Proxy:
         self._connected = False
         self._tf_buffer = None
         self._tf_listener = None
+        self._subscriptions = []
 
     def connect(self, msg_id):
         try:
             import rclpy
             from rclpy.node import Node
             from rclpy.executors import SingleThreadedExecutor
-            from geometry_msgs.msg import PoseStamped
+            from geometry_msgs.msg import PoseStamped, PoseArray
+            from custom_ros_messages.msg import StringArray
 
             if not rclpy.ok():
                 rclpy.init()
@@ -81,12 +83,31 @@ class Proxy:
 
             # Persistent subscriptions — populated by the spin thread
             self._ee_poses: dict[str, object] = {}
-            self._node.create_subscription(
+            self._subscriptions.append(self._node.create_subscription(
                 PoseStamped, "/right_ee_pose",
-                lambda msg: self._ee_poses.__setitem__("right_wrist_yaw_link", msg), 1)
-            self._node.create_subscription(
+                lambda msg: self._ee_poses.__setitem__("right_wrist_yaw_link", msg), 1))
+            self._subscriptions.append(self._node.create_subscription(
                 PoseStamped, "/left_ee_pose",
-                lambda msg: self._ee_poses.__setitem__("left_wrist_yaw_link", msg), 1)
+                lambda msg: self._ee_poses.__setitem__("left_wrist_yaw_link", msg), 1))
+
+            # Fallback source from frame_task_server publisher.
+            self._frame_poses: dict[str, object] = {}
+            self._frame_names_latest = []
+            self._subscriptions.append(self._node.create_subscription(
+                StringArray, "/frame_names",
+                lambda msg: setattr(self, "_frame_names_latest", list(msg.data)), 1))
+
+            def _frame_poses_cb(msg):
+                names = self._frame_names_latest
+                if not names:
+                    return
+                n = min(len(names), len(msg.poses))
+                for i in range(n):
+                    self._frame_poses[names[i]] = msg.poses[i]
+
+            self._subscriptions.append(
+                self._node.create_subscription(PoseArray, "/frame_poses", _frame_poses_cb, 1)
+            )
 
             self._connected = True
             self._spin_thread = threading.Thread(
@@ -106,6 +127,7 @@ class Proxy:
 
     def disconnect(self, msg_id):
         self._connected = False
+        self._subscriptions.clear()
         # Let the spin thread exit before touching the executor / rclpy
         if self._spin_thread is not None:
             self._spin_thread.join(timeout=2.0)
@@ -122,11 +144,17 @@ class Proxy:
     def send_arm(self, msg_id, frame_name, T, timeout):
         try:
             from rclpy.action import ActionClient
-            from custom_ros_messages.action import FrameTask
+            try:
+                from custom_ros_messages.action import FrameTask
+            except Exception as exc:
+                self._send_arm_via_dual_arm(msg_id, frame_name, T, timeout,
+                                            reason=f"FrameTask unavailable: {exc}")
+                return
 
             client = ActionClient(self._node, FrameTask, "frame_task")
             if not client.wait_for_server(timeout_sec=5.0):
-                _reply(msg_id, False, "frame_task server not available")
+                self._send_arm_via_dual_arm(msg_id, frame_name, T, timeout,
+                                            reason="frame_task server not available")
                 return
 
             goal = FrameTask.Goal()
@@ -145,6 +173,22 @@ class Proxy:
             _reply(msg_id, True)
         except Exception as exc:
             _reply(msg_id, False, str(exc))
+
+    def _send_arm_via_dual_arm(self, msg_id, frame_name, T, timeout, reason=""):
+        side = str(frame_name).lower()
+        if "right" in side:
+            right_T, left_T = T, None
+        elif "left" in side:
+            right_T, left_T = None, T
+        else:
+            suffix = f" ({reason})" if reason else ""
+            _reply(msg_id, False, f"cannot infer arm from frame_name '{frame_name}'{suffix}")
+            return
+
+        if reason:
+            sys.stderr.write(f"[proxy] send_arm fallback to dual_arm: {reason}\n")
+            sys.stderr.flush()
+        self.send_dual_arm(msg_id, right_T=right_T, left_T=left_T, timeout=timeout)
 
     def send_dual_arm(self, msg_id, right_T, left_T, timeout):
         try:
@@ -184,17 +228,22 @@ class Proxy:
             from scipy.spatial.transform import Rotation
 
             t0 = time.monotonic()
-            while frame_name not in self._ee_poses and time.monotonic() - t0 < timeout:
+            while (
+                frame_name not in self._ee_poses
+                and frame_name not in self._frame_poses
+                and time.monotonic() - t0 < timeout
+            ):
                 time.sleep(0.05)
 
             msg = self._ee_poses.get(frame_name)
-            if msg is None:
-                topic = "/right_ee_pose" if "right" in frame_name else "/left_ee_pose"
-                _reply(msg_id, False, f"No message on {topic} within {timeout}s")
+            pose_msg = msg.pose if msg is not None else self._frame_poses.get(frame_name)
+            if pose_msg is None:
+                _reply(msg_id, False,
+                       f"No pose for {frame_name} within {timeout}s (checked /right_ee_pose|/left_ee_pose and /frame_poses)")
                 return
 
-            p = msg.pose.position
-            q = msg.pose.orientation
+            p = pose_msg.position
+            q = pose_msg.orientation
             R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
             T = np.eye(4)
             T[:3, :3] = R

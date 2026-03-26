@@ -52,7 +52,12 @@ class H12Bridge:
         self._spin_thread: Optional[threading.Thread] = None
         self._connected  = False
         self.last_error  = ""
+        self._joint_state_msg = None
         self._ee_poses: dict[str, object] = {}
+        self._frame_poses: dict[str, object] = {}
+        self._frame_names_latest = []
+        self._subscriptions = []
+        self._timers = []
         self._right_hand_pub = None
         self._left_hand_pub  = None
 
@@ -65,8 +70,9 @@ class H12Bridge:
             import rclpy
             from rclpy.node import Node
             from rclpy.executors import MultiThreadedExecutor
-            from geometry_msgs.msg import PoseStamped
+            from geometry_msgs.msg import PoseStamped, PoseArray
             from std_msgs.msg import Float64MultiArray
+            from custom_ros_messages.msg import StringArray
 
             if not rclpy.ok():
                 rclpy.init()
@@ -84,15 +90,40 @@ class H12Bridge:
                 if "left_wrist_yaw_link" not in self._ee_poses:
                     _log.info("H12Bridge: /left_ee_pose first msg received")
                 self._ee_poses["left_wrist_yaw_link"] = msg
-            self._node.create_subscription(PoseStamped, "/right_ee_pose", _right_cb, 10)
-            self._node.create_subscription(PoseStamped, "/left_ee_pose",  _left_cb,  10)
+            self._subscriptions.append(
+                self._node.create_subscription(PoseStamped, "/right_ee_pose", _right_cb, 10)
+            )
+            self._subscriptions.append(
+                self._node.create_subscription(PoseStamped, "/left_ee_pose", _left_cb, 10)
+            )
+
+            # Fallback pose source from frame_task_server.
+            # /frame_names and /frame_poses are aligned arrays.
+            def _frame_names_cb(msg):
+                self._frame_names_latest = list(msg.data)
+
+            def _frame_poses_cb(msg):
+                if not self._frame_names_latest:
+                    return
+                n = min(len(self._frame_names_latest), len(msg.poses))
+                for i in range(n):
+                    self._frame_poses[self._frame_names_latest[i]] = msg.poses[i]
+
+            self._subscriptions.append(
+                self._node.create_subscription(StringArray, "/frame_names", _frame_names_cb, 10)
+            )
+            self._subscriptions.append(
+                self._node.create_subscription(PoseArray, "/frame_poses", _frame_poses_cb, 10)
+            )
 
             # Joint states for IK seeding — optional, skip if sensor_msgs unavailable
             try:
                 from sensor_msgs.msg import JointState
-                self._node.create_subscription(
-                    JointState, "/joint_states",
-                    lambda msg: setattr(self, "_joint_state_msg", msg), 10)
+                self._subscriptions.append(
+                    self._node.create_subscription(
+                        JointState, "/joint_states",
+                        lambda msg: setattr(self, "_joint_state_msg", msg), 10)
+                )
             except ImportError:
                 _log.warning("H12Bridge: sensor_msgs not available, /joint_states disabled")
 
@@ -105,7 +136,7 @@ class H12Bridge:
             # Heartbeat timer: without at least one timer, some DDS/rclpy builds never
             # wake the executor's wait-set for subscriptions — callbacks would silently
             # never fire even though topics are publishing.
-            self._node.create_timer(0.5, lambda: None)
+            self._timers.append(self._node.create_timer(0.5, lambda: None))
 
             self._executor = MultiThreadedExecutor()
             self._executor.add_node(self._node)
@@ -130,6 +161,8 @@ class H12Bridge:
 
     def disconnect(self) -> None:
         self._connected = False
+        self._subscriptions.clear()
+        self._timers.clear()
         if self._executor is not None:
             try:
                 self._executor.shutdown()
@@ -171,17 +204,25 @@ class H12Bridge:
         from scipy.spatial.transform import Rotation
 
         t0 = time.monotonic()
-        while frame_name not in self._ee_poses and time.monotonic() - t0 < timeout:
+        while (
+            frame_name not in self._ee_poses
+            and frame_name not in self._frame_poses
+            and time.monotonic() - t0 < timeout
+        ):
             time.sleep(0.05)
 
         msg = self._ee_poses.get(frame_name)
-        if msg is None:
-            self.last_error = f"No pose received for {frame_name} within {timeout}s"
+        pose_msg = msg.pose if msg is not None else self._frame_poses.get(frame_name)
+        if pose_msg is None:
+            self.last_error = (
+                f"No pose received for {frame_name} within {timeout}s "
+                f"(checked /right_ee_pose|/left_ee_pose and /frame_poses)"
+            )
             _log.info("H12Bridge.get_wrist_pose FAILED: %s", self.last_error)
             return None
 
-        p = msg.pose.position
-        q = msg.pose.orientation
+        p = pose_msg.position
+        q = pose_msg.orientation
         R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
         T = np.eye(4)
         T[:3, :3] = R
@@ -198,32 +239,65 @@ class H12Bridge:
                  timeout: float = 15.0) -> bool:
         try:
             from rclpy.action import ActionClient
-            from custom_ros_messages.action import FrameTask
+            try:
+                from custom_ros_messages.action import FrameTask
+            except Exception as exc:
+                _log.warning("H12Bridge.send_arm: FrameTask unavailable (%s); falling back to dual_arm", exc)
+                return self._send_arm_via_dual_arm(frame_name, T, timeout)
 
             client = ActionClient(self._node, FrameTask, "frame_task")
             if not client.wait_for_server(timeout_sec=5.0):
-                self.last_error = "frame_task server not available"
-                _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
-                return False
+                _log.warning("H12Bridge.send_arm: frame_task unavailable; falling back to dual_arm")
+                return self._send_arm_via_dual_arm(frame_name, T, timeout)
 
             pose = _mat_to_pose(T)
             goal = FrameTask.Goal()
             goal.frame_names   = [frame_name]
             goal.frame_targets = [pose]
 
+            # Server-side convergence thresholds are commonly ~5 mm / 0.02 rad.
+            # Warn when target delta is below threshold to explain no visible motion.
+            cur_T = self.get_wrist_pose(frame_name, timeout=0.3)
+            if cur_T is not None:
+                dp = float(np.linalg.norm(T[:3, 3] - cur_T[:3, 3]))
+                dth = _rotation_delta_rad(cur_T[:3, :3], T[:3, :3])
+                if dp > 0.20 or dth > 1.2:
+                    self.last_error = (
+                        "target jump too large for safe single-step command "
+                        f"(Δpos={dp*1000.0:.1f} mm, Δrot={np.degrees(dth):.1f} deg)"
+                    )
+                    _log.warning("H12Bridge.send_arm BLOCKED: %s", self.last_error)
+                    return False
+                if dp < 5e-3 and dth < 2e-2:
+                    _log.info(
+                        "H12Bridge.send_arm: tiny delta (%.1f mm, %.2f deg) below typical controller thresholds; motion may be skipped",
+                        dp * 1000.0, np.degrees(dth),
+                    )
+
             _log.info("H12Bridge.send_arm → %s pos=[%.3f, %.3f, %.3f]",
                       frame_name, T[0, 3], T[1, 3], T[2, 3])
-            ok = _send_action(client, goal, timeout)
+            ok, err = _send_action(client, goal, timeout)
             if ok:
                 _log.info("H12Bridge.send_arm OK")
             else:
-                self.last_error = "goal rejected or timed out"
-                _log.warning("H12Bridge.send_arm FAILED")
+                self.last_error = err or "goal rejected or timed out"
+                _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
             return ok
         except Exception as exc:
             self.last_error = str(exc)
             _log.warning("H12Bridge.send_arm FAILED: %s", exc)
             return False
+
+    def _send_arm_via_dual_arm(self, frame_name: str, T: np.ndarray,
+                               timeout: float = 15.0) -> bool:
+        arm = frame_name.lower()
+        if "right" in arm:
+            return self.send_dual_arm(right_T=T, left_T=None, timeout=timeout)
+        if "left" in arm:
+            return self.send_dual_arm(right_T=None, left_T=T, timeout=timeout)
+        self.last_error = f"cannot infer arm side from frame_name '{frame_name}'"
+        _log.warning("H12Bridge.send_arm fallback FAILED: %s", self.last_error)
+        return False
 
     # ------------------------------------------------------------------
     # Dual-arm: DualArm action
@@ -244,22 +318,41 @@ class H12Bridge:
                 return False
 
             goal = DualArm.Goal()
-            if right_T is not None:
-                goal.right_target = _mat_to_pose(right_T)
-                goal.move_right   = True
-            if left_T is not None:
-                goal.left_target = _mat_to_pose(left_T)
-                goal.move_left   = True
+            request_right = right_T is not None
+            request_left = left_T is not None
 
-            _log.info("H12Bridge.send_dual_arm right=%s left=%s",
-                      "yes" if right_T is not None else "no",
-                      "yes" if left_T  is not None else "no")
-            ok = _send_action(client, goal, timeout)
+            # For DualArm schemas without move_right/move_left fields, both targets
+            # must still be populated. Hold the non-requested side at its current pose.
+            if right_T is None:
+                right_T = self.get_wrist_pose("right_wrist_yaw_link", timeout=1.0)
+            if left_T is None:
+                left_T = self.get_wrist_pose("left_wrist_yaw_link", timeout=1.0)
+            if right_T is None or left_T is None:
+                self.last_error = "missing current wrist pose for dual_arm fallback"
+                _log.warning("H12Bridge.send_dual_arm FAILED: %s", self.last_error)
+                return False
+
+            goal.right_target = _mat_to_pose(right_T)
+            goal.left_target = _mat_to_pose(left_T)
+
+            if hasattr(goal, "move_right"):
+                goal.move_right = bool(request_right)
+            if hasattr(goal, "move_left"):
+                goal.move_left = bool(request_left)
+
+            _log.info(
+                "H12Bridge.send_dual_arm request_right=%s request_left=%s right_pos=[%.3f,%.3f,%.3f] left_pos=[%.3f,%.3f,%.3f]",
+                "yes" if request_right else "no",
+                "yes" if request_left else "no",
+                right_T[0, 3], right_T[1, 3], right_T[2, 3],
+                left_T[0, 3], left_T[1, 3], left_T[2, 3],
+            )
+            ok, err = _send_action(client, goal, timeout)
             if ok:
                 _log.info("H12Bridge.send_dual_arm OK")
             else:
-                self.last_error = "goal rejected or timed out"
-                _log.warning("H12Bridge.send_dual_arm FAILED")
+                self.last_error = err or "goal rejected or timed out"
+                _log.warning("H12Bridge.send_dual_arm FAILED: %s", self.last_error)
             return ok
         except Exception as exc:
             self.last_error = str(exc)
@@ -303,9 +396,9 @@ class H12Bridge:
 
             goal = NamedConfig.Goal()
             goal.config_name = name
-            ok = _send_action(client, goal, timeout)
+            ok, err = _send_action(client, goal, timeout)
             if not ok:
-                self.last_error = "goal rejected or timed out"
+                self.last_error = err or "goal rejected or timed out"
             return ok
         except Exception as exc:
             self.last_error = str(exc)
@@ -323,7 +416,21 @@ def _mat_to_pose(T: np.ndarray):
     p.position.x = float(T[0, 3])
     p.position.y = float(T[1, 3])
     p.position.z = float(T[2, 3])
-    q = Rotation.from_matrix(T[:3, :3]).as_quat()  # xyzw
+
+    R_raw = np.array(T[:3, :3], dtype=float)
+    if not np.all(np.isfinite(R_raw)):
+        raise ValueError("target rotation contains non-finite values")
+    U, _, Vt = np.linalg.svd(R_raw)
+    R = U @ Vt
+    if np.linalg.det(R) < 0:
+        U[:, -1] *= -1.0
+        R = U @ Vt
+
+    q = Rotation.from_matrix(R).as_quat()  # xyzw
+    qn = float(np.linalg.norm(q))
+    if qn <= 0.0 or not np.isfinite(qn):
+        raise ValueError("invalid quaternion norm from target rotation")
+    q = q / qn
     p.orientation.x = float(q[0])
     p.orientation.y = float(q[1])
     p.orientation.z = float(q[2])
@@ -331,22 +438,54 @@ def _mat_to_pose(T: np.ndarray):
     return p
 
 
-def _send_action(client, goal, timeout: float) -> bool:
-    """Send an action goal and block until done. Returns True on success."""
+def _send_action(client, goal, timeout: float) -> tuple[bool, str]:
+    """Send an action goal and block until done. Returns (ok, error_message)."""
     done  = threading.Event()
     ok    = [False]
+    err   = [""]
 
     def _on_result(future):
-        ok[0] = True
-        done.set()
+        try:
+            action_result = future.result()
+            result_msg = getattr(action_result, "result", None)
+            if result_msg is not None and hasattr(result_msg, "success"):
+                ok[0] = bool(result_msg.success)
+                if not ok[0]:
+                    err[0] = getattr(result_msg, "message", "") or "action returned success=False"
+            else:
+                ok[0] = True
+        except Exception as exc:
+            ok[0] = False
+            err[0] = f"result error: {exc}"
+        finally:
+            done.set()
 
     def _on_goal(future):
-        gh = future.result()
-        if not gh or not gh.accepted:
+        try:
+            gh = future.result()
+        except Exception as exc:
+            err[0] = f"goal send failed: {exc}"
             done.set()
             return
-        gh.get_result_async().add_done_callback(_on_result)
+        if not gh or not gh.accepted:
+            err[0] = "goal rejected"
+            done.set()
+            return
+        try:
+            gh.get_result_async().add_done_callback(_on_result)
+        except Exception as exc:
+            err[0] = f"failed waiting for action result: {exc}"
+            done.set()
 
     client.send_goal_async(goal).add_done_callback(_on_goal)
-    done.wait(timeout=timeout)
-    return ok[0]
+    completed = done.wait(timeout=timeout)
+    if not completed:
+        return False, f"timeout waiting for action result ({timeout:.1f}s)"
+    return ok[0], err[0]
+
+
+def _rotation_delta_rad(R_a: np.ndarray, R_b: np.ndarray) -> float:
+    """Geodesic angle between two rotation matrices."""
+    R = R_a.T @ R_b
+    tr = np.clip((np.trace(R) - 1.0) * 0.5, -1.0, 1.0)
+    return float(np.arccos(tr))
