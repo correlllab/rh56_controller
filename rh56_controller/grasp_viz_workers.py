@@ -634,7 +634,8 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                               sim_grasp_t=None,
                               ctrl_open_fingers=None,
                               real_right_q_arr=None,
-                              real_tracking=None) -> None:
+                              real_tracking=None,
+                              robot_only_mode=None) -> None:
     """Subprocess entry: H1-2+hand robot viewer with PINK differential arm IK.
 
     Uses pinocchio + pink directly (no unitree SDK dependency).
@@ -785,6 +786,36 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                     q_seed[non_arm_qidx] = q0[non_arm_qidx]
                     configuration = pink.Configuration(model, data, q_seed)
 
+                robot_only = bool(robot_only_mode.value) if robot_only_mode is not None else False
+
+                if robot_only and real_tracking is not None and real_right_q_arr is not None and real_tracking.value:
+                    # Pure mirror mode: render real arm joints directly, no IK targeting.
+                    for pidx, madr, acid in zip(pin_qidx, mj_qposadr, arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+
+                    eff_finger = _ctrl_open.copy() if _ctrl_open is not None else np.array(ctrl[6:12], copy=True)
+                    for acid, fjadr, val in zip(finger_ctrl_ids, finger_joint_qposadr, eff_finger):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(finger_jm, mj_data, eff_finger)
+
+                    mujoco.mj_forward(mj_model, mj_data)
+
+                    state = np.array(state_arr[:])
+                    if tip_site_ids:
+                        _worker_add_geoms_from_model(v, mj_data, tip_site_ids, state)
+                    else:
+                        _worker_add_geoms(v, state)
+                    v.sync()
+                    time.sleep(0.033)
+                    continue
+
                 # H1-2 ctrl pose is a direct wrist_yaw target.
                 R_wrist = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
                 p_wrist = ctrl[0:3]
@@ -857,7 +888,8 @@ def _h12_bimanual_viewer_worker(
         ctrl_open_fingers=None,
         real_right_q_arr=None,
         real_left_q_arr=None,
-        real_tracking=None) -> None:
+        real_tracking=None,
+        robot_only_mode=None) -> None:
     """Bimanual H1-2 viewer: runs PINK IK for both arms independently.
 
     The active arm (determined by active_arm_val) tracks the grasp target.
@@ -1039,6 +1071,50 @@ def _h12_bimanual_viewer_worker(
                         q_seed[pidx] = qv
                     q_seed[non_arm_qidx] = q0[non_arm_qidx]
                     configuration = pink.Configuration(model, data, q_seed)
+
+                robot_only = bool(robot_only_mode.value) if robot_only_mode is not None else False
+
+                if robot_only and use_real_seed:
+                    for pidx, madr, acid in zip(r_pin_qidx, r_mj_qposadr, r_arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+                    for pidx, madr, acid in zip(l_pin_qidx, l_mj_qposadr, l_arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+
+                    eff_fng = _ctrl_open.copy() if _ctrl_open is not None else np.array(ctrl[6:12], copy=True)
+                    eff_lfng = _ctrl_open.copy() if _ctrl_open is not None else np.array(left_ctrl[6:12], copy=True)
+
+                    for acid, fjadr, val in zip(r_fng_ctrl_ids, r_fng_qposadr, eff_fng):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(right_finger_jm, mj_data, eff_fng)
+
+                    for acid, fjadr, val in zip(l_fng_ctrl_ids, l_fng_qposadr, eff_lfng):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(left_finger_jm, mj_data, eff_lfng)
+
+                    mujoco.mj_forward(mj_model, mj_data)
+                    state = np.array(state_arr[:])
+                    tip_ids = r_tip_site_ids if active_arm == 0 else l_tip_site_ids
+                    if tip_ids:
+                        _worker_add_geoms_from_model(v, mj_data, tip_ids, state)
+                    else:
+                        _worker_add_geoms(v, state)
+                    v.sync()
+                    time.sleep(0.033)
+                    continue
 
                 # ---- Right arm target ----
                 if active_arm == 0:

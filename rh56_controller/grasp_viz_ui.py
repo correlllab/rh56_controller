@@ -435,6 +435,14 @@ class GraspVizUI(GraspVizCore):
         ttk.Label(parent, text="── Real H1-2 ──", foreground="#555").grid(
             row=r, column=0, columnspan=2, sticky="w"); r += 1
 
+        self._robot_only_var = tk.BooleanVar(value=self._robot_only_mode)
+        ttk.Checkbutton(
+            parent,
+            text="Robot-only pose (bypass planner pose)",
+            variable=self._robot_only_var,
+            command=self._on_robot_only_toggle,
+        ).grid(row=r, column=0, columnspan=2, sticky="w"); r += 1
+
         _h12_ok = getattr(self, "_h12_arm", None) is not None
 
         self._btn_send_h12 = tk.Button(
@@ -456,6 +464,19 @@ class GraspVizUI(GraspVizCore):
             state="normal" if _h12_ok else "disabled")
         self._btn_setpose_h12.grid(row=r, column=0, columnspan=2, sticky="ew",
                                    padx=2, pady=1); r += 1
+
+        ttk.Label(parent, text="Active arm:").grid(row=r, column=0, sticky="w")
+        self._active_arm_mode_var = tk.StringVar(value="auto")
+        arm_mode = ttk.Combobox(
+            parent,
+            textvariable=self._active_arm_mode_var,
+            values=["auto", "right", "left"],
+            state="readonly",
+            width=8,
+        )
+        arm_mode.grid(row=r, column=1, sticky="ew", padx=2)
+        arm_mode.bind("<<ComboboxSelected>>", self._on_active_arm_mode)
+        r += 1
 
         self._btn_gravity_h12 = tk.Button(
             parent,
@@ -532,6 +553,35 @@ class GraspVizUI(GraspVizCore):
         threading.Thread(target=self._send_h12_arm, daemon=True,
                          name="send-h12").start()
 
+    def _on_robot_only_toggle(self):
+        self._robot_only_mode = bool(self._robot_only_var.get())
+        if hasattr(self, "_h12_robot_only_mode"):
+            self._h12_robot_only_mode.value = 1 if self._robot_only_mode else 0
+        self._set_robot_only_ui_state(self._robot_only_mode)
+        self._push_viewer_ctrl()
+        self._update_status(
+            f"H1-2 robot-only pose {'ON' if self._robot_only_mode else 'OFF'}."
+        )
+
+    def _set_robot_only_ui_state(self, enabled: bool):
+        state = "disabled" if enabled else "normal"
+        try:
+            self._sl_w.config(state=state)
+            self._ent_w.config(state=state)
+            self._ent_width_target.config(state=state)
+        except Exception:
+            pass
+        if hasattr(self, "_btn_grasp"):
+            self._btn_grasp.config(state="disabled" if enabled else "normal")
+
+    def _on_active_arm_mode(self, _event=None):
+        mode = self._active_arm_mode_var.get()
+        self.set_active_arm_override(mode)
+        arm = self._active_arm()
+        arm_label = "right" if arm == 0 else "left"
+        self._update_active_arm()
+        self._update_status(f"H1-2 active arm mode: {mode} (current={arm_label}).")
+
     def _refresh_h12_gravity_button(self):
         if not hasattr(self, "_btn_gravity_h12"):
             return
@@ -556,6 +606,9 @@ class GraspVizUI(GraspVizCore):
 
     def _on_grasp_h12(self):
         """Execute grasp on real H1-2: send arm then close fingers."""
+        if self._robot_only_mode:
+            self._update_status("Robot-only mode: GRASP is disabled.")
+            return
         if self._result is None:
             return
         self._update_status("H1-2 GRASP! sequence started…")
@@ -793,6 +846,10 @@ class GraspVizUI(GraspVizCore):
     # Slider / control callbacks
     # ------------------------------------------------------------------
     def _on_mode_radio(self):
+        if self._h12_mode and self._robot_only_mode:
+            self._mode_var.set(self._mode)
+            self._update_status("Robot-only mode: grasp mode changes are disabled.")
+            return
         label = self._mode_var.get()
         self._mode = label
         n = int(label[0]) if label[0].isdigit() else 4
@@ -814,6 +871,10 @@ class GraspVizUI(GraspVizCore):
         self._update_cylinder_guard()
 
     def _on_width(self, val_str):
+        if self._h12_mode and self._robot_only_mode:
+            self._sl_w.set(self._width_m * 1000.0)
+            self._update_status("Robot-only mode: grasp width is disabled.")
+            return
         val = float(val_str)
         self._width_m = val / 1000.0
         self._ent_w.delete(0, "end")
@@ -827,6 +888,11 @@ class GraspVizUI(GraspVizCore):
         self._update_cylinder_guard()
 
     def _on_width_target_submit(self, _event=None):
+        if self._h12_mode and self._robot_only_mode:
+            self._ent_width_target.delete(0, "end")
+            self._ent_width_target.insert(0, f"{self._width_m * 1000:.1f}")
+            self._update_status("Robot-only mode: target width is disabled.")
+            return
         raw = self._ent_width_target.get().strip()
         try:
             val_mm = float(raw)
@@ -979,6 +1045,10 @@ class GraspVizUI(GraspVizCore):
             self._send_real_hand()
 
     def _on_strategy_radio(self):
+        if self._h12_mode and self._robot_only_mode:
+            self._strategy_var.set(self._grasp_strategy)
+            self._update_status("Robot-only mode: grasp strategy is disabled.")
+            return
         self._grasp_strategy = self._strategy_var.get()
 
     def _on_teach_mode(self):

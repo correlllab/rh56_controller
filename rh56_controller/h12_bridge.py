@@ -56,6 +56,8 @@ class H12Bridge:
         self._ee_poses: dict[str, object] = {}
         self._frame_poses: dict[str, object] = {}
         self._frame_names_latest = []
+        self._ee_pose_recv_time: dict[str, float] = {}
+        self._last_pose_read_stamp: dict[str, tuple[int, int]] = {}
         self._subscriptions = []
         self._timers = []
         self._right_hand_pub = None
@@ -86,10 +88,12 @@ class H12Bridge:
                     _log.info("H12Bridge: /right_ee_pose first msg pos=[%.3f,%.3f,%.3f]",
                               msg.pose.position.x, msg.pose.position.y, msg.pose.position.z)
                 self._ee_poses["right_wrist_yaw_link"] = msg
+                self._ee_pose_recv_time["right_wrist_yaw_link"] = time.monotonic()
             def _left_cb(msg):
                 if "left_wrist_yaw_link" not in self._ee_poses:
                     _log.info("H12Bridge: /left_ee_pose first msg received")
                 self._ee_poses["left_wrist_yaw_link"] = msg
+                self._ee_pose_recv_time["left_wrist_yaw_link"] = time.monotonic()
             self._subscriptions.append(
                 self._node.create_subscription(PoseStamped, "/right_ee_pose", _right_cb, 10)
             )
@@ -203,6 +207,7 @@ class H12Bridge:
         """Return 4×4 world→wrist transform (pelvis frame), or None on failure."""
         from scipy.spatial.transform import Rotation
 
+        last_stamp = self._last_pose_read_stamp.get(frame_name)
         t0 = time.monotonic()
         while (
             frame_name not in self._ee_poses
@@ -210,6 +215,20 @@ class H12Bridge:
             and time.monotonic() - t0 < timeout
         ):
             time.sleep(0.05)
+
+        # Prefer a fresh /right_ee_pose|/left_ee_pose sample when available.
+        # If callbacks are active, this prevents repeatedly reusing an older
+        # cached message on successive Set Pose calls.
+        fresh_wait_s = min(0.25, max(0.0, timeout))
+        tw = time.monotonic()
+        while time.monotonic() - tw < fresh_wait_s:
+            msg = self._ee_poses.get(frame_name)
+            if msg is None or not hasattr(msg, "header"):
+                break
+            stamp = (int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
+            if last_stamp is None or stamp != last_stamp:
+                break
+            time.sleep(0.01)
 
         msg = self._ee_poses.get(frame_name)
         pose_msg = msg.pose if msg is not None else self._frame_poses.get(frame_name)
@@ -227,8 +246,17 @@ class H12Bridge:
         T = np.eye(4)
         T[:3, :3] = R
         T[:3,  3] = [p.x, p.y, p.z]
-        _log.info("H12Bridge.get_wrist_pose OK [%s]: pos=[%.3f, %.3f, %.3f]",
-                  frame_name, p.x, p.y, p.z)
+        if msg is not None and hasattr(msg, "header"):
+            stamp = (int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
+            self._last_pose_read_stamp[frame_name] = stamp
+            age_s = time.monotonic() - self._ee_pose_recv_time.get(frame_name, time.monotonic())
+            _log.info(
+                "H12Bridge.get_wrist_pose OK [%s]: pos=[%.3f, %.3f, %.3f] quat=[%.4f, %.4f, %.4f, %.4f] stamp=%d.%09d age=%.3fs",
+                frame_name, p.x, p.y, p.z, q.x, q.y, q.z, q.w, stamp[0], stamp[1], age_s,
+            )
+            return T
+        _log.info("H12Bridge.get_wrist_pose OK [%s]: pos=[%.3f, %.3f, %.3f] quat=[%.4f, %.4f, %.4f, %.4f]",
+                  frame_name, p.x, p.y, p.z, q.x, q.y, q.z, q.w)
         return T
 
     # ------------------------------------------------------------------

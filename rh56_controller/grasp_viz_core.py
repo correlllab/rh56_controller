@@ -123,6 +123,7 @@ class GraspVizCore:
         self._plane_rx = 0.0
         self._plane_ry = 0.0
         self._plane_rz = 0.0
+        self._robot_only_mode = False
 
         self._wrist3_pos: Optional[np.ndarray] = None
         self._wrist3_mat: Optional[np.ndarray] = None
@@ -165,6 +166,7 @@ class GraspVizCore:
         self._left_ctrl_arr    = _mp.Array("d", _VIEWER_CTRL_LEN)
         self._active_arm_val   = _mp.Value("i", 0)   # 0=right, 1=left
         self._last_active_arm  = -1
+        self._active_arm_override: Optional[int] = None
 
         # ---- Mink grasp planner (background thread, not subprocess) ----
         self._state_lock        = threading.Lock()
@@ -194,6 +196,7 @@ class GraspVizCore:
         self._h12_right_q_arr = _mp2.Array("d", 7)
         self._h12_left_q_arr  = _mp2.Array("d", 7)
         self._h12_real_tracking = _mp2.Value("b", 0)
+        self._h12_robot_only_mode = _mp2.Value("b", 0)
 
         # Thread-safe status queue (executor/arm threads → UI poll loop)
         self._status_queue: queue.Queue = queue.Queue()
@@ -378,6 +381,8 @@ class GraspVizCore:
     # Sim2Real
     # ------------------------------------------------------------------
     def _send_real_hand(self) -> None:
+        if self._h12_mode and self._robot_only_mode:
+            return
         if (self._hand is None and self._h12_arm is None) or not self._send_real or self._result is None:
             return
         if self._grasp_hand_locked:
@@ -609,7 +614,18 @@ class GraspVizCore:
             r = self._result
         if r is None:
             return
-        ctrl  = self._build_ctrl_array(r)
+        if self._h12_mode and self._robot_only_mode:
+            ctrl = np.array(self._custom_ctrl_arr[:], dtype=float)
+            ctrl[0] = self._grasp_x
+            ctrl[1] = self._grasp_y
+            ctrl[2] = self._grasp_z
+            rot_x, rot_y, rot_z = _mat_to_xyz_euler(self._plane_R_matrix())
+            ctrl[3] = rot_x
+            ctrl[4] = rot_y
+            ctrl[5] = rot_z
+            ctrl[6:12] = self._ctrl_open_fingers
+        else:
+            ctrl  = self._build_ctrl_array(r)
         state = self._build_state_array(r)
         self._custom_ctrl_arr[:]  = ctrl
         self._viewer_state_arr[:] = state
@@ -738,7 +754,8 @@ class GraspVizCore:
                         sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
-                        real_tracking=self._h12_real_tracking),
+                        real_tracking=self._h12_real_tracking,
+                        robot_only_mode=self._h12_robot_only_mode),
             daemon=True,
         )
         proc.start()
@@ -763,7 +780,8 @@ class GraspVizCore:
                         sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
-                        real_tracking=self._h12_real_tracking),
+                        real_tracking=self._h12_real_tracking,
+                        robot_only_mode=self._h12_robot_only_mode),
             daemon=True,
         )
         proc.start()
@@ -772,7 +790,19 @@ class GraspVizCore:
 
     def _active_arm(self) -> int:
         """Return 0 (right) or 1 (left) based on grasp Y position and midplane."""
+        if self._active_arm_override in (0, 1):
+            return int(self._active_arm_override)
         return 1 if self._grasp_y > _H12_MIDPLANE_Y else 0
+
+    def set_active_arm_override(self, mode: str) -> None:
+        """Set active-arm selection mode: 'auto', 'right', or 'left'."""
+        mode_l = (mode or "auto").strip().lower()
+        if mode_l == "right":
+            self._active_arm_override = 0
+        elif mode_l == "left":
+            self._active_arm_override = 1
+        else:
+            self._active_arm_override = None
 
     def _update_active_arm(self) -> None:
         """Recompute active arm and sync left_ctrl_arr with mirrored grasp target."""
@@ -813,7 +843,8 @@ class GraspVizCore:
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
                         real_left_q_arr=self._h12_left_q_arr,
-                        real_tracking=self._h12_real_tracking),
+                        real_tracking=self._h12_real_tracking,
+                        robot_only_mode=self._h12_robot_only_mode),
             daemon=True,
         )
         proc.start()
@@ -973,6 +1004,23 @@ class GraspVizCore:
         """Send current grasp pose to real H1-2 via ROS2 actions."""
         if self._h12_arm is None:
             self._update_status("H12 arm not connected. Start dual_arm server first.")
+            return
+        if self._robot_only_mode:
+            if self.is_h12_gravity_comp_active():
+                self._update_status("H1-2 gravity compensation is active. Disable it before sending arm goals.")
+                return
+            arm = self._active_arm()
+            frame = "right_wrist_yaw_link" if arm == 0 else "left_wrist_yaw_link"
+            from .grasp_viz_workers import _R_WORLD_TO_PELVIS
+            T = np.eye(4)
+            T[:3, :3] = _R_WORLD_TO_PELVIS @ self._plane_R_matrix()
+            T[:3,  3] = _R_WORLD_TO_PELVIS @ np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
+            self._update_status(f"H1-2 arm → {frame} (robot-only)…")
+            try:
+                ok = self._h12_arm.send_arm(frame, T)
+                self._update_status("H1-2 arm move done." if ok else "H1-2 arm move failed.")
+            except Exception as exc:
+                self._update_status(f"H1-2 arm error: {exc}")
             return
         if self._result is None:
             return
