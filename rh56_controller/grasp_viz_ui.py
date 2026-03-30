@@ -413,6 +413,7 @@ class GraspVizUI(GraspVizCore):
                                     state="normal" if _arm_ok else "disabled")
         self._btn_grasp.grid(row=r, column=0, columnspan=2, sticky="ew",
                              padx=2, pady=4); r += 1
+        self._set_robot_only_ui_state(self._robot_only_mode)
 
         if not _arm_ok:
             self._update_status("No UR5 connection. Use --ur5-ip to connect.")

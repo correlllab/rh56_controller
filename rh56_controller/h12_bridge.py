@@ -310,6 +310,9 @@ class H12Bridge:
             else:
                 self.last_error = err or "goal rejected or timed out"
                 _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
+                if "timeout" in self.last_error.lower() or "goal rejected" in self.last_error.lower():
+                    _log.warning("H12Bridge.send_arm: falling back to dual_arm after frame_task failure")
+                    return self._send_arm_via_dual_arm(frame_name, T, timeout)
             return ok
         except Exception as exc:
             self.last_error = str(exc)
