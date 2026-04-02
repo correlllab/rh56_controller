@@ -8,8 +8,8 @@ Run with:
     UV_PROJECT_ENVIRONMENT=.venv310 uv run python -m rh56_controller.grasp_viz --h12 --bimanual --real-h12
 
 Actions used:
-  /frame_task   (custom_ros_messages/FrameTask)  — single arm
-  /dual_arm     (custom_ros_messages/DualArm)    — bimanual
+    /frame_task   (custom_ros_messages/FrameTask)  — single arm (primary)
+    /dual_arm     (custom_ros_messages/DualArm)    — bimanual helper
   /named_config (custom_ros_messages/NamedConfig)
 
 Topics subscribed:
@@ -267,68 +267,48 @@ class H12Bridge:
                  timeout: float = 15.0) -> bool:
         try:
             from rclpy.action import ActionClient
-            try:
-                from custom_ros_messages.action import FrameTask
-            except Exception as exc:
-                _log.warning("H12Bridge.send_arm: FrameTask unavailable (%s); falling back to dual_arm", exc)
-                return self._send_arm_via_dual_arm(frame_name, T, timeout)
+            from custom_ros_messages.action import FrameTask
 
             client = ActionClient(self._node, FrameTask, "frame_task")
             if not client.wait_for_server(timeout_sec=5.0):
-                _log.warning("H12Bridge.send_arm: frame_task unavailable; falling back to dual_arm")
-                return self._send_arm_via_dual_arm(frame_name, T, timeout)
+                self.last_error = "frame_task server not available"
+                _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
+                return False
 
             pose = _mat_to_pose(T)
             goal = FrameTask.Goal()
             goal.frame_names   = [frame_name]
             goal.frame_targets = [pose]
 
-            # Server-side convergence thresholds are commonly ~5 mm / 0.02 rad.
-            # Warn when target delta is below threshold to explain no visible motion.
+            # Match frame_task_client behavior: send the goal directly.
+            # Keep only a tiny-delta warning to explain no visible motion.
             cur_T = self.get_wrist_pose(frame_name, timeout=0.3)
             if cur_T is not None:
                 dp = float(np.linalg.norm(T[:3, 3] - cur_T[:3, 3]))
                 dth = _rotation_delta_rad(cur_T[:3, :3], T[:3, :3])
-                if dp > 0.20 or dth > 1.2:
-                    self.last_error = (
-                        "target jump too large for safe single-step command "
-                        f"(Δpos={dp*1000.0:.1f} mm, Δrot={np.degrees(dth):.1f} deg)"
-                    )
-                    _log.warning("H12Bridge.send_arm BLOCKED: %s", self.last_error)
-                    return False
                 if dp < 5e-3 and dth < 2e-2:
                     _log.info(
                         "H12Bridge.send_arm: tiny delta (%.1f mm, %.2f deg) below typical controller thresholds; motion may be skipped",
                         dp * 1000.0, np.degrees(dth),
                     )
 
-            _log.info("H12Bridge.send_arm → %s pos=[%.3f, %.3f, %.3f]",
-                      frame_name, T[0, 3], T[1, 3], T[2, 3])
+            _log.info(
+                "H12Bridge.send_arm → %s pos=[%.3f, %.3f, %.3f] quat=[%.4f, %.4f, %.4f, %.4f]",
+                frame_name,
+                T[0, 3], T[1, 3], T[2, 3],
+                pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
+            )
             ok, err = _send_action(client, goal, timeout)
             if ok:
                 _log.info("H12Bridge.send_arm OK")
             else:
                 self.last_error = err or "goal rejected or timed out"
                 _log.warning("H12Bridge.send_arm FAILED: %s", self.last_error)
-                if "timeout" in self.last_error.lower() or "goal rejected" in self.last_error.lower():
-                    _log.warning("H12Bridge.send_arm: falling back to dual_arm after frame_task failure")
-                    return self._send_arm_via_dual_arm(frame_name, T, timeout)
             return ok
         except Exception as exc:
             self.last_error = str(exc)
             _log.warning("H12Bridge.send_arm FAILED: %s", exc)
             return False
-
-    def _send_arm_via_dual_arm(self, frame_name: str, T: np.ndarray,
-                               timeout: float = 15.0) -> bool:
-        arm = frame_name.lower()
-        if "right" in arm:
-            return self.send_dual_arm(right_T=T, left_T=None, timeout=timeout)
-        if "left" in arm:
-            return self.send_dual_arm(right_T=None, left_T=T, timeout=timeout)
-        self.last_error = f"cannot infer arm side from frame_name '{frame_name}'"
-        _log.warning("H12Bridge.send_arm fallback FAILED: %s", self.last_error)
-        return False
 
     # ------------------------------------------------------------------
     # Dual-arm: DualArm action

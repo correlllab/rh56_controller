@@ -210,6 +210,33 @@ class GraspVizUI(GraspVizCore):
                                  -180.0, 180.0, 0.0, 1.0,
                                  "_var_rz", "_sl_rz", "_ent_rz", self._on_plane_rz)
 
+        if self._h12_mode:
+            ttk.Label(outer, text="── Wrist orientation (real, from /ee_pose) ──",
+                      foreground="#777").grid(row=r, column=0, columnspan=3, sticky="w")
+            r += 1
+            r = self._add_slider_row(outer, r, "Wrist Rx (°):",
+                                     -180.0, 180.0, 0.0, 1.0,
+                                     "_var_wrist_rx", "_sl_wrist_rx", "_ent_wrist_rx", lambda _v: None)
+            r = self._add_slider_row(outer, r, "Wrist Ry (°):",
+                                     -180.0, 180.0, 0.0, 1.0,
+                                     "_var_wrist_ry", "_sl_wrist_ry", "_ent_wrist_ry", lambda _v: None)
+            r = self._add_slider_row(outer, r, "Wrist Rz (°):",
+                                     -180.0, 180.0, 0.0, 1.0,
+                                     "_var_wrist_rz", "_sl_wrist_rz", "_ent_wrist_rz", lambda _v: None)
+            for wid in [
+                getattr(self, "_sl_wrist_rx", None),
+                getattr(self, "_sl_wrist_ry", None),
+                getattr(self, "_sl_wrist_rz", None),
+                getattr(self, "_ent_wrist_rx", None),
+                getattr(self, "_ent_wrist_ry", None),
+                getattr(self, "_ent_wrist_rz", None),
+            ]:
+                if wid is not None:
+                    try:
+                        wid.config(state="disabled")
+                    except Exception:
+                        pass
+
     def _add_slider_row(self, parent, row, label, vmin, vmax, vinit, vstep,
                         var_attr, sl_attr, ent_attr, callback):
         """Add a label + Scale + Entry row.  Returns next available row."""
@@ -466,6 +493,32 @@ class GraspVizUI(GraspVizCore):
         self._btn_setpose_h12.grid(row=r, column=0, columnspan=2, sticky="ew",
                                    padx=2, pady=1); r += 1
 
+        ttk.Label(parent, text="── Wrist Pose Sanity ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        self._h12_pose_frame_var = tk.StringVar(value="frame: n/a")
+        self._h12_pose_pelvis_var = tk.StringVar(value="pelvis xyz(mm): n/a")
+        self._h12_pose_planner_var = tk.StringVar(value="planner xyz(mm): n/a")
+        self._h12_pose_quat_var = tk.StringVar(value="planner quat(xyzw): n/a")
+        self._h12_pose_rpy_var = tk.StringVar(value="planner rpy(deg): n/a")
+        ttk.Label(parent, textvariable=self._h12_pose_frame_var).grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        ttk.Label(parent, textvariable=self._h12_pose_pelvis_var).grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        ttk.Label(parent, textvariable=self._h12_pose_planner_var).grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        ttk.Label(parent, textvariable=self._h12_pose_quat_var).grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        ttk.Label(parent, textvariable=self._h12_pose_rpy_var).grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        self._btn_refresh_h12_pose = tk.Button(
+            parent, text="Refresh Wrist Pose",
+            command=self._on_refresh_h12_wrist_pose,
+            state="normal" if _h12_ok else "disabled")
+        self._btn_refresh_h12_pose.grid(row=r, column=0, columnspan=2, sticky="ew",
+                                        padx=2, pady=1); r += 1
+        if _h12_ok:
+            self._refresh_h12_wrist_pose_panel(log_on_fail=False)
+
         ttk.Label(parent, text="Active arm:").grid(row=r, column=0, sticky="w")
         self._active_arm_mode_var = tk.StringVar(value="auto")
         arm_mode = ttk.Combobox(
@@ -501,7 +554,7 @@ class GraspVizUI(GraspVizCore):
                              padx=2, pady=4); r += 1
 
         if not _h12_ok:
-            self._update_status("No H1-2 connection. Start dual_arm server + use --real-h12.")
+            self._update_status("No H1-2 connection. Start frame_task_server + use --real-h12.")
 
         ttk.Separator(parent, orient="horizontal").grid(
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
@@ -570,6 +623,12 @@ class GraspVizUI(GraspVizCore):
             self._sl_w.config(state=state)
             self._ent_w.config(state=state)
             self._ent_width_target.config(state=state)
+            self._sl_rx.config(state=state)
+            self._sl_ry.config(state=state)
+            self._sl_rz.config(state=state)
+            self._ent_rx.config(state=state)
+            self._ent_ry.config(state=state)
+            self._ent_rz.config(state=state)
         except Exception:
             pass
         if hasattr(self, "_btn_grasp"):
@@ -581,6 +640,7 @@ class GraspVizUI(GraspVizCore):
         arm = self._active_arm()
         arm_label = "right" if arm == 0 else "left"
         self._update_active_arm()
+        self._refresh_h12_wrist_pose_panel(log_on_fail=False)
         self._update_status(f"H1-2 active arm mode: {mode} (current={arm_label}).")
 
     def _refresh_h12_gravity_button(self):
@@ -615,6 +675,86 @@ class GraspVizUI(GraspVizCore):
         self._update_status("H1-2 GRASP! sequence started…")
         threading.Thread(target=self._execute_h12_grasp, daemon=True,
                          name="grasp-h12").start()
+
+    def _on_refresh_h12_wrist_pose(self):
+        if getattr(self, "_h12_arm", None) is None:
+            self._update_status("No H1-2 connection.")
+            return
+        if self._refresh_h12_wrist_pose_panel(log_on_fail=True):
+            self._update_status("H1-2 wrist pose panel refreshed from /right_ee_pose or /left_ee_pose.")
+
+    def _refresh_h12_wrist_pose_panel(self, log_on_fail: bool = False) -> bool:
+        dbg = self.get_h12_wrist_pose_debug(timeout=0.5)
+        if not dbg:
+            self._h12_pose_frame_var.set("frame: n/a")
+            self._h12_pose_pelvis_var.set("pelvis xyz(mm): n/a")
+            self._h12_pose_planner_var.set("planner xyz(mm): n/a")
+            self._h12_pose_quat_var.set("pelvis quat(xyzw): n/a")
+            self._h12_pose_rpy_var.set("pelvis rpy(deg): n/a")
+            if hasattr(self, "_sl_wrist_rx"):
+                self._sl_wrist_rx.set(0.0)
+            if hasattr(self, "_sl_wrist_ry"):
+                self._sl_wrist_ry.set(0.0)
+            if hasattr(self, "_sl_wrist_rz"):
+                self._sl_wrist_rz.set(0.0)
+            if hasattr(self, "_ent_wrist_rx"):
+                self._ent_wrist_rx.config(state="normal")
+                self._ent_wrist_rx.delete(0, tk.END)
+                self._ent_wrist_rx.insert(0, "0.0")
+                self._ent_wrist_rx.config(state="disabled")
+            if hasattr(self, "_ent_wrist_ry"):
+                self._ent_wrist_ry.config(state="normal")
+                self._ent_wrist_ry.delete(0, tk.END)
+                self._ent_wrist_ry.insert(0, "0.0")
+                self._ent_wrist_ry.config(state="disabled")
+            if hasattr(self, "_ent_wrist_rz"):
+                self._ent_wrist_rz.config(state="normal")
+                self._ent_wrist_rz.delete(0, tk.END)
+                self._ent_wrist_rz.insert(0, "0.0")
+                self._ent_wrist_rz.config(state="disabled")
+            if log_on_fail:
+                self._update_status("Failed to refresh H1-2 wrist pose panel.")
+            return False
+
+        p_p = dbg["pelvis_xyz_m"] * 1000.0
+        p_w = dbg["planner_xyz_m"] * 1000.0
+        q_p = dbg["pelvis_quat_xyzw"]
+        rpy_p = np.degrees(dbg["pelvis_rpy_rad"])
+        self._h12_pose_frame_var.set(f"frame: {dbg['frame']}")
+        self._h12_pose_pelvis_var.set(
+            f"pelvis xyz(mm): [{p_p[0]:.1f}, {p_p[1]:.1f}, {p_p[2]:.1f}]"
+        )
+        self._h12_pose_planner_var.set(
+            f"planner xyz(mm): [{p_w[0]:.1f}, {p_w[1]:.1f}, {p_w[2]:.1f}]"
+        )
+        self._h12_pose_quat_var.set(
+            f"pelvis quat(xyzw): [{q_p[0]:.4f}, {q_p[1]:.4f}, {q_p[2]:.4f}, {q_p[3]:.4f}]"
+        )
+        self._h12_pose_rpy_var.set(
+            f"pelvis rpy(deg): [{rpy_p[0]:.1f}, {rpy_p[1]:.1f}, {rpy_p[2]:.1f}]"
+        )
+        if hasattr(self, "_sl_wrist_rx"):
+            self._sl_wrist_rx.set(float(rpy_p[0]))
+        if hasattr(self, "_sl_wrist_ry"):
+            self._sl_wrist_ry.set(float(rpy_p[1]))
+        if hasattr(self, "_sl_wrist_rz"):
+            self._sl_wrist_rz.set(float(rpy_p[2]))
+        if hasattr(self, "_ent_wrist_rx"):
+            self._ent_wrist_rx.config(state="normal")
+            self._ent_wrist_rx.delete(0, tk.END)
+            self._ent_wrist_rx.insert(0, f"{float(rpy_p[0]):.1f}")
+            self._ent_wrist_rx.config(state="disabled")
+        if hasattr(self, "_ent_wrist_ry"):
+            self._ent_wrist_ry.config(state="normal")
+            self._ent_wrist_ry.delete(0, tk.END)
+            self._ent_wrist_ry.insert(0, f"{float(rpy_p[1]):.1f}")
+            self._ent_wrist_ry.config(state="disabled")
+        if hasattr(self, "_ent_wrist_rz"):
+            self._ent_wrist_rz.config(state="normal")
+            self._ent_wrist_rz.delete(0, tk.END)
+            self._ent_wrist_rz.insert(0, f"{float(rpy_p[2]):.1f}")
+            self._ent_wrist_rz.config(state="disabled")
+        return True
 
     def _h12_read_params(self):
         """Read force_N, step_mm, approach_m from UI widgets (safe from bg thread)."""
@@ -772,6 +912,7 @@ class GraspVizUI(GraspVizCore):
             self._sl_rz.set(np.degrees(self._plane_rz))
         self._push_viewer_ctrl()
         self._schedule_plot_only()
+        self._refresh_h12_wrist_pose_panel(log_on_fail=False)
         if q_ok:
             self._update_status(
                 f"Pose set: wrist({params['grasp_x']*1000:.0f},"

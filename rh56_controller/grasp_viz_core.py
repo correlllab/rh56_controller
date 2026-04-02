@@ -864,7 +864,7 @@ class GraspVizCore:
             if ok:
                 _log.info("H12Bridge connected (ROS2).")
             else:
-                _log.warning("H12Bridge failed to connect — check that dual_arm server is running.")
+                _log.warning("H12Bridge failed to connect — check that frame_task_server is running.")
                 self._h12_arm = None
         except Exception as exc:
             _log.warning("H12Bridge setup failed: %s", exc)
@@ -1003,7 +1003,7 @@ class GraspVizCore:
     def _send_h12_arm(self) -> None:
         """Send current grasp pose to real H1-2 via ROS2 actions."""
         if self._h12_arm is None:
-            self._update_status("H12 arm not connected. Start dual_arm server first.")
+            self._update_status("H12 arm not connected. Start frame_task_server first.")
             return
         if self._robot_only_mode:
             if self.is_h12_gravity_comp_active():
@@ -1013,8 +1013,32 @@ class GraspVizCore:
             frame = "right_wrist_yaw_link" if arm == 0 else "left_wrist_yaw_link"
             from .grasp_viz_workers import _R_WORLD_TO_PELVIS
             T = np.eye(4)
-            T[:3, :3] = _R_WORLD_TO_PELVIS @ self._plane_R_matrix()
+            cur_T = self._h12_arm.get_wrist_pose(frame, timeout=0.5)
+            # In robot-only mode, keep the current real wrist orientation.
+            # This prevents accidental large orientation changes from planner sliders.
+            if cur_T is not None:
+                T[:3, :3] = cur_T[:3, :3]
+            else:
+                T[:3, :3] = _R_WORLD_TO_PELVIS @ self._plane_R_matrix()
             T[:3,  3] = _R_WORLD_TO_PELVIS @ np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
+
+            if cur_T is not None:
+                dp = float(np.linalg.norm(T[:3, 3] - cur_T[:3, 3]))
+                R_err = cur_T[:3, :3].T @ T[:3, :3]
+                tr = float(np.clip((np.trace(R_err) - 1.0) * 0.5, -1.0, 1.0))
+                dth = float(np.arccos(tr))
+                self._update_status(
+                    "H1-2 robot-only preflight: cur_pelvis=[%.1f, %.1f, %.1f]mm target_pelvis=[%.1f, %.1f, %.1f]mm delta=[%.1fmm, %.2fdeg]"
+                    % (
+                        cur_T[0, 3] * 1000.0, cur_T[1, 3] * 1000.0, cur_T[2, 3] * 1000.0,
+                        T[0, 3] * 1000.0, T[1, 3] * 1000.0, T[2, 3] * 1000.0,
+                        dp * 1000.0, np.degrees(dth),
+                    )
+                )
+                if dp < 2e-3 and dth < 1e-2:
+                    self._update_status("H1-2 robot-only: no-op target detected, skipping send.")
+                    return
+
             self._update_status(f"H1-2 arm → {frame} (robot-only)…")
             try:
                 ok = self._h12_arm.send_arm(frame, T)
@@ -1084,6 +1108,47 @@ class GraspVizCore:
         return {
             "grasp_x": grasp_x, "grasp_y": grasp_y, "grasp_z": grasp_z,
             "plane_rx": plane_rx, "plane_ry": plane_ry, "plane_rz": plane_rz,
+        }
+
+    def get_h12_wrist_pose_debug(self, timeout: float = 0.5) -> dict:
+        """
+        Return wrist pose debug info for transform sanity checks.
+
+        Keys in returned dict:
+          frame
+                    pelvis_xyz_m, pelvis_quat_xyzw, pelvis_rpy_rad
+          planner_xyz_m, planner_quat_xyzw, planner_rpy_rad
+        """
+        if self._h12_arm is None:
+            return {}
+
+        from scipy.spatial.transform import Rotation
+        from .grasp_viz_workers import _R_PELVIS_TO_WORLD
+
+        arm = self._active_arm()
+        frame = "right_wrist_yaw_link" if arm == 0 else "left_wrist_yaw_link"
+        pelvis_T_wrist = self._h12_arm.get_wrist_pose(frame, timeout=timeout)
+        if pelvis_T_wrist is None:
+            return {}
+
+        R_pelvis = np.asarray(pelvis_T_wrist[:3, :3], dtype=float)
+        p_pelvis = np.asarray(pelvis_T_wrist[:3, 3], dtype=float)
+        q_pelvis = Rotation.from_matrix(R_pelvis).as_quat()
+        rpy_pelvis = np.asarray(_mat_to_xyz_euler(R_pelvis), dtype=float)
+
+        R_planner = _R_PELVIS_TO_WORLD @ R_pelvis
+        p_planner = _R_PELVIS_TO_WORLD @ p_pelvis
+        q_planner = Rotation.from_matrix(R_planner).as_quat()
+        rpy_planner = np.asarray(_mat_to_xyz_euler(R_planner), dtype=float)
+
+        return {
+            "frame": frame,
+            "pelvis_xyz_m": p_pelvis,
+            "pelvis_quat_xyzw": q_pelvis,
+            "pelvis_rpy_rad": rpy_pelvis,
+            "planner_xyz_m": p_planner,
+            "planner_quat_xyzw": q_planner,
+            "planner_rpy_rad": rpy_planner,
         }
 
     def seed_h12_joints_from_bridge(self, timeout: float = 1.0) -> bool:
