@@ -19,6 +19,7 @@ import math
 import multiprocessing
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -41,6 +42,9 @@ from .grasp_viz_workers import (
     _DEFAULT_H12_X, _DEFAULT_H12_Y, _DEFAULT_H12_Z,
     _H12_SCENE, _H12_BIMANUAL_SCENE,
     _H12_MIDPLANE_Y,
+    _H12_R_HAND_TO_WRIST, _H12_T_HAND_TO_WRIST,
+    _H12_LEFT_R_HAND_TO_WRIST, _H12_LEFT_T_HAND_TO_WRIST,
+    _R_WORLD_TO_PELVIS,
     _IK_DT, _IK_MAX_ITERS, _IK_POS_THR, _IK_ORI_THR, _EEFF_LOCAL,
     MODES,
     _worker_jnt_map, _worker_apply_qpos, _worker_add_geoms,
@@ -48,6 +52,21 @@ from .grasp_viz_workers import (
     _h12_robot_viewer_worker, _h12_bimanual_viewer_worker,
     _mat_to_xyz_euler,
 )
+
+
+def _make_viewer_mp_context():
+    if sys.platform == "darwin":
+        candidates = [Path(sys.executable).with_name("mjpython")]
+        found = shutil.which("mjpython")
+        if found:
+            candidates.append(Path(found))
+        for candidate in candidates:
+            if candidate.exists():
+                multiprocessing.set_executable(str(candidate))
+                _log.info("Using mjpython for MuJoCo viewer subprocesses: %s", candidate)
+                return multiprocessing.get_context("spawn")
+        _log.warning("mjpython not found; MuJoCo passive viewers may fail on macOS.")
+    return multiprocessing.get_context("fork")
 
 
 class GraspVizCore:
@@ -135,7 +154,7 @@ class GraspVizCore:
             self._init_hand(port, hand_id)
 
         # ---- Multiprocessing viewer state ----
-        _mp = multiprocessing.get_context("fork")
+        _mp = _make_viewer_mp_context()
         self._mp_ctx = _mp
 
         self._custom_ctrl_arr  = _mp.Array("d", _VIEWER_CTRL_LEN)
@@ -143,6 +162,7 @@ class GraspVizCore:
         self._viewer_state_arr = _mp.Array("d", _VIEWER_STATE_LEN)
 
         self._ctrl_open_fingers = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
+        self._sim_arm_t         = _mp.Value("d", 1.0)
         self._sim_grasp_t       = _mp.Value("d", 1.0)
         self._sim_grasp_gen     = 0
 
@@ -190,7 +210,7 @@ class GraspVizCore:
         self._grasp_force_N  = 0.0
         self._grasp_step_mm  = 10.0
 
-        _mp2 = multiprocessing.get_context("fork")
+        _mp2 = _mp
         self._real_q_arr    = _mp2.Array("d", 6)
         self._real_tracking = _mp2.Value("b", 0)
         self._h12_right_q_arr = _mp2.Array("d", 7)
@@ -446,6 +466,23 @@ class GraspVizCore:
         T[:3, 3]  = wbase
         return T
 
+    def _h12_wrist_target_world(self, r: ClosureResult):
+        """Build planner-world wrist target from the closure hand-base target."""
+        T_hand = self._build_world_T_hand(r)
+        arm = self._active_arm()
+        if arm == 0:
+            frame = "right_wrist_yaw_link"
+            R_hand_to_wrist = _H12_R_HAND_TO_WRIST
+            t_hand_to_wrist = _H12_T_HAND_TO_WRIST
+        else:
+            frame = "left_wrist_yaw_link"
+            R_hand_to_wrist = _H12_LEFT_R_HAND_TO_WRIST
+            t_hand_to_wrist = _H12_LEFT_T_HAND_TO_WRIST
+        T_wrist = np.eye(4)
+        T_wrist[:3, :3] = T_hand[:3, :3] @ R_hand_to_wrist
+        T_wrist[:3,  3] = T_hand[:3,  3] + T_hand[:3, :3] @ t_hand_to_wrist
+        return T_wrist, frame
+
     # ------------------------------------------------------------------
     # Viewer monitor (background thread)
     # ------------------------------------------------------------------
@@ -571,8 +608,9 @@ class GraspVizCore:
                            finger_ctrl: Optional[Dict] = None) -> np.ndarray:
         fc = finger_ctrl if finger_ctrl is not None else r.ctrl_values
         if self._h12_mode:
-            wbase = np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
-            rot_x, rot_y, rot_z = _mat_to_xyz_euler(self._plane_R_matrix())
+            T_wrist, _ = self._h12_wrist_target_world(r)
+            wbase = T_wrist[:3, 3]
+            rot_x, rot_y, rot_z = _mat_to_xyz_euler(T_wrist[:3, :3])
         else:
             gz    = self._grasp_z
             wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
@@ -751,6 +789,7 @@ class GraspVizCore:
                   self._viewer_state_arr, self._h12_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
+                        sim_arm_t=self._sim_arm_t,
                         sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
@@ -777,6 +816,7 @@ class GraspVizCore:
                   self._viewer_state_arr, self._h12_mink_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
                         ik_pos_thr=_IK_POS_THR, ik_ori_thr=_IK_ORI_THR,
+                        sim_arm_t=self._sim_arm_t,
                         sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
@@ -839,6 +879,7 @@ class GraspVizCore:
                   self._viewer_state_arr,
                   self._h12_bimanual_stop),
             kwargs=dict(ik_dt=_IK_DT, ik_max_iters=40,
+                        sim_arm_t=self._sim_arm_t,
                         sim_grasp_t=self._sim_grasp_t,
                         ctrl_open_fingers=tuple(self._ctrl_open_fingers),
                         real_right_q_arr=self._h12_right_q_arr,
@@ -956,24 +997,18 @@ class GraspVizCore:
 
     def _h12_arm_T(self, r: "ClosureResult"):
         """Compute 4×4 wrist target pose for a given closure result."""
-        R_wrist = self._plane_R_matrix()
-        p_wrist = np.array([self._grasp_x, self._grasp_y, self._grasp_z], dtype=float)
-        arm = self._active_arm()
-        if arm == 0:
-            frame   = "right_wrist_yaw_link"
-        else:
-            frame   = "left_wrist_yaw_link"
+        T_world_wrist, frame = self._h12_wrist_target_world(r)
         # Convert from planner world frame (+X forward) → H12 pelvis frame (+Y forward)
-        from .grasp_viz_workers import _R_WORLD_TO_PELVIS
         T = np.eye(4)
-        T[:3, :3] = _R_WORLD_TO_PELVIS @ R_wrist
-        T[:3,  3] = _R_WORLD_TO_PELVIS @ p_wrist
+        T[:3, :3] = _R_WORLD_TO_PELVIS @ T_world_wrist[:3, :3]
+        T[:3,  3] = _R_WORLD_TO_PELVIS @ T_world_wrist[:3,  3]
         return T, frame
 
-    def _h12_finger_cmd(self, r: "ClosureResult"):
+    def _h12_finger_cmd(self, r: "ClosureResult", finger_ctrl: Optional[Dict] = None):
         """Convert a closure result to a real-hand angle_set list (6 ints, 0–1000)."""
+        fc = finger_ctrl if finger_ctrl is not None else r.ctrl_values
         finger_ctrl = np.array([
-            r.ctrl_values.get(a, self.fk.ctrl_min[a]) for a in _ACTUATOR_ORDER
+            fc.get(a, self.fk.ctrl_min[a]) for a in _ACTUATOR_ORDER
         ])
         ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
         ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])

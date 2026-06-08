@@ -7,6 +7,7 @@ These module-level functions run inside separate multiprocessing.Process instanc
   2. Constants can be shared across grasp_viz_core.py and grasp_viz_ui.py.
 """
 
+import os
 import time
 import pathlib
 from typing import Dict
@@ -615,9 +616,11 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
 # H1-2 robot viewer worker  (PINK IK via pinocchio + pink)
 # ---------------------------------------------------------------------------
 
-# Path to h1_2.urdf (needed by the PINK IK worker)
-_H12_URDF = str(
-    pathlib.Path("/home/humanoid/Programs/h12_ros2_controller") / "assets" / "h1_2" / "h1_2.urdf"
+# Path to h1_2.urdf (needed by the PINK IK worker).  Use the checked-in
+# simulation asset by default; real-controller setups can override this.
+_H12_URDF = os.environ.get(
+    "RH56_H12_URDF",
+    str(_HERE / "h1_mujoco" / "unitree_robots" / "h1_2" / "h1_2.urdf"),
 )
 
 # Home joint positions for the right arm (shoulder_pitch, roll, yaw, elbow, wrist_roll, pitch, yaw)
@@ -631,6 +634,7 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                               ik_max_iters: int = 40,
                               ik_pos_thr: float = 5e-3,
                               ik_ori_thr: float = 0.05,
+                              sim_arm_t=None,
                               sim_grasp_t=None,
                               ctrl_open_fingers=None,
                               real_right_q_arr=None,
@@ -672,6 +676,7 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
 
         # Right wrist frame task
         wrist_frame_id = model.getFrameId(_H12_EE_FRAME)
+        home_wrist_target = pin.SE3(data.oMf[wrist_frame_id].homogeneous.copy())
         ee_task = pink.tasks.FrameTask(
             _H12_EE_FRAME,
             position_cost=50.0,
@@ -768,6 +773,8 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
         with mujoco.viewer.launch_passive(mj_model, mj_data) as v:
             while v.is_running() and not stop_event.is_set():
                 ctrl = np.array(ctrl_arr[:])
+                t_arm = sim_arm_t.value if sim_arm_t is not None else 1.0
+                t_arm = float(np.clip(t_arm, 0.0, 1.0))
                 t_grasp = sim_grasp_t.value if sim_grasp_t is not None else 1.0
                 if _ctrl_open is not None and 0.0 <= t_grasp < 1.0:
                     eff_finger = _ctrl_open + t_grasp * (ctrl[6:12] - _ctrl_open)
@@ -823,7 +830,10 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                 T_wrist          = np.eye(4)
                 T_wrist[:3, :3]  = R_wrist
                 T_wrist[:3,  3]  = p_wrist
-                ee_task.set_target(pin.SE3(T_wrist))
+                target_wrist = pin.SE3(T_wrist)
+                if t_arm < 1.0:
+                    target_wrist = pin.SE3.Interpolate(home_wrist_target, target_wrist, t_arm)
+                ee_task.set_target(target_wrist)
                 posture_task.set_target(q0)
 
                 # PINK IK iterations — lock non-arm joints to q0 each step so the
@@ -884,6 +894,7 @@ def _h12_bimanual_viewer_worker(
         stop_event,
         ik_dt: float = 0.05,
         ik_max_iters: int = 40,
+        sim_arm_t=None,
         sim_grasp_t=None,
         ctrl_open_fingers=None,
         real_right_q_arr=None,
@@ -1047,12 +1058,16 @@ def _h12_bimanual_viewer_worker(
         pin.updateFramePlacements(model, data)
         r_rest_T = data.oMf[model.getFrameId(_H12_EE_FRAME)].homogeneous.copy()
         l_rest_T = data.oMf[model.getFrameId(_H12_LEFT_EE_FRAME)].homogeneous.copy()
+        r_rest_SE3 = pin.SE3(r_rest_T)
+        l_rest_SE3 = pin.SE3(l_rest_T)
 
         with mujoco.viewer.launch_passive(mj_model, mj_data) as v:
             while v.is_running() and not stop_event.is_set():
                 ctrl       = np.array(ctrl_arr[:])
                 left_ctrl  = np.array(left_ctrl_arr[:])
                 active_arm = active_arm_val.value   # 0=right, 1=left
+                t_arm      = sim_arm_t.value if sim_arm_t is not None else 1.0
+                t_arm      = float(np.clip(t_arm, 0.0, 1.0))
                 t_grasp    = sim_grasp_t.value if sim_grasp_t is not None else 1.0
                 use_real_seed = (
                     real_tracking is not None
@@ -1122,6 +1137,8 @@ def _h12_bimanual_viewer_worker(
                     R_w = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
                     p_w = ctrl[0:3]
                     T_r = np.eye(4); T_r[:3, :3] = R_w; T_r[:3, 3] = p_w
+                    if t_arm < 1.0:
+                        T_r = pin.SE3.Interpolate(r_rest_SE3, pin.SE3(T_r), t_arm).homogeneous
                 else:
                     # Inactive: hold real arm if available, otherwise return to rest.
                     if use_real_seed:
@@ -1135,6 +1152,8 @@ def _h12_bimanual_viewer_worker(
                     R_w = _Rx(left_ctrl[3]) @ _Ry(left_ctrl[4]) @ _Rz(left_ctrl[5])
                     p_w = left_ctrl[0:3]
                     T_l = np.eye(4); T_l[:3, :3] = R_w; T_l[:3, 3] = p_w
+                    if t_arm < 1.0:
+                        T_l = pin.SE3.Interpolate(l_rest_SE3, pin.SE3(T_l), t_arm).homogeneous
                 else:
                     # Inactive: hold real arm if available, otherwise return to rest.
                     if use_real_seed:

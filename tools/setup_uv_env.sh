@@ -122,6 +122,12 @@ for ex in "${EXTRAS[@]}"; do
   SYNC_CMD+=(--extra "$ex")
 done
 
+if [[ "$PROFILE" == "sim-h12-ur5" ]] && [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]; then
+  # magpie_control declares real-hardware deps that are not needed for sim
+  # and are not installable on Apple Silicon without extra native tooling.
+  SYNC_CMD+=(--no-install-package pyrealsense2 --no-install-package ur-rtde)
+fi
+
 echo "[setup_uv_env] Profile: $PROFILE"
 echo "[setup_uv_env] Python : $PYTHON_VERSION"
 echo "[setup_uv_env] Env    : $ENV_DIR"

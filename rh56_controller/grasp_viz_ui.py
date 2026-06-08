@@ -15,6 +15,7 @@ GraspVizUI inherits GraspVizCore and adds:
 
 import os
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -49,6 +50,7 @@ _MODE_ACTIVE_FINGERS = {
 
 _POLL_MS    = 150   # status queue poll interval
 _RECOMP_MS  = 40    # debounce for slider → recompute + plot
+_BUTTON_TEXT_ON_COLOR = "black" if sys.platform == "darwin" else "white"
 
 
 class GraspVizUI(GraspVizCore):
@@ -315,7 +317,7 @@ class GraspVizUI(GraspVizCore):
                   command=self._launch_robot_viewer_mink).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
         tk.Button(outer, text="H1-2: Ours",
-                  bg="#1a6b3c", fg="white",
+                  bg="#1a6b3c", fg=_BUTTON_TEXT_ON_COLOR,
                   command=self._launch_h12_viewer).grid(
             row=r, column=0, sticky="ew", padx=2, pady=1)
         tk.Button(outer, text="H1-2: Mink" if _mink_ready else "H1-2: Mink N/A",
@@ -331,7 +333,7 @@ class GraspVizUI(GraspVizCore):
                             command=self._on_bimanual_toggle).grid(
                 row=r, column=0, columnspan=2, sticky="w"); r += 1
             tk.Button(outer, text="H1-2: Bimanual",
-                      bg="#1a3c6b", fg="white",
+                      bg="#1a3c6b", fg=_BUTTON_TEXT_ON_COLOR,
                       command=self._launch_h12_bimanual_viewer).grid(
                 row=r, column=0, columnspan=2, sticky="ew", padx=2, pady=1); r += 1
 
@@ -339,7 +341,7 @@ class GraspVizUI(GraspVizCore):
                   command=self._open_force_viz_panel).grid(
             row=r, column=0, sticky="ew", padx=2, pady=1)
         tk.Button(outer, text="Force Control",
-                  bg="#2980b9", fg="white",
+                  bg="#2980b9", fg=_BUTTON_TEXT_ON_COLOR,
                   command=self._open_force_control_ui).grid(
             row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
@@ -356,10 +358,69 @@ class GraspVizUI(GraspVizCore):
             self._build_h12_real_panel(outer, r)
             return
 
+        # ── H1-2 sim-only panel ──
+        if self._h12_mode:
+            self._build_h12_sim_panel(outer, r)
+            return
+
         # ── UR5 real robot panel ──
         if self._real_robot_mode:
             self._build_real_robot_panel(outer, r)
             return   # real robot panel manages its own rows
+
+    def _build_h12_sim_panel(self, parent, start_row):
+        """H1-2 simulation controls for running the paper grasp strategies."""
+        r = start_row
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── H1-2 Sim ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        self._btn_sim_h12 = tk.Button(
+            parent, text="Sim H1-2",
+            bg="#1a3c6b", fg=_BUTTON_TEXT_ON_COLOR,
+            command=self._on_sim_h12)
+        self._btn_sim_h12.grid(row=r, column=0, columnspan=2,
+                               sticky="ew", padx=2, pady=1); r += 1
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Strategy ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        self._strategy_var = tk.StringVar(value=self._grasp_strategy)
+        for s in ["Naive", "Plan", "Thumb Reflex"]:
+            tk.Radiobutton(parent, text=s, variable=self._strategy_var, value=s,
+                           command=self._on_strategy_radio).grid(
+                row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Parameters ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+
+        for label, attr, default in [
+            ("Step (mm):",     "_ent_step",     "10"),
+            ("Approach (mm):", "_ent_approach", ""),
+        ]:
+            ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w")
+            ent = tk.Entry(parent, width=9)
+            ent.insert(0, default)
+            ent.grid(row=r, column=1, sticky="ew", padx=2)
+            setattr(self, attr, ent)
+            r += 1
+
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
+        ttk.Label(parent, text="── Status ──", foreground="#555").grid(
+            row=r, column=0, columnspan=2, sticky="w"); r += 1
+        self._status_text = scrolledtext.ScrolledText(
+            parent, height=10, width=26, state="disabled",
+            font=("Courier", 7), wrap="word")
+        self._status_text.grid(row=r, column=0, columnspan=2,
+                               sticky="nsew", padx=2, pady=2); r += 1
+        parent.rowconfigure(r - 1, weight=1)
 
     def _build_real_robot_panel(self, parent, start_row):
         r = start_row
@@ -435,7 +496,7 @@ class GraspVizUI(GraspVizCore):
             row=r, column=0, columnspan=2, sticky="ew", pady=4); r += 1
 
         self._btn_grasp = tk.Button(parent, text="GRASP!", font=("TkDefaultFont", 10, "bold"),
-                                    bg="#2ecc71", fg="white",
+                                    bg="#2ecc71", fg=_BUTTON_TEXT_ON_COLOR,
                                     command=self._on_grasp,
                                     state="normal" if _arm_ok else "disabled")
         self._btn_grasp.grid(row=r, column=0, columnspan=2, sticky="ew",
@@ -475,14 +536,14 @@ class GraspVizUI(GraspVizCore):
 
         self._btn_send_h12 = tk.Button(
             parent, text="Send H1-2",
-            bg="#1a6b3c" if _h12_ok else "#aaa", fg="white",
+            bg="#1a6b3c" if _h12_ok else "#aaa", fg=_BUTTON_TEXT_ON_COLOR,
             command=self._on_send_h12,
             state="normal" if _h12_ok else "disabled")
         self._btn_send_h12.grid(row=r, column=0, sticky="ew", padx=2, pady=1)
 
         self._btn_sim_h12 = tk.Button(
             parent, text="Sim H1-2",
-            bg="#1a3c6b", fg="white",
+            bg="#1a3c6b", fg=_BUTTON_TEXT_ON_COLOR,
             command=self._on_sim_h12)
         self._btn_sim_h12.grid(row=r, column=1, sticky="ew", padx=2, pady=1); r += 1
 
@@ -547,7 +608,7 @@ class GraspVizUI(GraspVizCore):
 
         self._btn_grasp = tk.Button(
             parent, text="GRASP!", font=("TkDefaultFont", 10, "bold"),
-            bg="#2ecc71", fg="white",
+            bg="#2ecc71", fg=_BUTTON_TEXT_ON_COLOR,
             command=self._on_grasp_h12,
             state="normal" if _h12_ok else "disabled")
         self._btn_grasp.grid(row=r, column=0, columnspan=2, sticky="ew",
@@ -648,7 +709,7 @@ class GraspVizUI(GraspVizCore):
             return
         active = self.is_h12_gravity_comp_active()
         if active:
-            self._btn_gravity_h12.config(text="GC ACTIVE", bg="#ff4444", fg="white")
+            self._btn_gravity_h12.config(text="GC ACTIVE", bg="#ff4444", fg=_BUTTON_TEXT_ON_COLOR)
         else:
             self._btn_gravity_h12.config(text="Gravity Comp", bg="#f0f0f0", fg="black")
 
@@ -841,9 +902,13 @@ class GraspVizUI(GraspVizCore):
             return
 
         r_approach = closures[0]
+        final_fc = dict(r_target.ctrl_values)
+        final_thumb_yaw = final_fc.get("thumb_yaw", self.fk.ctrl_min["thumb_yaw"])
+        approach_fc = dict(r_approach.ctrl_values)
+        approach_fc["thumb_yaw"] = final_thumb_yaw
         # Phase 1: fingers to approach config (no force limit on approach)
         if self._hand is not None:
-            self._hand.angle_set(self._h12_finger_cmd(r_approach))
+            self._hand.angle_set(self._h12_finger_cmd(r_approach, approach_fc))
         # Phase 2: arm to approach pose
         self._update_status(f"H1-2 Plan: approach {r_approach.width*1000:.1f} mm…")
         self._h12_send_arm_for_result(r_approach)
@@ -854,7 +919,9 @@ class GraspVizUI(GraspVizCore):
                 f"H1-2 Plan: step {i}/{len(closures)-1} → {r_i.width*1000:.1f} mm")
             self._h12_send_arm_for_result(r_i)
             fn = force_N if is_last else 0.0
-            self._h12_close_fingers(self._h12_finger_cmd(r_i), fn, active_fingers)
+            step_fc = dict(r_i.ctrl_values)
+            step_fc["thumb_yaw"] = final_thumb_yaw
+            self._h12_close_fingers(self._h12_finger_cmd(r_i, step_fc), fn, active_fingers)
             if not is_last:
                 time.sleep(0.2)
         self._update_status("H1-2 Plan complete.")
@@ -982,6 +1049,9 @@ class GraspVizUI(GraspVizCore):
 
     def _do_plot_only(self):
         self._debounce_id = None
+        self._push_viewer_ctrl()
+        if self._mink_enabled:
+            self._push_mink_viewer_ctrl()
         self._update_plot()
 
     # ------------------------------------------------------------------
@@ -1206,7 +1276,7 @@ class GraspVizUI(GraspVizCore):
             self._arm.enable_teach_mode()
             self._teach_mode = True
             self._manual_teach_override = True
-            self._btn_teach.config(text="TEACH MODE ACTIVE", bg="#ff4444", fg="white")
+            self._btn_teach.config(text="TEACH MODE ACTIVE", bg="#ff4444", fg=_BUTTON_TEXT_ON_COLOR)
 
     def _on_set_pose_from_robot(self):
         if self._arm is None:
@@ -1294,6 +1364,9 @@ class GraspVizUI(GraspVizCore):
 
     def _on_sim_h12(self):
         """Open (or refresh) the H1-2 viewer at current pose and animate the grasp."""
+        if hasattr(self, "_sim_arm_t"):
+            self._sim_arm_t.value = 0.0
+        self._sim_grasp_t.value = 0.0
         if self._bimanual_mode:
             self._update_active_arm()
         if self._bimanual_mode:
@@ -1312,6 +1385,34 @@ class GraspVizUI(GraspVizCore):
             self._custom_ctrl_arr[:] = ctrl
             if self._bimanual_mode and self._active_arm() == 1:
                 self._update_active_arm()
+
+        def _set_arm_progress(value: float):
+            if hasattr(self, "_sim_arm_t"):
+                self._sim_arm_t.value = float(np.clip(value, 0.0, 1.0))
+
+        def _animate_arm_to_target(duration_s: float = 2.0) -> bool:
+            n_steps = max(1, int(duration_s / 0.033))
+            dt = duration_s / n_steps
+            for i in range(n_steps + 1):
+                if self._sim_grasp_gen != gen:
+                    return False
+                _set_arm_progress(i / n_steps)
+                time.sleep(dt)
+            return True
+
+        def _animate_ctrl(start_ctrl: np.ndarray, end_ctrl: np.ndarray,
+                          duration_s: float = 1.0) -> bool:
+            n_steps = max(1, int(duration_s / 0.033))
+            dt = duration_s / n_steps
+            start = np.array(start_ctrl, dtype=float)
+            end = np.array(end_ctrl, dtype=float)
+            for i in range(n_steps + 1):
+                if self._sim_grasp_gen != gen:
+                    return False
+                alpha = i / n_steps
+                _set_sim_ctrl(start + alpha * (end - start))
+                time.sleep(dt)
+            return True
 
         with self._state_lock:
             r = self._result
@@ -1338,16 +1439,20 @@ class GraspVizUI(GraspVizCore):
 
         def _animate_naive():
             _sync_then_ik()
+            _set_arm_progress(0.0)
             self._sim_grasp_t.value = 0.0
             self._push_viewer_ctrl()
-            self._update_status("Sim Naive: arm → pose, fingers closing...")
-            time.sleep(2.0)
+            self._update_status("Sim Naive: moving arm home → grasp pose...")
+            if not _animate_arm_to_target(duration_s=2.0):
+                return
+            self._update_status("Sim Naive: fingers closing...")
             n_steps = 40
             for i in range(n_steps + 1):
                 if self._sim_grasp_gen != gen:
                     return
                 self._sim_grasp_t.value = i / n_steps
                 time.sleep(0.05)
+            _set_arm_progress(1.0)
             self._status_queue.put("Sim Naive: complete.")
 
         def _animate_plan():
@@ -1360,31 +1465,54 @@ class GraspVizUI(GraspVizCore):
                 return
 
             _sync_then_ik()
+            _set_arm_progress(0.0)
             self._sim_grasp_t.value = 1.0
 
             final_cv = r_target.ctrl_values
-            open_fc  = {k: self.fk.ctrl_min[k] for k in
-                        ["pinky", "ring", "middle", "index", "thumb_proximal"]}
-            open_fc["thumb_yaw"] = final_cv.get("thumb_yaw", 0.0)
+            final_thumb_yaw = final_cv.get("thumb_yaw", 0.0)
+
+            def _plan_ctrl(r_i):
+                fc = dict(r_i.ctrl_values)
+                fc["thumb_yaw"] = final_thumb_yaw
+                return self._build_ctrl_array(r_i, fc)
+
+            def _animate_plan_segment(r_from, r_to, duration_s: float = 0.5) -> bool:
+                n_steps = max(1, int(duration_s / 0.033))
+                dt = duration_s / n_steps
+                for j in range(n_steps + 1):
+                    if self._sim_grasp_gen != gen:
+                        return False
+                    alpha = j / n_steps
+                    width = r_from.width + alpha * (r_to.width - r_from.width)
+                    try:
+                        r_mid = self.closure.solve(self._mode, width)
+                    except Exception:
+                        r_mid = r_to if alpha > 0.5 else r_from
+                    _set_sim_ctrl(_plan_ctrl(r_mid))
+                    time.sleep(dt)
+                return True
 
             r_approach = closures[0]
-            ctrl = self._build_ctrl_array(r_approach, open_fc)
+            ctrl = _plan_ctrl(r_approach)
             _set_sim_ctrl(ctrl)
             self._update_status(
                 f"Sim Plan: approach {r_approach.width*1000:.1f}mm → "
                 f"{r_target.width*1000:.1f}mm ({len(closures)-1} steps)")
-            time.sleep(2.5)
+            if not _animate_arm_to_target(duration_s=2.5):
+                return
 
+            prev_r = r_approach
             for i, r_i in enumerate(closures[1:]):
                 if self._sim_grasp_gen != gen:
                     return
-                ctrl = self._build_ctrl_array(r_i)
-                _set_sim_ctrl(ctrl)
                 self._update_status(
                     f"Sim Plan: step {i+1}/{len(closures)-1} "
                     f"({r_i.width*1000:.1f}mm)")
-                time.sleep(0.5)
+                if not _animate_plan_segment(prev_r, r_i, duration_s=0.5):
+                    return
+                prev_r = r_i
 
+            _set_arm_progress(1.0)
             self._status_queue.put("Sim Plan: complete.")
 
         def _animate_thumb_reflex():
@@ -1394,9 +1522,13 @@ class GraspVizUI(GraspVizCore):
                 r_target = r
 
             _sync_then_ik()
+            _set_arm_progress(0.0)
             self._sim_grasp_t.value = 1.0
 
             final_cv = r_target.ctrl_values
+            all_open_fc = {k: self.fk.ctrl_min[k] for k in
+                           ["pinky", "ring", "middle", "index",
+                            "thumb_proximal", "thumb_yaw"]}
             thumb_fc = {
                 "pinky":          self.fk.ctrl_min["pinky"],
                 "ring":           self.fk.ctrl_min["ring"],
@@ -1405,17 +1537,21 @@ class GraspVizUI(GraspVizCore):
                 "thumb_proximal": final_cv.get("thumb_proximal", 0.0),
                 "thumb_yaw":      final_cv.get("thumb_yaw",      0.0),
             }
+            start_ctrl = self._build_ctrl_array(r_target, all_open_fc)
             ctrl = self._build_ctrl_array(r_target, thumb_fc)
-            _set_sim_ctrl(ctrl)
-            self._update_status("Sim Thumb Reflex: thumb closing, arm → pose...")
-            time.sleep(1.5)
-            if self._sim_grasp_gen != gen:
+            _set_sim_ctrl(start_ctrl)
+            self._update_status("Sim Thumb Reflex: thumb closing at home pose...")
+            if not _animate_ctrl(start_ctrl, ctrl, duration_s=1.0):
+                return
+            self._update_status("Sim Thumb Reflex: moving arm home → grasp pose...")
+            if not _animate_arm_to_target(duration_s=2.0):
                 return
 
-            ctrl = self._build_ctrl_array(r_target)
-            _set_sim_ctrl(ctrl)
             self._update_status("Sim Thumb Reflex: all fingers closing...")
-            time.sleep(1.0)
+            final_ctrl = self._build_ctrl_array(r_target)
+            if not _animate_ctrl(ctrl, final_ctrl, duration_s=1.0):
+                return
+            _set_arm_progress(1.0)
             self._status_queue.put("Sim Thumb Reflex: complete.")
 
         self._update_status(f"Sim [{strategy}]: starting...")
