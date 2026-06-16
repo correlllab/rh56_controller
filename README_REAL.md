@@ -31,15 +31,15 @@ If you already cloned without `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
-### 2. Install the uv environment with real-robot extras
+### 2. Install the uv environment with the real-ur5 profile
 
-```bash
-uv sync --extra real-robot
-```
-
-Equivalent helper command:
 ```bash
 tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312 --telemetry
+```
+
+Equivalent raw uv command:
+```bash
+UV_PROJECT_ENVIRONMENT=.venv312 uv sync --extra real-ur5 --extra telemetry
 ```
 
 This installs `magpie_control` (from `./magpie_control/`), `spatialmath`, and `ur_rtde` in addition to the base packages.
@@ -262,7 +262,7 @@ After each arm move, the robot viewer automatically reflects the real UR5 joint 
 | `NOT CONNECTED — arm move skipped` | `connect()` failed silently | Check network; re-run with correct `--ur5-ip` |
 | `TEACH MODE active — arm move blocked` | Teach mode left on | Click Teach Mode button to disable |
 | Arm overshoots / unexpected motion | Speed too high | Lower `--ur5-speed` (0.05–0.08 m/s for precision) |
-| `ur_rtde` import error | Not installed | `uv sync --extra real-robot` or `.venv/bin/pip install ur-rtde` |
+| `ur_rtde` import error | Not installed | `tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312` or `.venv312/bin/pip install ur-rtde` |
 | Hand not responding | Wrong port or permissions | `ls /dev/ttyUSB*`, `sudo chmod 666 /dev/ttyUSB0` |
 | Cylinder guard active unexpectedly | Mode is Cylinder, width < 71 mm | Increase width slider or switch to plane/line mode |
 | Force phase never completes | Force threshold too high | Lower Force (N); check `force_act()` calibration |

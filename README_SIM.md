@@ -6,6 +6,7 @@ Environment recommendation:
 - Use `.venv312` for sim-only workflows (`sim-core`, `sim-hand`, `sim-ur5`, `sim-h12`).
 - Use `.venv310` + `source /opt/ros/humble/setup.bash` for ROS2 Humble workflows.
 - Helper: `tools/setup_uv_env.sh --profile <name> --python <3.10|3.12> --env .venvXXX`
+- Profile chooser: [docs/INSTALL_PROFILES.md](docs/INSTALL_PROFILES.md)
 
 ```bash
 ## the below four uv-run commands also work gracefully without uv installation, mink just won't be enabled

@@ -2601,6 +2601,18 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dev-full = [
+    { name = "magpie-control" },
+    { name = "meshcat" },
+    { name = "meshcat-shapes" },
+    { name = "mink" },
+    { name = "pin" },
+    { name = "pin-pink" },
+    { name = "pyserial" },
+    { name = "qpsolvers", extra = ["daqp"] },
+    { name = "rerun-sdk" },
+    { name = "spatialmath-python" },
+]
 full = [
     { name = "magpie-control" },
     { name = "meshcat" },
@@ -2609,6 +2621,7 @@ full = [
     { name = "pin" },
     { name = "pin-pink" },
     { name = "pyserial" },
+    { name = "qpsolvers", extra = ["daqp"] },
     { name = "rerun-sdk" },
     { name = "spatialmath-python" },
 ]
@@ -2617,6 +2630,7 @@ h12 = [
     { name = "meshcat-shapes" },
     { name = "pin" },
     { name = "pin-pink" },
+    { name = "qpsolvers", extra = ["daqp"] },
 ]
 hand = [
     { name = "pyserial" },
@@ -2624,20 +2638,31 @@ hand = [
 mink = [
     { name = "mink" },
 ]
+real-hand = [
+    { name = "pyserial" },
+]
 real-h12-hand-ros = [
     { name = "meshcat" },
     { name = "meshcat-shapes" },
     { name = "pin" },
     { name = "pin-pink" },
     { name = "pyserial" },
+    { name = "qpsolvers", extra = ["daqp"] },
 ]
 real-h12-ros = [
     { name = "meshcat" },
     { name = "meshcat-shapes" },
     { name = "pin" },
     { name = "pin-pink" },
+    { name = "qpsolvers", extra = ["daqp"] },
 ]
 real-robot = [
+    { name = "magpie-control" },
+    { name = "mink" },
+    { name = "pyserial" },
+    { name = "spatialmath-python" },
+]
+real-ur5 = [
     { name = "magpie-control" },
     { name = "mink" },
     { name = "pyserial" },
@@ -2654,6 +2679,7 @@ sim-h12 = [
     { name = "meshcat-shapes" },
     { name = "pin" },
     { name = "pin-pink" },
+    { name = "qpsolvers", extra = ["daqp"] },
 ]
 sim-h12-ur5 = [
     { name = "magpie-control" },
@@ -2662,6 +2688,7 @@ sim-h12-ur5 = [
     { name = "mink" },
     { name = "pin" },
     { name = "pin-pink" },
+    { name = "qpsolvers", extra = ["daqp"] },
     { name = "spatialmath-python" },
 ]
 sim-hand = [
@@ -2680,60 +2707,81 @@ ur5 = [
 
 [package.metadata]
 requires-dist = [
+    { name = "magpie-control", marker = "extra == 'dev-full'", editable = "magpie_control" },
     { name = "magpie-control", marker = "extra == 'full'", editable = "magpie_control" },
     { name = "magpie-control", marker = "extra == 'real-robot'", editable = "magpie_control" },
+    { name = "magpie-control", marker = "extra == 'real-ur5'", editable = "magpie_control" },
     { name = "magpie-control", marker = "extra == 'real-ur5-ros'", editable = "magpie_control" },
     { name = "magpie-control", marker = "extra == 'sim-h12-ur5'", editable = "magpie_control" },
     { name = "magpie-control", marker = "extra == 'ur5'", editable = "magpie_control" },
     { name = "matplotlib" },
+    { name = "meshcat", marker = "extra == 'dev-full'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'full'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'h12'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'real-h12-hand-ros'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'real-h12-ros'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'sim-h12'", specifier = ">=0.3.2" },
     { name = "meshcat", marker = "extra == 'sim-h12-ur5'", specifier = ">=0.3.2" },
+    { name = "meshcat-shapes", marker = "extra == 'dev-full'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'full'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'h12'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'real-h12-hand-ros'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'real-h12-ros'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'sim-h12'", specifier = ">=1.0.0" },
     { name = "meshcat-shapes", marker = "extra == 'sim-h12-ur5'", specifier = ">=1.0.0" },
+    { name = "mink", marker = "extra == 'dev-full'", directory = "mink" },
     { name = "mink", marker = "extra == 'full'", directory = "mink" },
     { name = "mink", marker = "extra == 'mink'", directory = "mink" },
     { name = "mink", marker = "extra == 'real-robot'", directory = "mink" },
+    { name = "mink", marker = "extra == 'real-ur5'", directory = "mink" },
     { name = "mink", marker = "extra == 'real-ur5-ros'", directory = "mink" },
     { name = "mink", marker = "extra == 'sim-h12-ur5'", directory = "mink" },
     { name = "mink", marker = "extra == 'sim-hand'", directory = "mink" },
     { name = "mink", marker = "extra == 'sim-ur5'", directory = "mink" },
     { name = "mujoco", specifier = ">=3.3.6" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "pin", marker = "extra == 'dev-full'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'full'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'h12'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'real-h12-hand-ros'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'real-h12-ros'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'sim-h12'", specifier = ">=3.7.0" },
     { name = "pin", marker = "extra == 'sim-h12-ur5'", specifier = ">=3.7.0" },
+    { name = "pin-pink", marker = "extra == 'dev-full'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'full'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'h12'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'real-h12-hand-ros'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'real-h12-ros'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'sim-h12'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'sim-h12-ur5'", specifier = ">=4.1.0" },
+    { name = "pyserial", marker = "extra == 'dev-full'" },
     { name = "pyserial", marker = "extra == 'full'" },
     { name = "pyserial", marker = "extra == 'hand'" },
+    { name = "pyserial", marker = "extra == 'real-hand'" },
     { name = "pyserial", marker = "extra == 'real-h12-hand-ros'" },
     { name = "pyserial", marker = "extra == 'real-robot'" },
+    { name = "pyserial", marker = "extra == 'real-ur5'" },
     { name = "pyserial", marker = "extra == 'real-ur5-ros'" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'dev-full'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'full'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'h12'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'real-h12-hand-ros'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'real-h12-ros'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'sim-h12'", specifier = ">=4.3.1" },
+    { name = "qpsolvers", extras = ["daqp"], marker = "extra == 'sim-h12-ur5'", specifier = ">=4.3.1" },
+    { name = "rerun-sdk", marker = "extra == 'dev-full'", specifier = ">=0.21" },
     { name = "rerun-sdk", marker = "extra == 'full'", specifier = ">=0.21" },
     { name = "rerun-sdk", marker = "extra == 'telemetry'", specifier = ">=0.21" },
     { name = "scipy" },
+    { name = "spatialmath-python", marker = "extra == 'dev-full'" },
     { name = "spatialmath-python", marker = "extra == 'full'" },
     { name = "spatialmath-python", marker = "extra == 'real-robot'" },
+    { name = "spatialmath-python", marker = "extra == 'real-ur5'" },
     { name = "spatialmath-python", marker = "extra == 'real-ur5-ros'" },
     { name = "spatialmath-python", marker = "extra == 'sim-h12-ur5'" },
     { name = "spatialmath-python", marker = "extra == 'ur5'" },
 ]
-provides-extras = ["hand", "ur5", "mink", "h12", "telemetry", "ros", "sim-hand", "sim-ur5", "sim-h12", "sim-h12-ur5", "real-robot", "real-ur5-ros", "real-h12-ros", "real-h12-hand-ros", "full"]
+provides-extras = ["hand", "real-hand", "ur5", "mink", "h12", "telemetry", "ros", "sim-hand", "sim-ur5", "sim-h12", "sim-h12-ur5", "real-robot", "real-ur5", "real-ur5-ros", "real-h12-ros", "real-h12-hand-ros", "full", "dev-full"]
 
 [[package]]
 name = "rpds-py"

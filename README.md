@@ -27,7 +27,8 @@ It includes calibrated force mapping, dynamic step-response characterization, hi
 
 ## Installation (uv)
 
-This repository now uses **profile-based installation** so users can install only what they need (instead of one giant environment).
+This repository uses **profile-based installation** so users can install only the
+robot stack they need.
 
 ### 1) Clone and install uv
 
@@ -37,114 +38,53 @@ git clone --recurse-submodules https://github.com/correlllab/rh56_controller.git
 cd rh56_controller
 ```
 
-### 2) Choose a profile
-
-| Goal | Python | Profile | Command |
-|:--|:--:|:--|:--|
-| Pure sim (minimal) | 3.12 | `sim-core` | `tools/setup_uv_env.sh --profile sim-core --python 3.12 --env .venv312` |
-| Sim hand-only (+mink, no serial deps) | 3.12 | `sim-hand` | `tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312` |
-| Sim + UR5 | 3.12 | `sim-ur5` | `tools/setup_uv_env.sh --profile sim-ur5 --python 3.12 --env .venv312` |
-| Sim + H1-2 | 3.12 | `sim-h12` | `tools/setup_uv_env.sh --profile sim-h12 --python 3.12 --env .venv312` |
-| Sim + H1-2 + UR5 | 3.12 | `sim-h12-ur5` | `tools/setup_uv_env.sh --profile sim-h12-ur5 --python 3.12 --env .venv312` |
-| Real hand + UR5 (+ROS workflow) | 3.10 | `real-ur5-ros` | `tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310 --telemetry` |
-| Real H1-2 arm only (+ROS workflow) | 3.10 | `real-h12-ros` | `tools/setup_uv_env.sh --profile real-h12-ros --python 3.10 --env .venv310 --telemetry` |
-| Real H1-2 + real hand (+ROS workflow) | 3.10 | `real-h12-hand-ros` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
-
-### Dependency matrix (profiles by stack/runtime/python)
-
-| Robot stack | Runtime | Python | Profiles |
-|:--|:--|:--:|:--|
-| hand | sim | 3.12 | `sim-core`, `sim-hand` |
-| ur5 | sim | 3.12 | `sim-ur5` |
-| h12 | sim | 3.12 | `sim-h12`, `sim-h12-ur5` |
-| hand + ur5 | real | 3.12 | `real-ur5` |
-| hand + ur5 | ros | 3.10 | `real-ur5-ros` |
-| h12 (arm-only) | ros | 3.10 | `real-h12-ros` |
-| h12 + hand | ros | 3.10 | `real-h12-hand-ros` |
-| all stacks | mixed | 3.10/3.12 | `full` |
-
-Validate imports for any profile with:
+If you already cloned without submodules:
 
 ```bash
-python tools/check_profile_imports.py --list
+git submodule update --init --recursive
+```
+
+### 2) Pick a profile
+
+Start with the profile chooser in [docs/INSTALL_PROFILES.md](docs/INSTALL_PROFILES.md).
+
+Common paths:
+
+| Goal | Profile | Command |
+|:--|:--|:--|
+| Floating hand planner | `sim-hand` | `tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312` |
+| UR5 + RH56 sim | `sim-ur5` | `tools/setup_uv_env.sh --profile sim-ur5 --python 3.12 --env .venv312` |
+| H1-2 + RH56 sim | `sim-h12` | `tools/setup_uv_env.sh --profile sim-h12 --python 3.12 --env .venv312` |
+| Real RH56 hand + UR5 | `real-ur5` | `tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312 --telemetry` |
+| ROS2 Humble workflows | `real-h12-hand-ros` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
+
+Validate a profile after installing:
+
+```bash
+source .venv312/bin/activate
+python tools/check_profile_imports.py --profile sim-hand
+```
+
+For ROS2 Humble, source ROS first and use Python 3.10:
+
+```bash
+source /opt/ros/humble/setup.bash
+source .venv310/bin/activate
 python tools/check_profile_imports.py --profile real-h12-hand-ros
 ```
 
-Packaging note:
-- `pyproject.toml` is canonical for uv/profile dependency management.
-- `setup.py` is retained for ROS/ament package installation metadata.
+ROS Python packages (`rclpy`, message interfaces) are provided by ROS distro
+tooling (`apt`/`rosdep`/`colcon`), not by pip.
 
 ### Docs entry points
 
 | Topic | Guide |
 |:--|:--|
-| Top-level install/run | [README.md](README.md) |
+| Install profile chooser | [docs/INSTALL_PROFILES.md](docs/INSTALL_PROFILES.md) |
 | ROS2 workflows | [README_ROS2.md](README_ROS2.md) |
 | Sim workflows | [README_SIM.md](README_SIM.md) |
 | H1-2 specific workflows | [README_H12.md](README_H12.md) |
 | Real hardware runbook | [README_REAL.md](README_REAL.md) |
-
-### 3) Run with the matching environment
-
-```bash
-# Sim / non-ROS workflows
-source .venv312/bin/activate
-uv run python -m rh56_controller.grasp_viz
-
-# ROS2 Humble workflows (Python 3.10)
-source /opt/ros/humble/setup.bash
-source .venv310/bin/activate
-uv run python -m rh56_controller.grasp_viz --ros-sync
-```
-
-### 4) Quick env switching
-
-```bash
-# switch to sim env
-source .venv312/bin/activate
-
-# switch to ROS env
-source /opt/ros/humble/setup.bash
-source .venv310/bin/activate
-```
-
-### 5) Environment variables (what you must set)
-
-For single-machine ROS usage, usually none are required beyond sourcing setup scripts.
-
-For multi-machine ROS (recommended for H1-2 real robot), set these on **both** machines:
-
-```bash
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export ROS_LOCALHOST_ONLY=0
-export ROS_DOMAIN_ID=0   # choose one value and keep it identical on all hosts
-```
-
-For H1-2 bridge portability (only if your paths differ from defaults), set:
-
-```bash
-export RH56_H12_PYTHON=/usr/bin/python3.10
-export RH56_H12_SETUP_SCRIPTS=/opt/ros/humble/setup.bash:$HOME/ws_ctrl/install/setup.bash
-```
-
-Equivalent split form:
-
-```bash
-export RH56_H12_ROS_SETUP=/opt/ros/humble/setup.bash
-export RH56_H12_WS_SETUP=$HOME/ws_ctrl/install/setup.bash
-```
-
-### Optional: raw uv commands (without helper script)
-
-```bash
-# minimal sim
-UV_PROJECT_ENVIRONMENT=.venv312 uv sync
-
-# UR5 + real hand profile
-UV_PROJECT_ENVIRONMENT=.venv310 uv sync --extra real-ur5-ros --extra ros --extra telemetry
-```
-
-> ROS Python packages (`rclpy`, message interfaces) are provided by ROS distro tooling (`apt`/`rosdep`/`colcon`), not by pip.
 
 ### Grasp Planner — Quick Reference
 
