@@ -25,6 +25,13 @@ It includes calibrated force mapping, dynamic step-response characterization, hi
 | <a href="https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4"><img src="resource/video/4finger_grab_long_obj.gif" width="300"></a> | [▶︎ MP4](https://github.com/correlllab/rh56_controller/raw/main/resource/video/4finger_grab_long_obj.mp4) |
 ---
 
+## Optional Artifacts
+
+Large experiment logs and raw/source video exports are kept out of the default
+checkout. Curated README demos stay in `resource/video/`; optional datasets and
+extra media should live in a separate artifact checkout. See
+[docs/ARTIFACTS.md](docs/ARTIFACTS.md).
+
 ## Installation (uv)
 
 This repository uses **profile-based installation** so users can install only the
