@@ -420,7 +420,7 @@ sudo systemctl stop inspire_hand.service
 To run the driver node, use the provided launch file. You can specify the serial port, which is `/dev/ttyUSB0` by default if not specified.
 
 ```bash
-ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0
+ros2 launch rh56_controller rh56_controller.launch.py serial_port:=/dev/ttyUSB0 hand_ids:=1,2
 ```
 
 If for whatever reason `pyserial` is denied access to the hands USB device, run:
@@ -457,7 +457,7 @@ Where `q` represents the motor position, from 0 (closed) to `pi` (extended). `q_
 ### Published Topics
 
 *   **`/hands/state`** (`custom_ros_messages/msg/MotorStates`)
-    *   A not-quite-mirror of the original `inspire/state` topic. Publishes the current angle of each finger joint in radians, not the 0-1000 range, in a 12-element array (`[right[6] + left[6]]`). Subject to change if this is annoying.
+    *   A not-quite-mirror of the original `inspire/state` topic. Publishes the current angle of each finger joint in radians, not the 0-1000 range, in a 12-element array (`[right[6] + left[6]]`). Launch with `hand_ids:=1` or `hand_ids:=2` for single-hand operation; the disabled side is published with `mode=-1`.
 
 ### Subscribed Topics
 

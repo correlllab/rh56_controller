@@ -21,6 +21,9 @@ def generate_launch_description():
     serial_port_arg = DeclareLaunchArgument(
         "serial_port", default_value="/dev/ttyUSB0", description="RH56 serial port"
     )
+    hand_ids_arg = DeclareLaunchArgument(
+        "hand_ids", default_value="1,2", description="Comma-separated RH56 hand IDs to enable"
+    )
     enable_hand_driver_arg = DeclareLaunchArgument(
         "enable_hand_driver", default_value="false", description="Launch RH56 hand ROS driver"
     )
@@ -54,7 +57,10 @@ def generate_launch_description():
         executable="rh56_driver",
         name="rh56_driver",
         output="screen",
-        parameters=[{"serial_port": LaunchConfiguration("serial_port")}],
+        parameters=[{
+            "serial_port": LaunchConfiguration("serial_port"),
+            "hand_ids": LaunchConfiguration("hand_ids"),
+        }],
         condition=IfCondition(LaunchConfiguration("enable_hand_driver")),
     )
 
@@ -86,6 +92,7 @@ def generate_launch_description():
     actions = [
         ur5_ip_arg,
         serial_port_arg,
+        hand_ids_arg,
         enable_hand_driver_arg,
         enable_force_control_arg,
         motion_arbiter,

@@ -153,6 +153,7 @@ source install/setup.bash
 ros2 launch rh56_controller rh56_system.launch.py \
   ur5_ip:=192.168.0.4 \
   serial_port:=/dev/ttyUSB0 \
+  hand_ids:=1,2 \
   enable_hand_driver:=true \
   enable_force_control:=true
 ```
@@ -229,6 +230,21 @@ source install/setup.bash
 - `rh56_system.launch.py` now logs a warning and skips `rh56_driver` instead of crashing.
 - In this mode, hand serial control still runs through `grasp_viz` using `serial_port:=...`.
 - If you need `/hands/*` ROS message interfaces, build/source the workspace that provides `custom_ros_messages`.
+
+7. One RH56 hand is broken or disconnected:
+- Launch the driver with only the working hand ID so `/hands/state` still publishes a 12-slot message with the disabled side marked `mode=-1`.
+
+```bash
+ros2 launch rh56_controller rh56_controller.launch.py \
+  serial_port:=/dev/ttyUSB0 \
+  hand_ids:=1
+```
+
+Prepared hardware-free tests for the hand driver core:
+
+```bash
+uv run pytest tests/test_hand_ros_core.py
+```
 
 ## 9. Phase 2 status snapshot
 

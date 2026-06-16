@@ -27,6 +27,12 @@ This document tracks the multi-repo ROS2 migration for:
 - 🔄 Add unified ROS bringup launch for hand + viz + force nodes.
 - 🔄 Test rerun visualization with live hardware data streams.
 
+### Hand-control ROS migration slice
+- ✅ Extracted hardware-free ROS hand driver core (`rh56_controller/hand_ros_core.py`).
+- ✅ Refactored `rh56_driver` so serial access is owned by a manager and can run with `hand_ids:=1`, `hand_ids:=2`, or `hand_ids:=1,2`.
+- ✅ Added fake-hand unit tests for state conversion, command routing, disabled-hand behavior, and firmware limit commands.
+- ⏸ Tests are prepared but intentionally not run yet; run the commands in the test checklist when hardware/sim validation is ready.
+
 ## 1) rh56_controller migration (UI + ROS + rerun)
 
 ### Implemented interfaces
@@ -123,6 +129,20 @@ This lets you view synchronized timelines in one rerun session.
 4. /grasp_viz/summary_json updates at configured --ros-publish-hz.
 5. rerun opens and renders target + fingertip points.
 6. If enabled, /hands/cmd receives 12 motor commands per frame.
+
+### Prepared hand-driver tests (do not require hardware)
+Run later, when ready:
+```bash
+uv run pytest tests/test_hand_ros_core.py
+```
+
+### Prepared one-hand ROS launch smoke test
+Use this while one physical hand is broken or disconnected:
+```bash
+ros2 launch rh56_controller rh56_controller.launch.py \
+  serial_port:=/dev/ttyUSB0 \
+  hand_ids:=1
+```
 
 ## 7) Risk list
 

@@ -13,6 +13,11 @@ def generate_launch_description():
         default_value='/dev/ttyUSB0',
         description='The serial port to which both RH56 hands are connected.'
     )
+    hand_ids_arg = DeclareLaunchArgument(
+        'hand_ids',
+        default_value='1,2',
+        description='Comma-separated RH56 hand IDs to enable, e.g. 1, 2, or 1,2.'
+    )
 
     # Define the node
     rh56_driver_node = Node(
@@ -22,10 +27,12 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'serial_port': LaunchConfiguration('serial_port'),
+            'hand_ids': LaunchConfiguration('hand_ids'),
         }]
     )
 
     return LaunchDescription([
         serial_port_arg,
+        hand_ids_arg,
         rh56_driver_node,
     ])
