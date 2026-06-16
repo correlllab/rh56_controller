@@ -93,7 +93,7 @@ warn_missing_submodules() {
 
   echo "[setup_uv_env] WARNING: required submodule(s) look empty: ${missing[*]}"
   echo "[setup_uv_env] Initialize them with:"
-  echo "  git submodule update --init --recursive ${missing[*]}"
+  echo "  git submodule update --init --recursive --depth 1 ${missing[*]}"
 }
 
 PROFILE="sim-core"

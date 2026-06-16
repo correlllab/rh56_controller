@@ -5,12 +5,17 @@ smallest profile that matches the robot stack you need; move up only when you
 need another subsystem.
 
 Profiles control Python dependencies. Runtime model/controller assets still
-come from git submodules, so clone with submodules or initialize the ones listed
-for your profile:
+come from git submodules, so start with a lightweight clone and initialize only
+the ones listed for your profile:
 
 ```bash
-git submodule update --init --recursive <submodule> ...
+git clone --depth 1 https://github.com/correlllab/rh56_controller.git
+cd rh56_controller
+git submodule update --init --recursive --depth 1 <submodule> ...
 ```
+
+Use `git submodule update --init --recursive --depth 1` with no path only when
+you intentionally want the maintainer/full checkout.
 
 ## Quick Chooser
 
@@ -35,10 +40,11 @@ git submodule update --init --recursive <submodule> ...
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone --recurse-submodules https://github.com/correlllab/rh56_controller.git
+git clone --depth 1 https://github.com/correlllab/rh56_controller.git
 cd rh56_controller
 
 # Example: sim hand planner
+git submodule update --init --recursive --depth 1 h1_mujoco mink
 tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312
 source .venv312/bin/activate
 python tools/check_profile_imports.py --profile sim-hand

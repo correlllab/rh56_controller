@@ -281,7 +281,7 @@ def validate_profile(profile_name: str, check_imports: bool, check_paths: bool) 
             )
             print(
                 "[check_profile_imports] initialize submodules with: "
-                "git submodule update --init --recursive "
+                "git submodule update --init --recursive --depth 1 "
                 + " ".join(failed_paths)
             )
         print(f"[check_profile_imports] FAIL ({spec.name})")

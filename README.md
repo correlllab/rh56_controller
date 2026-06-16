@@ -41,15 +41,25 @@ robot stack they need.
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone --recurse-submodules https://github.com/correlllab/rh56_controller.git
+git clone --depth 1 https://github.com/correlllab/rh56_controller.git
 cd rh56_controller
 ```
 
-If you already cloned without submodules:
+Then initialize only the submodules needed by your profile:
 
 ```bash
-git submodule update --init --recursive
+# sim-hand / sim-ur5
+git submodule update --init --recursive --depth 1 h1_mujoco mink
+
+# sim-h12 / real H1-2 profiles
+git submodule update --init --recursive --depth 1 h1_mujoco
+
+# real-ur5 / sim-h12-ur5
+git submodule update --init --recursive --depth 1 h1_mujoco mink magpie_control
 ```
+
+For the maintainer/full environment, initialize all submodules with
+`git submodule update --init --recursive --depth 1`.
 
 ### 2) Pick a profile
 
@@ -57,13 +67,13 @@ Start with the profile chooser in [docs/INSTALL_PROFILES.md](docs/INSTALL_PROFIL
 
 Common paths:
 
-| Goal | Profile | Command |
-|:--|:--|:--|
-| Floating hand planner | `sim-hand` | `tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312` |
-| UR5 + RH56 sim | `sim-ur5` | `tools/setup_uv_env.sh --profile sim-ur5 --python 3.12 --env .venv312` |
-| H1-2 + RH56 sim | `sim-h12` | `tools/setup_uv_env.sh --profile sim-h12 --python 3.12 --env .venv312` |
-| Real RH56 hand + UR5 | `real-ur5` | `tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312 --telemetry` |
-| ROS2 Humble workflows | `real-h12-hand-ros` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
+| Goal | Profile | Submodules | Command |
+|:--|:--|:--|:--|
+| Floating hand planner | `sim-hand` | `h1_mujoco mink` | `tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312` |
+| UR5 + RH56 sim | `sim-ur5` | `h1_mujoco mink` | `tools/setup_uv_env.sh --profile sim-ur5 --python 3.12 --env .venv312` |
+| H1-2 + RH56 sim | `sim-h12` | `h1_mujoco` | `tools/setup_uv_env.sh --profile sim-h12 --python 3.12 --env .venv312` |
+| Real RH56 hand + UR5 | `real-ur5` | `h1_mujoco mink magpie_control` | `tools/setup_uv_env.sh --profile real-ur5 --python 3.12 --env .venv312 --telemetry` |
+| ROS2 Humble workflows | `real-h12-hand-ros` | `h1_mujoco` | `tools/setup_uv_env.sh --profile real-h12-hand-ros --python 3.10 --env .venv310 --telemetry` |
 
 Validate a profile after installing:
 
