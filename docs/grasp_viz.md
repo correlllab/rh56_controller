@@ -462,4 +462,4 @@ python -m rh56_controller.grasp_geometry             # self-test (rebuild cache 
 python -m rh56_controller.grasp_geometry --rebuild   # force FK table rebuild
 ```
 
-See [README_SIM.md](README_SIM.md) for all sim/viz script quick-reference commands.
+See [sim.md](sim.md) for all sim/viz script quick-reference commands.

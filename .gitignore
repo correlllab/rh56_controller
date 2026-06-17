@@ -1,12 +1,16 @@
 .vscode
 .archive
+.DS_Store
+.cache/
 __pycache__/
 *.pyc
 *.pyo
 
 # Experiment data and generated outputs (regenerate locally)
 experiment_data/
+workspace_data/
 middlefinger_speed_sweep_*.csv
+INSPIRE-ROBOTS-*.pdf
 logs/
 logs_old/
 plots/
@@ -14,23 +18,8 @@ mink_vs_analytical/
 mink_vs_analytical_200widths/
 paper/
 
-# Keep only curated README demo assets in the main repository.
-# Put raw videos and extra exports in the optional artifact checkout.
-resource/video/*
-!resource/video/
-!resource/video/force_control.mp4
-!resource/video/force_control_gif_source.gif
-!resource/video/nut1.mp4
-!resource/video/nut1.gif
-!resource/video/nut2.mp4
-!resource/video/nut2.gif
-!resource/video/cube.mp4
-!resource/video/cube.gif
-!resource/video/2finger_pinch_long_obj.mp4
-!resource/video/2finger_pinch_long_obj.gif
-!resource/video/4finger_grab_long_obj.mp4
-!resource/video/4finger_grab_long_obj.gif
-!resource/video/3d_workspace.png
+# Project media is hosted on the project page; keep local video exports out of Git.
+resource/video/
 
 # Build artifacts
 rh56_controller.egg-info/

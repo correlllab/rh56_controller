@@ -6,7 +6,7 @@ Environment recommendation:
 - Use `.venv312` for sim-only workflows (`sim-core`, `sim-hand`, `sim-ur5`, `sim-h12`).
 - Use `.venv310` + `source /opt/ros/humble/setup.bash` for ROS2 Humble workflows.
 - Helper: `tools/setup_uv_env.sh --profile <name> --python <3.10|3.12> --env .venvXXX`
-- Profile chooser: [docs/INSTALL_PROFILES.md](docs/INSTALL_PROFILES.md)
+- Profile chooser: [INSTALL_PROFILES.md](INSTALL_PROFILES.md)
 
 ```bash
 ## the below four uv-run commands also work gracefully without uv installation, mink just won't be enabled
@@ -275,4 +275,4 @@ See the **Actuator ctrl ranges** table in the XML Model Files section above.
 
 - [GRASP_VIZ.md](GRASP_VIZ.md) — Grasp geometry implementation notes: closure solver, tilt derivation, and documented failed alternatives
 - [THUMB_TANGENTIAL.md](THUMB_TANGENTIAL.md) — Thumb yaw tangential force estimation: calibration procedure, lever arm polynomial, sign conventions
-- [README_FORCE_CONTROL.md](README_FORCE_CONTROL.md) — Force control UI: usage guide, admittance control fundamentals, Hou & Mason hybrid force-velocity control, frame conventions
+- [force_control.md](force_control.md) — Force control UI: usage guide, admittance control fundamentals, Hou & Mason hybrid force-velocity control, frame conventions

@@ -77,7 +77,7 @@ This ensures deterministic builds and allows custom patches in the forks.
 ### 4. Documentation
 
 - [ROS2_PORT_PLAN.md](ROS2_PORT_PLAN.md) — Full multi-repo migration tracker
-- [README_REAL.md](README_REAL.md) — Updated with ROS2 + rerun usage
+- [docs/real.md](docs/real.md) — Updated with ROS2 + rerun usage
 - [magpie_force_control/ros2/magpie_force_control_ros/README.md](magpie_force_control/ros2/magpie_force_control_ros/README.md) — Wrapper package docs
 
 ---
