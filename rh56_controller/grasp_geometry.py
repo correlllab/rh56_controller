@@ -62,7 +62,11 @@ def _resolve_default_xml() -> pathlib.Path:
 _DEFAULT_XML = str(_resolve_default_xml())
 
 # Cache path must be user-writable in ROS install contexts.
-_CACHE_DIR = pathlib.Path.home() / ".cache" / "rh56_controller"
+_CACHE_ROOT = os.environ.get("RH56_CACHE_DIR")
+if _CACHE_ROOT:
+    _CACHE_DIR = pathlib.Path(_CACHE_ROOT)
+else:
+    _CACHE_DIR = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "rh56_controller"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _CACHE_PATH = str(_CACHE_DIR / "fk_cache.npz")
 

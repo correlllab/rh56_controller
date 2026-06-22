@@ -628,6 +628,22 @@ _H12_URDF = os.environ.get(
 _H12_HOME_Q = np.array([-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
 
+def _build_h12_pin_model(pin):
+    """Build the H1-2 kinematic model while hiding harmless URDF visual warnings."""
+    if os.environ.get("RH56_SHOW_URDF_WARNINGS"):
+        return pin.buildModelFromUrdf(_H12_URDF)
+
+    saved_stderr = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        return pin.buildModelFromUrdf(_H12_URDF)
+    finally:
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
+        os.close(devnull)
+
+
 def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                               stop_event,
                               ik_dt: float = 0.05,
@@ -656,10 +672,7 @@ def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
 
     try:
         # --- Pinocchio model (body only, no free-flyer) ---
-        _h12_urdf_dir = str(pathlib.Path(_H12_URDF).parent)
-        model, geom_model, _ = pin.buildModelsFromUrdf(
-            _H12_URDF, package_dirs=[_h12_urdf_dir], root_joint=None
-        )
+        model = _build_h12_pin_model(pin)
         data = model.createData()
 
         # initial configuration: standing with arm in home pose
@@ -915,10 +928,7 @@ def _h12_bimanual_viewer_worker(
         return
 
     try:
-        _h12_urdf_dir = str(pathlib.Path(_H12_URDF).parent)
-        model, _, _ = pin.buildModelsFromUrdf(
-            _H12_URDF, package_dirs=[_h12_urdf_dir], root_joint=None
-        )
+        model = _build_h12_pin_model(pin)
         data = model.createData()
 
         # Initial configuration
