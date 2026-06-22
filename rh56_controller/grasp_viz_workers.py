@@ -7,6 +7,7 @@ These module-level functions run inside separate multiprocessing.Process instanc
   2. Constants can be shared across grasp_viz_core.py and grasp_viz_ui.py.
 """
 
+import os
 import time
 import pathlib
 from typing import Dict
@@ -25,6 +26,11 @@ _GRASP_SCENE = str(_HERE / "h1_mujoco" / "inspire" / "inspire_grasp_scene.xml")
 _ROBOT_SCENE = str(_HERE / "h1_mujoco" / "inspire" / "ur5_inspire.xml")
 _RIGHT_SCENE = str(_HERE / "h1_mujoco" / "inspire" / "inspire_right.xml")
 
+# H1-2 + Inspire scenes
+_H12_SCENE          = str(_HERE / "h1_mujoco" / "inspire" / "h1_2_inspire.xml")
+_H12_POS_SCENE      = str(_HERE / "h1_mujoco" / "inspire" / "h1_2_pos_inspire.xml")
+_H12_BIMANUAL_SCENE = str(_HERE / "h1_mujoco" / "inspire" / "h1_2_bimanual_inspire.xml")
+
 # ---------------------------------------------------------------------------
 # Actuator / viewer constants
 # ---------------------------------------------------------------------------
@@ -34,13 +40,103 @@ _DEFAULT_ROBOT_Z = 0.17
 _DEFAULT_ROBOT_X = -0.25
 _DEFAULT_ROBOT_Y = -0.67
 
+# H1-2 default arm pose (elbow-up, arm extended forward, approximate standing)
+_DEFAULT_H12_Z = 0.9   # grasp height above ground in H1-2 world frame (metres)
+_DEFAULT_H12_X = 0.5   # forward reach
+_DEFAULT_H12_Y = 0.0   # lateral
+
 _IK_DT        = 0.05
 _IK_MAX_ITERS = 5
 _IK_POS_THR   = 5e-3
 _IK_ORI_THR   = 0.05
 
-# eeff site local position in hand base body frame (from ur5_inspire.xml)
+# eeff site local position in hand base body frame (from ur5_inspire.xml / h1_2_inspire.xml)
 _EEFF_LOCAL = np.array([0.070, 0.016, 0.155])
+
+# ---------------------------------------------------------------------------
+# H1-2 arm / hand joint names
+# ---------------------------------------------------------------------------
+# Right arm joints (7-DOF) in kinematic order
+_H12_ARM_JOINTS = [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+# Finger actuator names match UR5 convention (same inspire hand)
+_H12_FNG_ACT = ["pinky", "ring", "middle", "index", "thumb_proximal", "thumb_yaw"]
+
+# ---------------------------------------------------------------------------
+# H1-2 wrist→hand attachment transform (right hand)
+# Derived from h1_2_pos_hands.xml geometry:
+#   wrist_x = base_z + 0.054,  wrist_y = base_x,  wrist_z = base_y
+#
+# In 4×4 matrix form (T_wrist_to_hand):
+#   R = [[0,0,1],[1,0,0],[0,1,0]]   quat wxyz = (0.5, 0.5, 0.5, 0.5)
+#   t = [0.054, 0, 0] in wrist_yaw frame
+#
+# To get wrist_yaw target from hand_base target:
+#   T_wrist_target = T_hand_base_target @ inv(T_wrist_to_hand)
+# ---------------------------------------------------------------------------
+# Rotation matrix: cols = hand_base axes in wrist_yaw frame
+#   hand_X → wrist_Y,  hand_Y → wrist_Z,  hand_Z → wrist_X
+_H12_R_WRIST_TO_HAND = np.array([[0., 0., 1.],
+                                  [1., 0., 0.],
+                                  [0., 1., 0.]])
+_H12_T_WRIST_TO_HAND = np.array([0.054, 0., 0.])  # hand base origin in wrist_yaw frame
+
+# Inverse: R^T (rotation is orthogonal), t_inv = -R^T @ t
+_H12_R_HAND_TO_WRIST = _H12_R_WRIST_TO_HAND.T
+_H12_T_HAND_TO_WRIST = -_H12_R_HAND_TO_WRIST @ _H12_T_WRIST_TO_HAND
+
+# h12_ros2_controller EE frame name (Pinocchio / URDF frame)
+_H12_EE_FRAME      = "right_wrist_yaw_link"
+_H12_LEFT_EE_FRAME = "left_wrist_yaw_link"
+
+# ---------------------------------------------------------------------------
+# H1-2 LEFT arm joints + wrist→hand transform (bimanual)
+# ---------------------------------------------------------------------------
+_H12_LEFT_ARM_JOINTS = [
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+]
+_H12_LEFT_FNG_ACT = [
+    "left_pinky", "left_ring", "left_middle",
+    "left_index", "left_thumb_proximal", "left_thumb_yaw",
+]
+
+# Left wrist→hand: pos="0.054 0 0"  quat="0.5 -0.5 0.5 -0.5" (wxyz)
+#   hand_X → −wrist_Y,  hand_Y → −wrist_Z,  hand_Z → wrist_X
+_H12_LEFT_R_WRIST_TO_HAND = np.array([[ 0.,  0., 1.],
+                                       [-1.,  0., 0.],
+                                       [ 0., -1., 0.]])
+_H12_LEFT_T_WRIST_TO_HAND = np.array([0.054, 0., 0.])
+_H12_LEFT_R_HAND_TO_WRIST = _H12_LEFT_R_WRIST_TO_HAND.T
+_H12_LEFT_T_HAND_TO_WRIST = -_H12_LEFT_R_HAND_TO_WRIST @ _H12_LEFT_T_WRIST_TO_HAND
+
+# Left arm home pose: arm at side, elbow bent 90° (out of the way)
+# shoulder_pitch, roll, yaw, elbow, wrist_roll, pitch, yaw
+_H12_LEFT_HOME_Q = np.array([-0.3, -0.2, 0.0, 1.4, 0.0, 0.0, 0.0])
+
+# Midplane: Y > 0 → left side, Y < 0 → right side (H1-2 world frame, robot faces +X)
+_H12_MIDPLANE_Y = 0.0
+
+# H12 pelvis frame convention: +Y forward, +X right.
+# Grasp-planner world frame convention: +X forward, +Y left.
+# Apply to positions/rotations read from /right_ee_pose or /left_ee_pose (pelvis → world).
+# Inverse (world → pelvis) is simply the transpose (rotation matrix is orthogonal).
+_R_PELVIS_TO_WORLD = np.array([[ 0., 1., 0.],
+                                [-1., 0., 0.],
+                                [ 0., 0., 1.]])   # Rz(-90°)
+_R_WORLD_TO_PELVIS = _R_PELVIS_TO_WORLD.T         # Rz(+90°)
 
 # Colour palette per finger (matplotlib / tkinter)
 FINGER_COLORS = {
@@ -58,6 +154,14 @@ _TIP_SITE_NAMES = {
     "middle": "right_middle_tip",
     "ring":   "right_ring_tip",
     "pinky":  "right_pinky_tip",
+}
+# Left-hand fingertip site names (inspire_left_h12_qnames.xml)
+_LEFT_TIP_SITE_NAMES = {
+    "thumb":  "left_thumb_tip",
+    "index":  "left_index_tip",
+    "middle": "left_middle_tip",
+    "ring":   "left_ring_tip",
+    "pinky":  "left_pinky_tip",
 }
 
 # Viewer geom RGBA per finger (float32, MuJoCo)
@@ -183,6 +287,50 @@ def _worker_apply_qpos(jm: dict, data: mujoco.MjData, ctrl: np.ndarray,
     data.qpos[jm["thumb_distal"]] = 0.15 + 0.66 * pitch
 
     mujoco.mj_kinematics(model, data)
+
+
+def _worker_optional_jnt_map(model: mujoco.MjModel, joint_names: Dict[str, str]) -> dict:
+    """Build a best-effort qpos address map for joints that may or may not exist."""
+    out = {}
+    for key, name in joint_names.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        out[key] = int(model.jnt_qposadr[jid]) if jid >= 0 else -1
+    return out
+
+
+def _worker_apply_inspire_finger_qpos(jm: dict, data: mujoco.MjData,
+                                      finger_ctrl: np.ndarray) -> None:
+    """Apply Inspire hand finger controls to all coupled finger joints."""
+    pinky, ring, middle, index, pitch, yaw = finger_ctrl
+
+    if jm.get("pinky", -1) >= 0:
+        data.qpos[jm["pinky"]] = pinky
+    if jm.get("pinky_inter", -1) >= 0:
+        data.qpos[jm["pinky_inter"]] = -0.15 + 1.1169 * pinky
+
+    if jm.get("ring", -1) >= 0:
+        data.qpos[jm["ring"]] = ring
+    if jm.get("ring_inter", -1) >= 0:
+        data.qpos[jm["ring_inter"]] = -0.15 + 1.1169 * ring
+
+    if jm.get("middle", -1) >= 0:
+        data.qpos[jm["middle"]] = middle
+    if jm.get("middle_inter", -1) >= 0:
+        data.qpos[jm["middle_inter"]] = -0.15 + 1.1169 * middle
+
+    if jm.get("index", -1) >= 0:
+        data.qpos[jm["index"]] = index
+    if jm.get("index_inter", -1) >= 0:
+        data.qpos[jm["index_inter"]] = -0.05 + 1.1169 * index
+
+    if jm.get("thumb_yaw", -1) >= 0:
+        data.qpos[jm["thumb_yaw"]] = yaw
+    if jm.get("thumb_pitch", -1) >= 0:
+        data.qpos[jm["thumb_pitch"]] = pitch
+    if jm.get("thumb_inter", -1) >= 0:
+        data.qpos[jm["thumb_inter"]] = 0.15 + 1.33 * pitch
+    if jm.get("thumb_distal", -1) >= 0:
+        data.qpos[jm["thumb_distal"]] = 0.15 + 0.66 * pitch
 
 
 def _worker_draw_geoms(scn, wtips: Dict[str, np.ndarray],
@@ -461,4 +609,626 @@ def _robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
                 time.sleep(0.033)
     except Exception as exc:
         print(f"[RobotViewerWorker] {exc}")
+        import traceback; traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# H1-2 robot viewer worker  (PINK IK via pinocchio + pink)
+# ---------------------------------------------------------------------------
+
+# Path to h1_2.urdf (needed by the PINK IK worker).  Use the checked-in
+# simulation asset by default; real-controller setups can override this.
+_H12_URDF = os.environ.get(
+    "RH56_H12_URDF",
+    str(_HERE / "h1_mujoco" / "unitree_robots" / "h1_2" / "h1_2.urdf"),
+)
+
+# Home joint positions for the right arm (shoulder_pitch, roll, yaw, elbow, wrist_roll, pitch, yaw)
+# Gives an elbow-up ready pose roughly in front of the robot.
+_H12_HOME_Q = np.array([-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+
+
+def _build_h12_pin_model(pin):
+    """Build the H1-2 kinematic model while hiding harmless URDF visual warnings."""
+    if os.environ.get("RH56_SHOW_URDF_WARNINGS"):
+        return pin.buildModelFromUrdf(_H12_URDF)
+
+    saved_stderr = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        return pin.buildModelFromUrdf(_H12_URDF)
+    finally:
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
+        os.close(devnull)
+
+
+def _h12_robot_viewer_worker(xml_path: str, ctrl_arr, state_arr,
+                              stop_event,
+                              ik_dt: float = 0.05,
+                              ik_max_iters: int = 40,
+                              ik_pos_thr: float = 5e-3,
+                              ik_ori_thr: float = 0.05,
+                              sim_arm_t=None,
+                              sim_grasp_t=None,
+                              ctrl_open_fingers=None,
+                              real_right_q_arr=None,
+                              real_tracking=None,
+                              robot_only_mode=None) -> None:
+    """Subprocess entry: H1-2+hand robot viewer with PINK differential arm IK.
+
+    Uses pinocchio + pink directly (no unitree SDK dependency).
+    IK targets `right_wrist_yaw_link`; ctrl[0:3]/[3:6] are hand-base pos/rot in
+    world frame, converted to wrist frame via the stored attachment transform.
+    """
+    try:
+        import pinocchio as pin
+        import pink
+        import qpsolvers
+    except ImportError:
+        print("[H12ViewerWorker] pinocchio/pink not available — run 'uv add pin pin-pink'")
+        return
+
+    try:
+        # --- Pinocchio model (body only, no free-flyer) ---
+        model = _build_h12_pin_model(pin)
+        data = model.createData()
+
+        # initial configuration: standing with arm in home pose
+        q0 = pin.neutral(model)
+        for i, jname in enumerate(_H12_ARM_JOINTS):
+            if model.existJointName(jname):
+                jid = model.getJointId(jname)
+                q0[model.joints[jid].idx_q] = _H12_HOME_Q[i]
+        pin.forwardKinematics(model, data, q0)
+        pin.updateFramePlacements(model, data)
+
+        # --- PINK configuration ---
+        configuration = pink.Configuration(model, data, q0)
+
+        # Right wrist frame task
+        wrist_frame_id = model.getFrameId(_H12_EE_FRAME)
+        home_wrist_target = pin.SE3(data.oMf[wrist_frame_id].homogeneous.copy())
+        ee_task = pink.tasks.FrameTask(
+            _H12_EE_FRAME,
+            position_cost=50.0,
+            orientation_cost=30.0,
+            lm_damping=3.0,
+        )
+        posture_task = pink.tasks.PostureTask(cost=1e-2)
+        posture_task.set_target(q0)
+        tasks = [ee_task, posture_task]
+
+        limits = [
+            pink.limits.ConfigurationLimit(model),
+            pink.limits.VelocityLimit(model),
+        ]
+
+        # solver
+        solver = "daqp"
+        if solver not in qpsolvers.available_solvers:
+            solver = qpsolvers.available_solvers[0]
+
+        # --- MuJoCo model for display ---
+        mj_model = mujoco.MjModel.from_xml_path(xml_path)
+        mj_data  = mujoco.MjData(mj_model)
+        mujoco.mj_resetData(mj_model, mj_data)
+        finger_jm = _worker_optional_jnt_map(mj_model, {
+            "pinky": "pinky_proximal_joint",
+            "pinky_inter": "pinky_intermediate_joint",
+            "ring": "ring_proximal_joint",
+            "ring_inter": "ring_intermediate_joint",
+            "middle": "middle_proximal_joint",
+            "middle_inter": "middle_intermediate_joint",
+            "index": "index_proximal_joint",
+            "index_inter": "index_intermediate_joint",
+            "thumb_yaw": "thumb_proximal_yaw_joint",
+            "thumb_pitch": "thumb_proximal_pitch_joint",
+            "thumb_inter": "thumb_intermediate_joint",
+            "thumb_distal": "thumb_distal_joint",
+        })
+
+        # Map H1-2 arm joints: Pinocchio idx_q → MuJoCo jnt_qposadr
+        pin_qidx   = []
+        mj_qposadr = []
+        for jname in _H12_ARM_JOINTS:
+            if model.existJointName(jname):
+                jid    = model.getJointId(jname)
+                pin_qidx.append(model.joints[jid].idx_q)
+            mj_jid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jname)
+            if mj_jid >= 0:
+                mj_qposadr.append(mj_model.jnt_qposadr[mj_jid])
+            else:
+                mj_qposadr.append(-1)
+
+        # Finger actuator IDs + joint qpos addresses in MuJoCo
+        # Position actuators need direct qpos writes (mj_forward doesn't apply them)
+        finger_ctrl_ids      = []
+        finger_joint_qposadr = []
+        for aname in _H12_FNG_ACT:
+            aid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, aname)
+            finger_ctrl_ids.append(aid)
+            if aid >= 0:
+                jnt_id = mj_model.actuator_trnid[aid, 0]
+                finger_joint_qposadr.append(mj_model.jnt_qposadr[jnt_id])
+            else:
+                finger_joint_qposadr.append(-1)
+
+        # Arm actuator IDs in MuJoCo (motors)
+        arm_ctrl_ids = []
+        for jname in _H12_ARM_JOINTS:
+            aid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, jname)
+            arm_ctrl_ids.append(aid)
+
+        # Non-arm pinocchio q indices to lock after each IK step.
+        # This prevents the IK from "cheating" by moving legs/torso/base,
+        # which would make the pinocchio FK inconsistent with what MuJoCo shows.
+        arm_qidx_set  = set(pin_qidx)
+        non_arm_qidx  = [i for i in range(model.nq) if i not in arm_qidx_set]
+
+        # Fingertip site IDs for overlay
+        tip_site_ids: Dict[str, int] = {}
+        for fname, sname in _TIP_SITE_NAMES.items():
+            sid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, sname)
+            if sid >= 0:
+                tip_site_ids[fname] = sid
+
+        # Initial MuJoCo qpos from home pose
+        for pidx, madr in zip(pin_qidx, mj_qposadr):
+            if madr >= 0:
+                mj_data.qpos[madr] = q0[pidx]
+        mujoco.mj_forward(mj_model, mj_data)
+
+        _ctrl_open = (np.array(ctrl_open_fingers)
+                      if ctrl_open_fingers is not None else None)
+
+        with mujoco.viewer.launch_passive(mj_model, mj_data) as v:
+            while v.is_running() and not stop_event.is_set():
+                ctrl = np.array(ctrl_arr[:])
+                t_arm = sim_arm_t.value if sim_arm_t is not None else 1.0
+                t_arm = float(np.clip(t_arm, 0.0, 1.0))
+                t_grasp = sim_grasp_t.value if sim_grasp_t is not None else 1.0
+                if _ctrl_open is not None and 0.0 <= t_grasp < 1.0:
+                    eff_finger = _ctrl_open + t_grasp * (ctrl[6:12] - _ctrl_open)
+                else:
+                    eff_finger = ctrl[6:12]
+
+                # Optional real-joint seed from /joint_states (H1-2 right arm)
+                if (
+                    real_tracking is not None and real_right_q_arr is not None
+                    and real_tracking.value
+                ):
+                    q_seed = np.array(configuration.q, copy=True)
+                    q_real = np.array(real_right_q_arr[:])
+                    for pidx, qv in zip(pin_qidx, q_real):
+                        q_seed[pidx] = qv
+                    q_seed[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_seed)
+
+                robot_only = bool(robot_only_mode.value) if robot_only_mode is not None else False
+
+                if robot_only and real_tracking is not None and real_right_q_arr is not None and real_tracking.value:
+                    # Pure mirror mode: render real arm joints directly, no IK targeting.
+                    for pidx, madr, acid in zip(pin_qidx, mj_qposadr, arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+
+                    eff_finger = _ctrl_open.copy() if _ctrl_open is not None else np.array(ctrl[6:12], copy=True)
+                    for acid, fjadr, val in zip(finger_ctrl_ids, finger_joint_qposadr, eff_finger):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(finger_jm, mj_data, eff_finger)
+
+                    mujoco.mj_forward(mj_model, mj_data)
+
+                    state = np.array(state_arr[:])
+                    if tip_site_ids:
+                        _worker_add_geoms_from_model(v, mj_data, tip_site_ids, state)
+                    else:
+                        _worker_add_geoms(v, state)
+                    v.sync()
+                    time.sleep(0.033)
+                    continue
+
+                # H1-2 ctrl pose is a direct wrist_yaw target.
+                R_wrist = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+                p_wrist = ctrl[0:3]
+
+                T_wrist          = np.eye(4)
+                T_wrist[:3, :3]  = R_wrist
+                T_wrist[:3,  3]  = p_wrist
+                target_wrist = pin.SE3(T_wrist)
+                if t_arm < 1.0:
+                    target_wrist = pin.SE3.Interpolate(home_wrist_target, target_wrist, t_arm)
+                ee_task.set_target(target_wrist)
+                posture_task.set_target(q0)
+
+                # PINK IK iterations — lock non-arm joints to q0 each step so the
+                # IK cannot "cheat" by moving legs/torso/floating-base.
+                for _ in range(ik_max_iters):
+                    vel = pink.solve_ik(
+                        configuration, tasks, dt=ik_dt,
+                        solver=solver, limits=limits, safety_break=False
+                    )
+                    configuration.integrate_inplace(vel, ik_dt)
+                    q_locked = np.array(configuration.q, copy=True)
+                    q_locked[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_locked)
+                    err = ee_task.compute_error(configuration)
+                    if (np.linalg.norm(err[:3]) < ik_pos_thr and
+                            np.linalg.norm(err[3:]) < ik_ori_thr):
+                        break
+
+                # Copy Pinocchio arm joint angles → MuJoCo qpos (direct write; arm
+                # uses motor actuators so mj_forward won't apply ctrl as position)
+                for pidx, madr, acid in zip(pin_qidx, mj_qposadr, arm_ctrl_ids):
+                    q_val = configuration.q[pidx]
+                    if madr >= 0:
+                        mj_data.qpos[madr] = q_val
+                    if acid >= 0:
+                        mj_data.ctrl[acid] = q_val
+
+                # Finger position actuators: set both ctrl and qpos directly.
+                # mj_forward does not apply position-actuator forces, so without the
+                # direct qpos write the finger joints stay at their reset position.
+                for acid, fjadr, val in zip(finger_ctrl_ids, finger_joint_qposadr, eff_finger):
+                    if acid >= 0:
+                        mj_data.ctrl[acid] = val
+                    if fjadr >= 0:
+                        mj_data.qpos[fjadr] = val
+                _worker_apply_inspire_finger_qpos(finger_jm, mj_data, eff_finger)
+
+                mujoco.mj_forward(mj_model, mj_data)
+
+                state = np.array(state_arr[:])
+                if tip_site_ids:
+                    _worker_add_geoms_from_model(v, mj_data, tip_site_ids, state)
+                else:
+                    _worker_add_geoms(v, state)
+                v.sync()
+                time.sleep(0.033)
+    except Exception as exc:
+        print(f"[H12ViewerWorker] {exc}")
+        import traceback; traceback.print_exc()
+
+
+def _h12_bimanual_viewer_worker(
+        xml_path: str,
+        ctrl_arr,          # shared array — ctrl[0:6] pos/rot, ctrl[6:12] right fingers,
+        left_ctrl_arr,     # shared array — left_ctrl[0:6] pos/rot, left_ctrl[6:12] left fingers
+        active_arm_val,    # multiprocessing.Value('i') — 0=right, 1=left
+        state_arr,
+        stop_event,
+        ik_dt: float = 0.05,
+        ik_max_iters: int = 40,
+        sim_arm_t=None,
+        sim_grasp_t=None,
+        ctrl_open_fingers=None,
+        real_right_q_arr=None,
+        real_left_q_arr=None,
+        real_tracking=None,
+        robot_only_mode=None) -> None:
+    """Bimanual H1-2 viewer: runs PINK IK for both arms independently.
+
+    The active arm (determined by active_arm_val) tracks the grasp target.
+    The inactive arm smoothly returns to its home/rest pose.
+    """
+    try:
+        import pinocchio as pin
+        import pink
+        import qpsolvers
+    except ImportError:
+        print("[H12BimanualWorker] pinocchio/pink not available")
+        return
+
+    try:
+        model = _build_h12_pin_model(pin)
+        data = model.createData()
+
+        # Initial configuration
+        q0 = pin.neutral(model)
+        for i, jname in enumerate(_H12_ARM_JOINTS):
+            if model.existJointName(jname):
+                jid = model.getJointId(jname)
+                q0[model.joints[jid].idx_q] = _H12_HOME_Q[i]
+        for i, jname in enumerate(_H12_LEFT_ARM_JOINTS):
+            if model.existJointName(jname):
+                jid = model.getJointId(jname)
+                q0[model.joints[jid].idx_q] = _H12_LEFT_HOME_Q[i]
+        pin.forwardKinematics(model, data, q0)
+        pin.updateFramePlacements(model, data)
+
+        configuration = pink.Configuration(model, data, q0)
+
+        # Right arm IK tasks
+        r_ee_task = pink.tasks.FrameTask(
+            _H12_EE_FRAME, position_cost=50.0, orientation_cost=30.0, lm_damping=3.0)
+        r_posture = pink.tasks.PostureTask(cost=1e-2)
+        r_posture.set_target(q0)
+
+        # Left arm IK tasks
+        l_ee_task = pink.tasks.FrameTask(
+            _H12_LEFT_EE_FRAME, position_cost=50.0, orientation_cost=30.0, lm_damping=3.0)
+        l_posture = pink.tasks.PostureTask(cost=1e-2)
+        l_posture.set_target(q0)
+
+        limits = [
+            pink.limits.ConfigurationLimit(model),
+            pink.limits.VelocityLimit(model),
+        ]
+        solver = "daqp"
+        if solver not in qpsolvers.available_solvers:
+            solver = qpsolvers.available_solvers[0]
+
+        # Right/left arm pinocchio qidx
+        r_pin_qidx = []
+        l_pin_qidx = []
+        for jname in _H12_ARM_JOINTS:
+            if model.existJointName(jname):
+                jid = model.getJointId(jname)
+                r_pin_qidx.append(model.joints[jid].idx_q)
+        for jname in _H12_LEFT_ARM_JOINTS:
+            if model.existJointName(jname):
+                jid = model.getJointId(jname)
+                l_pin_qidx.append(model.joints[jid].idx_q)
+
+        arm_qidx_set = set(r_pin_qidx) | set(l_pin_qidx)
+        non_arm_qidx = [i for i in range(model.nq) if i not in arm_qidx_set]
+
+        # MuJoCo model
+        mj_model = mujoco.MjModel.from_xml_path(xml_path)
+        mj_data  = mujoco.MjData(mj_model)
+        mujoco.mj_resetData(mj_model, mj_data)
+
+        def _get_mj_qposadr(jnames):
+            addrs = []
+            for jname in jnames:
+                jid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jname)
+                addrs.append(mj_model.jnt_qposadr[jid] if jid >= 0 else -1)
+            return addrs
+
+        def _get_mj_act_ids(anames):
+            ids = []
+            for aname in anames:
+                aid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, aname)
+                ids.append(aid)
+            return ids
+
+        r_mj_qposadr = _get_mj_qposadr(_H12_ARM_JOINTS)
+        l_mj_qposadr = _get_mj_qposadr(_H12_LEFT_ARM_JOINTS)
+        r_arm_ctrl_ids = _get_mj_act_ids(_H12_ARM_JOINTS)
+        l_arm_ctrl_ids = _get_mj_act_ids(_H12_LEFT_ARM_JOINTS)
+        r_fng_ctrl_ids = _get_mj_act_ids(_H12_FNG_ACT)
+        l_fng_ctrl_ids = _get_mj_act_ids(_H12_LEFT_FNG_ACT)
+
+        # Finger joint qpos addrs (right then left)
+        def _fng_qposadr(act_ids):
+            addrs = []
+            for aid in act_ids:
+                if aid >= 0:
+                    jid = mj_model.actuator_trnid[aid, 0]
+                    addrs.append(mj_model.jnt_qposadr[jid])
+                else:
+                    addrs.append(-1)
+            return addrs
+
+        r_fng_qposadr = _fng_qposadr(r_fng_ctrl_ids)
+        l_fng_qposadr = _fng_qposadr(l_fng_ctrl_ids)
+
+        right_finger_jm = _worker_optional_jnt_map(mj_model, {
+            "pinky": "pinky_proximal_joint", "pinky_inter": "pinky_intermediate_joint",
+            "ring": "ring_proximal_joint", "ring_inter": "ring_intermediate_joint",
+            "middle": "middle_proximal_joint", "middle_inter": "middle_intermediate_joint",
+            "index": "index_proximal_joint", "index_inter": "index_intermediate_joint",
+            "thumb_yaw": "thumb_proximal_yaw_joint", "thumb_pitch": "thumb_proximal_pitch_joint",
+            "thumb_inter": "thumb_intermediate_joint", "thumb_distal": "thumb_distal_joint",
+        })
+        left_finger_jm = _worker_optional_jnt_map(mj_model, {
+            "pinky": "left_pinky_proximal_joint", "pinky_inter": "left_pinky_intermediate_joint",
+            "ring": "left_ring_proximal_joint", "ring_inter": "left_ring_intermediate_joint",
+            "middle": "left_middle_proximal_joint", "middle_inter": "left_middle_intermediate_joint",
+            "index": "left_index_proximal_joint", "index_inter": "left_index_intermediate_joint",
+            "thumb_yaw": "left_thumb_proximal_yaw_joint",
+            "thumb_pitch": "left_thumb_proximal_pitch_joint",
+            "thumb_inter": "left_thumb_intermediate_joint",
+            "thumb_distal": "left_thumb_distal_joint",
+        })
+
+        # Tip site IDs for overlay — right and left separately
+        r_tip_site_ids: Dict[str, int] = {}
+        for fname, sname in _TIP_SITE_NAMES.items():
+            sid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, sname)
+            if sid >= 0:
+                r_tip_site_ids[fname] = sid
+        l_tip_site_ids: Dict[str, int] = {}
+        for fname, sname in _LEFT_TIP_SITE_NAMES.items():
+            sid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, sname)
+            if sid >= 0:
+                l_tip_site_ids[fname] = sid
+
+        # Seed home pose into MuJoCo
+        for pidx, madr in zip(r_pin_qidx, r_mj_qposadr):
+            if madr >= 0:
+                mj_data.qpos[madr] = q0[pidx]
+        for pidx, madr in zip(l_pin_qidx, l_mj_qposadr):
+            if madr >= 0:
+                mj_data.qpos[madr] = q0[pidx]
+        mujoco.mj_forward(mj_model, mj_data)
+
+        _ctrl_open = np.array(ctrl_open_fingers) if ctrl_open_fingers is not None else None
+
+        # Build home-pose SE3 targets for rest positions
+        pin.forwardKinematics(model, data, q0)
+        pin.updateFramePlacements(model, data)
+        r_rest_T = data.oMf[model.getFrameId(_H12_EE_FRAME)].homogeneous.copy()
+        l_rest_T = data.oMf[model.getFrameId(_H12_LEFT_EE_FRAME)].homogeneous.copy()
+        r_rest_SE3 = pin.SE3(r_rest_T)
+        l_rest_SE3 = pin.SE3(l_rest_T)
+
+        with mujoco.viewer.launch_passive(mj_model, mj_data) as v:
+            while v.is_running() and not stop_event.is_set():
+                ctrl       = np.array(ctrl_arr[:])
+                left_ctrl  = np.array(left_ctrl_arr[:])
+                active_arm = active_arm_val.value   # 0=right, 1=left
+                t_arm      = sim_arm_t.value if sim_arm_t is not None else 1.0
+                t_arm      = float(np.clip(t_arm, 0.0, 1.0))
+                t_grasp    = sim_grasp_t.value if sim_grasp_t is not None else 1.0
+                use_real_seed = (
+                    real_tracking is not None
+                    and real_right_q_arr is not None
+                    and real_left_q_arr is not None
+                    and real_tracking.value
+                )
+
+                if use_real_seed:
+                    q_seed = np.array(configuration.q, copy=True)
+                    q_right = np.array(real_right_q_arr[:])
+                    q_left = np.array(real_left_q_arr[:])
+                    for pidx, qv in zip(r_pin_qidx, q_right):
+                        q_seed[pidx] = qv
+                    for pidx, qv in zip(l_pin_qidx, q_left):
+                        q_seed[pidx] = qv
+                    q_seed[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_seed)
+
+                robot_only = bool(robot_only_mode.value) if robot_only_mode is not None else False
+
+                if robot_only and use_real_seed:
+                    for pidx, madr, acid in zip(r_pin_qidx, r_mj_qposadr, r_arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+                    for pidx, madr, acid in zip(l_pin_qidx, l_mj_qposadr, l_arm_ctrl_ids):
+                        q_val = configuration.q[pidx]
+                        if madr >= 0:
+                            mj_data.qpos[madr] = q_val
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = q_val
+
+                    eff_fng = _ctrl_open.copy() if _ctrl_open is not None else np.array(ctrl[6:12], copy=True)
+                    eff_lfng = _ctrl_open.copy() if _ctrl_open is not None else np.array(left_ctrl[6:12], copy=True)
+
+                    for acid, fjadr, val in zip(r_fng_ctrl_ids, r_fng_qposadr, eff_fng):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(right_finger_jm, mj_data, eff_fng)
+
+                    for acid, fjadr, val in zip(l_fng_ctrl_ids, l_fng_qposadr, eff_lfng):
+                        if acid >= 0:
+                            mj_data.ctrl[acid] = val
+                        if fjadr >= 0:
+                            mj_data.qpos[fjadr] = val
+                    _worker_apply_inspire_finger_qpos(left_finger_jm, mj_data, eff_lfng)
+
+                    mujoco.mj_forward(mj_model, mj_data)
+                    state = np.array(state_arr[:])
+                    tip_ids = r_tip_site_ids if active_arm == 0 else l_tip_site_ids
+                    if tip_ids:
+                        _worker_add_geoms_from_model(v, mj_data, tip_ids, state)
+                    else:
+                        _worker_add_geoms(v, state)
+                    v.sync()
+                    time.sleep(0.033)
+                    continue
+
+                # ---- Right arm target ----
+                if active_arm == 0:
+                    # Active: track direct wrist target pose.
+                    R_w = _Rx(ctrl[3]) @ _Ry(ctrl[4]) @ _Rz(ctrl[5])
+                    p_w = ctrl[0:3]
+                    T_r = np.eye(4); T_r[:3, :3] = R_w; T_r[:3, 3] = p_w
+                    if t_arm < 1.0:
+                        T_r = pin.SE3.Interpolate(r_rest_SE3, pin.SE3(T_r), t_arm).homogeneous
+                else:
+                    # Inactive: hold real arm if available, otherwise return to rest.
+                    if use_real_seed:
+                        T_r = configuration.data.oMf[model.getFrameId(_H12_EE_FRAME)].homogeneous.copy()
+                    else:
+                        T_r = r_rest_T
+
+                # ---- Left arm target ----
+                if active_arm == 1:
+                    # Active: track direct wrist target pose.
+                    R_w = _Rx(left_ctrl[3]) @ _Ry(left_ctrl[4]) @ _Rz(left_ctrl[5])
+                    p_w = left_ctrl[0:3]
+                    T_l = np.eye(4); T_l[:3, :3] = R_w; T_l[:3, 3] = p_w
+                    if t_arm < 1.0:
+                        T_l = pin.SE3.Interpolate(l_rest_SE3, pin.SE3(T_l), t_arm).homogeneous
+                else:
+                    # Inactive: hold real arm if available, otherwise return to rest.
+                    if use_real_seed:
+                        T_l = configuration.data.oMf[model.getFrameId(_H12_LEFT_EE_FRAME)].homogeneous.copy()
+                    else:
+                        T_l = l_rest_T
+
+                r_ee_task.set_target(pin.SE3(T_r))
+                l_ee_task.set_target(pin.SE3(T_l))
+                r_posture.set_target(q0)
+                l_posture.set_target(q0)
+
+                # Run PINK IK — both arm tasks simultaneously
+                tasks = [r_ee_task, l_ee_task, r_posture, l_posture]
+                for _ in range(ik_max_iters):
+                    vel = pink.solve_ik(
+                        configuration, tasks, dt=ik_dt,
+                        solver=solver, limits=limits, safety_break=False)
+                    configuration.integrate_inplace(vel, ik_dt)
+                    q_locked = np.array(configuration.q, copy=True)
+                    q_locked[non_arm_qidx] = q0[non_arm_qidx]
+                    configuration = pink.Configuration(model, data, q_locked)
+
+                # Write arm qpos to MuJoCo
+                for pidx, madr, acid in zip(r_pin_qidx, r_mj_qposadr, r_arm_ctrl_ids):
+                    q_val = configuration.q[pidx]
+                    if madr >= 0: mj_data.qpos[madr] = q_val
+                    if acid >= 0: mj_data.ctrl[acid] = q_val
+                for pidx, madr, acid in zip(l_pin_qidx, l_mj_qposadr, l_arm_ctrl_ids):
+                    q_val = configuration.q[pidx]
+                    if madr >= 0: mj_data.qpos[madr] = q_val
+                    if acid >= 0: mj_data.ctrl[acid] = q_val
+
+                # Active arm fingers — inactive arm fully open
+                if _ctrl_open is not None and 0.0 <= t_grasp < 1.0:
+                    eff_fng = _ctrl_open + t_grasp * (ctrl[6:12] - _ctrl_open)
+                    eff_lfng = _ctrl_open + t_grasp * (left_ctrl[6:12] - _ctrl_open)
+                else:
+                    eff_fng  = ctrl[6:12]
+                    eff_lfng = left_ctrl[6:12]
+
+                if active_arm != 0 and _ctrl_open is not None:
+                    eff_fng = _ctrl_open.copy()   # right hand: open when inactive
+                if active_arm != 1 and _ctrl_open is not None:
+                    eff_lfng = _ctrl_open.copy()  # left hand: open when inactive
+
+                for acid, fjadr, val in zip(r_fng_ctrl_ids, r_fng_qposadr, eff_fng):
+                    if acid >= 0: mj_data.ctrl[acid] = val
+                    if fjadr >= 0: mj_data.qpos[fjadr] = val
+                _worker_apply_inspire_finger_qpos(right_finger_jm, mj_data, eff_fng)
+
+                for acid, fjadr, val in zip(l_fng_ctrl_ids, l_fng_qposadr, eff_lfng):
+                    if acid >= 0: mj_data.ctrl[acid] = val
+                    if fjadr >= 0: mj_data.qpos[fjadr] = val
+                _worker_apply_inspire_finger_qpos(left_finger_jm, mj_data, eff_lfng)
+
+                mujoco.mj_forward(mj_model, mj_data)
+                state = np.array(state_arr[:])
+                tip_ids = r_tip_site_ids if active_arm == 0 else l_tip_site_ids
+                if tip_ids:
+                    _worker_add_geoms_from_model(v, mj_data, tip_ids, state)
+                else:
+                    _worker_add_geoms(v, state)
+                v.sync()
+                time.sleep(0.033)
+    except Exception as exc:
+        print(f"[H12BimanualWorker] {exc}")
         import traceback; traceback.print_exc()

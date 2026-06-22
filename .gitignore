@@ -1,10 +1,16 @@
 .vscode
 .archive
+.DS_Store
+.cache/
 __pycache__/
 *.pyc
 *.pyo
 
 # Experiment data and generated outputs (regenerate locally)
+experiment_data/
+workspace_data/
+middlefinger_speed_sweep_*.csv
+INSPIRE-ROBOTS-*.pdf
 logs/
 logs_old/
 plots/
@@ -12,9 +18,19 @@ mink_vs_analytical/
 mink_vs_analytical_200widths/
 paper/
 
+# Project media is hosted on the project page; keep local video exports out of Git.
+resource/video/
+
 # Build artifacts
 rh56_controller.egg-info/
 *.egg-info/
+build/
+install/
+log/
+*.colcon*
+
+# Local workspace artifacts
+.claude/
 
 # FK cache (auto-regenerated from XML on first run)
 **/.fk_cache.npz

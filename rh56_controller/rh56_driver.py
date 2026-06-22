@@ -1,332 +1,374 @@
+import time
+from typing import Callable, Iterable
+
 import rclpy
-from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.action import ActionServer
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
 
 from sensor_msgs.msg import JointState
-from trajectory_msgs.msg import JointTrajectory
 from std_srvs.srv import Trigger
 
-from custom_ros_messages.msg import MotorCmd, MotorCmds, MotorState, MotorStates
 from custom_ros_messages.action import HandAdaptiveForce
+from custom_ros_messages.msg import MotorCmds, MotorState, MotorStates
 from custom_ros_messages.srv import SetHandAngles
 
-from .rh56_hand import RH56Hand
+from .hand_ros_core import (
+    DOF_PER_HAND,
+    HAND_ORDER,
+    JOINT_NAMES,
+    RIGHT,
+    LEFT,
+    SerialHandManager,
+    motor_state_records,
+    parse_hand_ids,
+)
 
-import threading
-import time
-import math
-from typing import List, Optional, Tuple
-import numpy as np
+
+GESTURE_LIBRARY = {
+    "open": [1000] * DOF_PER_HAND,
+    "close": [0] * DOF_PER_HAND,
+    "pinch": [1000, 1000, 0, 0, 1000, 0],
+    "point": [0, 0, 0, 1000, 1000, 1000],
+}
+
 
 class RH56Driver(Node):
-    """
-    ROS 2 bimanual driver for the Inspire RH56DFX hands.
+    """ROS 2 driver for one or two Inspire RH56DFX hands.
 
-    This node handles the communication with the hand hardware, publishes sensor
-    data (joint angles and forces), and provides services for controlling the hand.
-    It controls both a right hand (ID 1) and a left hand (ID 2) on the same serial bus.
+    The node is the single serial owner.  It publishes a 12-element state array
+    in right[6] + left[6] order and accepts the same 12-element command layout.
+    If only one hand is enabled, the disabled side is published with mode=-1 and
+    incoming commands for that side are ignored.
     """
+
     def __init__(self):
-        super().__init__('rh56_driver')
+        super().__init__("rh56_driver")
+        self._ready = False
 
-        # Declare parameters
-        self.declare_parameter('serial_port', '/dev/ttyUSB0')
-        self.declare_parameter('publish_rate', 50.0)
+        self.declare_parameter("serial_port", "/dev/ttyUSB0")
+        self.declare_parameter("hand_ids", "1,2")
+        self.declare_parameter("publish_rate", 50.0)
 
-        # Get parameters
-        serial_port = self.get_parameter('serial_port').get_parameter_value().string_value
-        self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
-
-        self.get_logger().info(f"Connecting to hands on port '{serial_port}'")
+        serial_port = self.get_parameter("serial_port").get_parameter_value().string_value
+        hand_ids_param = self.get_parameter("hand_ids").get_parameter_value().string_value
+        self.publish_rate = self.get_parameter("publish_rate").get_parameter_value().double_value
 
         try:
-            self.righthand = RH56Hand(port=serial_port, hand_id=1)
-            self.lefthand = RH56Hand(port=serial_port, hand_id=2)
-            self.get_logger().info("Successfully connected to both hands.")
-        except Exception as e:
-            self.get_logger().fatal(f"Failed to connect to the hands: {e}")
-            rclpy.shutdown()
+            hand_ids = parse_hand_ids(hand_ids_param)
+        except ValueError as exc:
+            self.get_logger().fatal(f"Invalid hand_ids parameter: {exc}")
             return
 
-        # Define joint names for both hands
-        self._right_joint_names = [f'right_{j}' for j in ['pinky', 'ring', 'middle', 'index', 'thumb_bend', 'thumb_rotation']]
-        self._left_joint_names = [f'left_{j}' for j in ['pinky', 'ring', 'middle', 'index', 'thumb_bend', 'thumb_rotation']]
-        self._all_joint_names = self._right_joint_names + self._left_joint_names
+        self.get_logger().info(
+            f"Connecting to RH56 hand IDs {list(hand_ids)} on port '{serial_port}'"
+        )
+        try:
+            self._manager = SerialHandManager(serial_port=serial_port, hand_ids=hand_ids)
+        except Exception as exc:
+            self.get_logger().fatal(f"Failed to connect to configured hand(s): {exc}")
+            return
 
-        # Publisher for combined state, matching the C++ package
-        self.hand_state_pub = self.create_publisher(MotorStates, 'hands/state', 10)
+        self._all_joint_names = [
+            f"{side}_{joint}" for side in HAND_ORDER for joint in JOINT_NAMES
+        ]
 
-        # Subscriber for combined command, matching the C++ package
+        self.hand_state_pub = self.create_publisher(MotorStates, "hands/state", 10)
+        self.joint_state_pub = self.create_publisher(JointState, "hands/joint_states", 10)
         self.hand_cmd_sub = self.create_subscription(
             MotorCmds,
-            'hands/cmd',
+            "hands/cmd",
             self.hand_cmd_callback,
-            10
+            10,
         )
 
-        # Services - now namespaced for each hand
-        self.create_service(Trigger, 'hands/right/calibrate_force_sensors', lambda r, s: self.calibrate_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'hands/left/calibrate_force_sensors',  lambda r, s: self.calibrate_callback(r, s, self.lefthand))
+        self._register_services()
+        self._register_actions()
 
-        self.create_service(Trigger, 'hands/right/save_parameters', lambda r, s: self.save_callback(r, s, self.righthand))
-        self.create_service(Trigger, 'hands/left/save_parameters',  lambda r, s: self.save_callback(r, s, self.lefthand))
+        period_s = 1.0 / max(1.0, float(self.publish_rate))
+        self._publish_timer = self.create_timer(period_s, self.publish_once)
+        self._ready = True
+        self.get_logger().info(
+            "RH56 driver ready for enabled sides: "
+            + ", ".join(self._manager.enabled_sides)
+        )
 
-        self._gesture_library = {
-            "open":  [1000] * 6,
-            "close": [0] * 6,
-            "pinch": [1000, 1000, 0, 0, 1000, 0],
-            "point": [0, 0, 0, 1000, 1000, 1000],
-        }
-
-        for gesture_name, angles in self._gesture_library.items():
+    def _register_services(self) -> None:
+        for side in self._manager.enabled_sides:
             self.create_service(
-                Trigger, f'hands/right/{gesture_name}',
-                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.righthand], g)
+                Trigger,
+                f"hands/{side}/calibrate_force_sensors",
+                lambda req, res, s=side: self.calibrate_callback(req, res, (s,)),
             )
             self.create_service(
-                Trigger, f'hands/left/{gesture_name}',
-                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.lefthand], g)
+                Trigger,
+                f"hands/{side}/save_parameters",
+                lambda req, res, s=side: self.trigger_for_sides(
+                    req, res, (s,), "save parameters", self._manager.save_parameters
+                ),
             )
             self.create_service(
-                Trigger, f'hands/{gesture_name}',
-                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(req, res, a, [self.righthand, self.lefthand], g)
+                Trigger,
+                f"hands/{side}/clear_errors",
+                lambda req, res, s=side: self.trigger_for_sides(
+                    req, res, (s,), "clear errors", self._manager.clear_errors
+                ),
             )
 
         self.create_service(
-            SetHandAngles,
-            'hands/set_angles',
-            self.set_joint_angles_callback
+            Trigger,
+            "hands/calibrate_force_sensors",
+            lambda req, res: self.calibrate_callback(req, res, self._manager.enabled_sides),
+        )
+        self.create_service(
+            Trigger,
+            "hands/save_parameters",
+            lambda req, res: self.trigger_for_sides(
+                req, res, self._manager.enabled_sides, "save parameters", self._manager.save_parameters
+            ),
+        )
+        self.create_service(
+            Trigger,
+            "hands/clear_errors",
+            lambda req, res: self.trigger_for_sides(
+                req, res, self._manager.enabled_sides, "clear errors", self._manager.clear_errors
+            ),
         )
 
-        self.right_action_server = ActionServer(
-            self,
-            HandAdaptiveForce,
-            'hands/right/adaptive_force_control',
-            lambda goal_handle: self.adaptive_force_callback(goal_handle, self.righthand)
-        )
+        self.create_service(SetHandAngles, "hands/set_angles", self.set_angles_callback)
+        self.create_service(SetHandAngles, "hands/set_speeds", self.set_speeds_callback)
+        self.create_service(SetHandAngles, "hands/set_force_limits", self.set_force_limits_callback)
+        self.create_service(SetHandAngles, "hands/set_current_limits", self.set_current_limits_callback)
 
-        self.left_action_server = ActionServer(
-            self,
-            HandAdaptiveForce,
-            'hands/left/adaptive_force_control',
-            lambda goal_handle: self.adaptive_force_callback(goal_handle, self.lefthand)
-        )
+        for gesture_name, angles in GESTURE_LIBRARY.items():
+            self.create_service(
+                Trigger,
+                f"hands/{gesture_name}",
+                lambda req, res, a=angles, g=gesture_name: self.gesture_callback(
+                    req, res, self._manager.enabled_sides, a, g
+                ),
+            )
+            for side in self._manager.enabled_sides:
+                self.create_service(
+                    Trigger,
+                    f"hands/{side}/{gesture_name}",
+                    lambda req, res, s=side, a=angles, g=gesture_name: self.gesture_callback(
+                        req, res, (s,), a, g
+                    ),
+                )
 
-        # Threading lock for safe serial communication
-        self.hand_lock = threading.Lock()
+    def _register_actions(self) -> None:
+        self._action_servers = []
+        if RIGHT in self._manager.enabled_sides:
+            self._action_servers.append(
+                ActionServer(
+                    self,
+                    HandAdaptiveForce,
+                    "hands/right/adaptive_force_control",
+                    lambda goal_handle: self.adaptive_force_callback(goal_handle, RIGHT),
+                )
+            )
+        if LEFT in self._manager.enabled_sides:
+            self._action_servers.append(
+                ActionServer(
+                    self,
+                    HandAdaptiveForce,
+                    "hands/left/adaptive_force_control",
+                    lambda goal_handle: self.adaptive_force_callback(goal_handle, LEFT),
+                )
+            )
 
-        # Start the main publishing loop in a separate thread
-        self.publisher_thread = threading.Thread(target=self.publish_loop)
-        self.publisher_thread.daemon = True
-        self.publisher_thread.start()
+    def publish_once(self) -> None:
+        states_by_side, errors = self._manager.read_states()
+        if errors:
+            self.get_logger().warn("; ".join(errors), throttle_duration_sec=5)
 
-        self.get_logger().info("RH56 Bimanual Driver node started successfully.")
+        records = motor_state_records(states_by_side)
+        motor_states_msg = MotorStates()
+        for record in records:
+            state = MotorState()
+            state.mode = int(record["mode"])
+            state.q = float(record["q"])
+            state.dq = float(record["dq"])
+            state.ddq = float(record["ddq"])
+            state.tau = float(record["tau"])
+            state.tau_lim = float(record["tau_lim"])
+            if hasattr(state, "current"):
+                state.current = float(record["current"])
+            state.temperature = float(record["temperature"])
+            state.q_raw = float(record["q_raw"])
+            state.dq_raw = float(record["dq_raw"])
+            state.tau_raw = float(record["tau_raw"])
+            state.tau_lim_raw = float(record["tau_lim_raw"])
+            motor_states_msg.motor_states.append(state)
+        self.hand_state_pub.publish(motor_states_msg)
 
-    def publish_loop(self):
-        """Continuously reads sensor data and publishes it."""
-        rate = self.create_rate(self.publish_rate)
-        while rclpy.ok():
-            with self.hand_lock:
-                right_angles = self.righthand.angle_read()
-                right_forces = self.righthand.force_act()
-                # right_temps = self.righthand.temp_read()
+        joint_state_msg = JointState()
+        joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_state_msg.name = self._all_joint_names
+        joint_state_msg.position = [float(record["q"]) for record in records]
+        joint_state_msg.effort = [float(record["tau"]) for record in records]
+        self.joint_state_pub.publish(joint_state_msg)
 
-                left_angles = self.lefthand.angle_read()
-                left_forces = self.lefthand.force_act()
-                # left_temps = self.lefthand.temp_read()
-
-            if not (right_angles and right_forces and left_angles and left_forces):
-                self.get_logger().warn("Incomplete data read from one or both hands.", throttle_duration_sec=5)
-                rate.sleep()
-                continue
-
-            now = self.get_clock().now().to_msg()
-            all_angles = right_angles + left_angles
-            all_forces = right_forces + left_forces
-            all_limits = self.righthand.force_limits + self.lefthand.force_limits
-            all_temps  = [0] * 12 # right_temps + left_temps # usually it's 36-38c
-
-            # --- Populate and publish the MotorStates message ---
-            motor_states_msg = MotorStates()
-            for i in range(12):
-                state = MotorState()
-                # Populate the state message based on the unitree_msgs definition
-                state.mode = 0  # Mode is not used by the hand controller, set to 0
-                state.q = (all_angles[i] / 1000.0) * math.pi
-                state.dq = 0.0
-                state.ddq = 0.0
-                state.tau = float(all_forces[i])
-                state.tau_lim = float(all_limits[i])
-                state.temperature = float(all_temps[i])
-                # unused
-                state.q_raw = float(all_angles[i])
-                state.dq_raw = 0.0
-                state.tau_raw = float(all_forces[i])
-                state.tau_lim_raw = float(all_limits[i])
-
-                motor_states_msg.motor_states.append(state)
-            self.hand_state_pub.publish(motor_states_msg)
-
-            # --- Populate and publish the standard JointState message for RViz ---
-            # js_msg = JointState()
-            # js_msg.header.stamp = now
-            # js_msg.name = self._all_joint_names
-            # js_msg.position = [s.q for s in motor_states_msg.motor_states]
-            # js_msg.effort = [s.tau_est for s in motor_states_msg.motor_states]
-            # self.joint_state_pub.publish(js_msg)
-
-            rate.sleep()
-
-    def hand_cmd_callback(self, msg: MotorCmds):
-        """Receives MotorCmds and sends them to the respective hands."""
+    def hand_cmd_callback(self, msg: MotorCmds) -> None:
         cmds = msg.motor_commands
-        if len(cmds) != 12:
-            self.get_logger().warn(f"Received MotorCmds with {len(cmds)} commands, expected 12.")
+        if len(cmds) != DOF_PER_HAND * 2:
+            self.get_logger().warn(
+                f"Received MotorCmds with {len(cmds)} commands, expected {DOF_PER_HAND * 2}."
+            )
             return
+        try:
+            self._manager.apply_angle_commands_rad([cmd.q for cmd in cmds])
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to apply hand command: {exc}")
 
-        # Right hand commands (first 6)
-        right_pos_rad = [cmd.q for cmd in cmds[:6]]
-        right_angles_raw = [(p / math.pi) * 1000.0 for p in right_pos_rad]
-        right_angles = [max(0, min(1000, int(a))) for a in right_angles_raw]
+    def _set_values_callback(
+        self,
+        request,
+        response,
+        label: str,
+        setter: Callable[[str, Iterable[float]], object],
+    ):
+        values = list(request.angles)
+        hand_selector = request.hand.lower().strip()
 
-        # Left hand commands (last 6)
-        left_pos_rad = [cmd.q for cmd in cmds[6:]]
-        left_angles_raw = [(p / math.pi) * 1000.0 for p in left_pos_rad]
-        left_angles = [max(0, min(1000, int(a))) for a in left_angles_raw]
+        def operation(side: str) -> None:
+            setter(side, values)
 
-        with self.hand_lock:
-            # self.righthand.angle_set(right_angles)
-            # self.lefthand.angle_set(left_angles)
-            self.send_angles_concurrent([(self.righthand, right_angles), (self.lefthand, left_angles)])
-
-    def calibrate_callback(self, request: Trigger.Request, response: Trigger.Response, hand: RH56Hand):
-        hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Force sensor calibration service called for {hand_name} hand. This will take ~15 seconds.")
-        with self.hand_lock:
-            hand.gesture_force_clb(1)
-            time.sleep(15) # Wait for the hardware calibration routine to finish
-        response.success = True
-        response.message = f"Force sensor calibration completed for {hand_name} hand."
-        self.get_logger().info(f"Calibration finished for {hand_name} hand.")
+        ok, message = self._manager.apply_to_sides(hand_selector, operation)
+        response.success = ok
+        response.message = (
+            f"{label} applied to {message}" if ok else f"{label} failed: {message}"
+        )
         return response
 
-    def save_callback(self, request: Trigger.Request, response: Trigger.Response, hand: RH56Hand):
-        hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Save parameters service called for {hand_name} hand.")
-        with self.hand_lock:
-            hand.save_parameters()
+    def set_angles_callback(self, request, response):
+        return self._set_values_callback(
+            request, response, "angles", self._manager.set_angles_raw
+        )
+
+    def set_speeds_callback(self, request, response):
+        return self._set_values_callback(
+            request, response, "speeds", self._manager.set_speeds_raw
+        )
+
+    def set_force_limits_callback(self, request, response):
+        return self._set_values_callback(
+            request, response, "force limits", self._manager.set_force_limits_raw
+        )
+
+    def set_current_limits_callback(self, request, response):
+        return self._set_values_callback(
+            request, response, "current limits", self._manager.set_current_limits_raw
+        )
+
+    def trigger_for_sides(
+        self,
+        _request,
+        response,
+        sides: Iterable[str],
+        label: str,
+        operation: Callable[[str], object],
+    ):
+        try:
+            for side in sides:
+                operation(side)
+        except Exception as exc:
+            response.success = False
+            response.message = f"{label} failed: {exc}"
+            return response
         response.success = True
-        response.message = f"Parameters saved to {hand_name} hand's non-volatile memory."
+        response.message = f"{label} applied to {', '.join(sides)}"
         return response
 
-    def adaptive_force_callback(self, goal_handle, hand):
-        hand_name = "right" if hand.hand_id == 1 else "left"
-        self.get_logger().info(f"Adaptive force control action called for {hand_name} hand.")
+    def calibrate_callback(self, _request, response, sides: Iterable[str]):
+        try:
+            for side in sides:
+                self.get_logger().info(
+                    f"Force sensor calibration requested for {side} hand; waiting ~15 seconds."
+                )
+                self._manager.calibrate_force_sensors(side)
+            time.sleep(15)
+        except Exception as exc:
+            response.success = False
+            response.message = f"force sensor calibration failed: {exc}"
+            return response
+        response.success = True
+        response.message = f"force sensor calibration completed for {', '.join(sides)}"
+        return response
+
+    def gesture_callback(self, _request, response, sides: Iterable[str], angles: list[int], gesture_name: str):
+        try:
+            for side in sides:
+                self._manager.set_angles_raw(side, angles)
+        except Exception as exc:
+            response.success = False
+            response.message = f"gesture '{gesture_name}' failed: {exc}"
+            return response
+        response.success = True
+        response.message = f"gesture '{gesture_name}' applied to {', '.join(sides)}"
+        return response
+
+    def adaptive_force_callback(self, goal_handle, side: str):
+        self.get_logger().info(f"Adaptive force control requested for {side} hand.")
 
         goal = goal_handle.request
         feedback_msg = HandAdaptiveForce.Feedback()
         result_msg = HandAdaptiveForce.Result()
 
-        with self.hand_lock:
-            for step in hand.adaptive_force_control_iter(
+        try:
+            for step in self._manager.adaptive_force_control_iter(
+                side,
                 target_forces=list(goal.target_forces),
                 target_angles=list(goal.target_angles),
                 step_size=goal.step_size,
-                max_iterations=goal.max_iterations
+                max_iterations=goal.max_iterations,
             ):
                 if goal_handle.is_cancel_requested:
-                    self.get_logger().info(f"Goal canceled for {hand_name}")
+                    self.get_logger().info(f"Goal canceled for {side} hand")
                     goal_handle.canceled()
-                    return HandAdaptiveForce.Result(success=False)
+                    result_msg.success = False
+                    return result_msg
 
-                # Emit feedback if available
-                feedback_msg.forces = step["forces"]
-                feedback_msg.angles = step["angles"]
+                feedback_msg.forces = step.get("forces", [])
+                feedback_msg.angles = step.get("angles", [])
                 goal_handle.publish_feedback(feedback_msg)
 
                 if step.get("done"):
                     result_msg.success = True
-                    result_msg.final_forces = step["final_forces"]
-                    result_msg.final_angles = step["final_angles"]
+                    result_msg.final_forces = step.get("final_forces", [])
+                    result_msg.final_angles = step.get("final_angles", [])
                     goal_handle.succeed()
                     return result_msg
+        except Exception as exc:
+            self.get_logger().warn(f"Adaptive force control failed for {side} hand: {exc}")
 
-        # If it exits the loop without "done"
         result_msg.success = False
         return result_msg
 
-    def gesture_callback(self, request, response, angles: List[int], hands: List[RH56Hand], gesture_name: Optional[str] = None):
-        with self.hand_lock:
-            pairs = []
-            for hand in hands:
-                hand_label = "right" if hand.hand_id == 1 else "left"
-                if gesture_name:
-                    self.get_logger().info(f"Setting {hand_label} hand to gesture '{gesture_name}'")
-                else:
-                    self.get_logger().info(f"Setting {hand_label} hand to raw joint values")
-                # Ensure angles are within valid range
-                angles = np.clip(angles, 0, 1000).astype(int).tolist()
-                pairs.append((hand, angles))
-            self.send_angles_concurrent(pairs)
-
-        response.success = True
-        hand_msg = " and ".join(["right" if h.hand_id == 1 else "left" for h in hands])
-        response.message = f"Set gesture '{gesture_name}' on {hand_msg} hand" if gesture_name else f"Set raw joint angles on {hand_msg} hand"
-        return response
-
-    def set_joint_angles_callback(self, request, response):
-        hand_str = request.hand.lower()
-        hands = []
-        if hand_str in ["left", "both"]:
-            hands.append(self.lefthand)
-        if hand_str in ["right", "both"]:
-            hands.append(self.righthand)
-        if not hands:
-            response.success = False
-            response.message = f"Invalid hand spec: '{request.hand}'"
-            return response
-
-        if len(request.angles) != 6:
-            response.success = False
-            response.message = "Expected exactly 6 joint angles."
-            return response
-
-        # Clamp and convert
-        clamped_angles = [max(0, min(1000, int(a))) for a in request.angles]
-        self.gesture_callback(request, response, clamped_angles, hands, None)  # gesture_name=None
-        response.success = True
-        response.message = f"Set joint angles for '{hand_str}'"
-        return response
-
-    def send_angles_concurrent(self, hand_angle_pairs: List[Tuple[RH56Hand, List[int]]]):
-        threads = []
-        for hand, angles in hand_angle_pairs:
-            t = threading.Thread(target=hand.angle_set, args=(angles,))
-            threads.append(t)
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
 
 def main(args=None):
     rclpy.init(args=args)
-
-    # Use a MultiThreadedExecutor to handle callbacks and the publisher thread concurrently
     executor = MultiThreadedExecutor()
     driver_node = RH56Driver()
 
-    # Check if the node was initialized correctly before spinning
-    if rclpy.ok():
-        executor.add_node(driver_node)
-        try:
-            executor.spin()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            driver_node.destroy_node()
-            executor.shutdown()
+    if not driver_node._ready:
+        driver_node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        return
+
+    executor.add_node(driver_node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        driver_node.destroy_node()
+        executor.shutdown()
+        if rclpy.ok():
             rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

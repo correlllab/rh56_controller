@@ -127,12 +127,17 @@ class UR5Bridge:
             return False
 
     def disconnect(self):
-        """Cleanly disconnect from the UR5."""
+        """Cleanly disconnect from the UR5.
+
+        Drops the _iface reference after stop() so CPython's refcount immediately
+        closes any underlying sockets, freeing the RTDE slot for another client.
+        """
         if self._iface is not None:
             try:
                 self._iface.stop()
             except Exception as e:
                 _log.warning("Error during disconnect: %s", e)
+            self._iface = None  # drop ref → sockets closed by refcount GC
         self._connected = False
         _log.info("Disconnected.")
 
