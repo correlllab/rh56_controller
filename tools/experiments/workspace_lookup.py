@@ -24,7 +24,7 @@ class WorkspaceLookup:
             workspace_dir: Directory containing the workspace CSV files. If None,
                 defaults to the project's workspace_data folder.
         """
-        default_workspace_dir = Path(__file__).resolve().parents[1] / "workspace_data"
+        default_workspace_dir = Path(__file__).resolve().parents[2] / "workspace_data"
         workspace_path = Path(workspace_dir).expanduser() if workspace_dir else default_workspace_dir
         self.workspace_dir = workspace_path.resolve()
         self.tables: Dict[str, pd.DataFrame] = {}

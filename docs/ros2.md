@@ -243,7 +243,7 @@ ros2 launch rh56_controller rh56_controller.launch.py \
 Prepared hardware-free tests for the hand driver core:
 
 ```bash
-uv run pytest tests/test_hand_ros_core.py
+uv run --extra test pytest tests/unit/test_hand_ros_core.py
 ```
 
 ## 9. Phase 2 status snapshot

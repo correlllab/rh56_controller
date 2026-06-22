@@ -38,7 +38,7 @@ DEFAULT_OUT_DIR = Path("./logs_latency")
 try:
     from rh56_controller.rh56_hand import RH56Hand
 except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from rh56_controller.rh56_hand import RH56Hand
 
 def clamp(v: int, lo=0, hi=1000) -> int:

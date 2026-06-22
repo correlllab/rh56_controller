@@ -2,7 +2,12 @@ import os
 import sys
 import time
 import threading
-sys.path.append("../")
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from rh56_controller.rh56_hand import RH56Hand
 
 def test_middle_finger_force_monitor(hand, target_force, monitoring_frequency=165):

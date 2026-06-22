@@ -14,7 +14,7 @@ from typing import Optional, Tuple, Union
 
 # Add parent directory to path to import kinematics module
 # Ensure package root is on sys.path so rh56_controller package resolves reliably
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 from rh56_controller.kinematics import HandKinematics

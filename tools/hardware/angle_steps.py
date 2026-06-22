@@ -1,7 +1,12 @@
 import os
 import sys
 import time
-sys.path.append("../")
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from rh56_controller.rh56_hand import RH56Hand
 
 def test_angle_steps(hand, target_angle, step_size, finger_index, force_limit=1000, speed_limit=1000):

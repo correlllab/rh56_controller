@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-# Allow running the script from repo root or tests/ directory
+# Allow running the script from repo root or this tools directory.
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 for path in (PROJECT_ROOT, SCRIPT_DIR):
     path_str = str(path)
     if path_str not in sys.path:

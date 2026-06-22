@@ -23,7 +23,7 @@ from typing import Optional, List, Tuple, Dict, Any
 
 # --- Make repo import work like your original scripts ---
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 for path in (PROJECT_ROOT, SCRIPT_DIR):
     p = str(path)
     if p not in sys.path:

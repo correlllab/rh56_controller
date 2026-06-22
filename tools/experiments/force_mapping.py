@@ -30,7 +30,7 @@ except ImportError:  # Windows 等无 select 情况
 
 # 确保项目根可导入
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 for path in (PROJECT_ROOT, SCRIPT_DIR):
     p = str(path)
     if p not in sys.path:
