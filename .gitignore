@@ -5,8 +5,10 @@
 __pycache__/
 *.pyc
 *.pyo
+.~lock.*#
 
 # Experiment data and generated outputs (regenerate locally)
+artifacts/
 experiment_data/
 workspace_data/
 middlefinger_speed_sweep_*.csv
