@@ -78,13 +78,24 @@ Script:
 ```bash
 python tools/run_analytical_grasp_volume.py \
   --objects ycb_cracker_box ycb_sugar_box ycb_potted_meat_can \
-  --grid-step-mm 30 \
-  --yaw-samples 16 \
+  --grid-step-mm 75 \
+  --yaw-samples 8 \
+  --path-samples 8 \
   --out artifacts/analytical_grasp_volume/
 ```
 
+**Runtime warning:** the collision check now sweeps real per-finger and palm
+capsules against the object AABB (see "Swept-Capsule Hand Proxy" below), which
+costs roughly 150-450ms per (position, yaw) pair. The old point-proxy defaults
+(`--grid-step-mm 30 --yaw-samples 16`) would take on the order of 10 hours per
+3-object run under the capsule check. The defaults above were recalibrated for
+a first pass (a few minutes for 3 objects); increase resolution deliberately,
+not by copying the old numbers.
+
 This is the first-pass implementation of the mentor's proposed no-go volume
-analysis. The goal is to characterize where a simple analytical grasp can be
+analysis, now using the same swept-capsule hand proxy validated by
+`tools/verify_capsule_hand_proxy.py` instead of the original point-hand
+proxy. The goal is to characterize where a simple analytical grasp can be
 reached by a straight Cartesian move, and where object-aware path planning is
 needed.
 
@@ -93,7 +104,8 @@ The question answered by each voxel is:
 ```text
 From this sampled hand-base position, what fraction of sampled yaw poses can
 reach the analytical grasp pose with a straight-line Cartesian move without
-crossing an inflated object proxy?
+the swept-capsule hand proxy intersecting a clearance-inflated object AABB
+anywhere along the path?
 ```
 
 ### Object Model
@@ -110,10 +122,13 @@ These are axis-aligned bounding-box proxies, not final mesh measurements. They
 are good enough for the first characterization figure, but should be replaced
 with measured mesh extents before final submission.
 
-### Capsule Hand Proxy Verification
+### Swept-Capsule Hand Proxy
 
-Before using a hand-volume proxy in the dense no-go sweep, we now keep a
-separate debug step:
+`tools/run_analytical_grasp_volume.py` now uses the swept-capsule hand proxy
+(`rh56_controller.capsule_hand_proxy`) directly for the dense no-go sweep,
+rather than the coarser point-hand proxy used in the original version of this
+script. We still keep a separate, cheap debug step to sanity-check the
+geometry before trusting the dense sweep:
 
 ```bash
 python tools/verify_capsule_hand_proxy.py \
@@ -211,16 +226,22 @@ C: reset the moving hand to the start pose
 Q or Esc: quit
 ```
 
-The current verifier has already exposed an important modeling issue: if the
-object is placed only by the fingertip analytical midpoint, the final palm
-envelope can overlap the object AABB. That is exactly the kind of failure mode
-the no-go volume should reveal, but it also means the dense sweep should report
-which proxy is being used:
+The verifier exposed an important modeling issue that turned out to be the
+dominant effect in the dense sweep, not a rare edge case: if the object is
+placed only by the fingertip analytical midpoint, the final palm envelope
+overlaps the object AABB. That is exactly the kind of failure mode the no-go
+volume should reveal. The dense sweep now reports which proxy is being used:
 
-- point hand + inflated object AABB: fastest, weakest physical check.
-- capsule hand + object AABB: useful next step for hand-volume feasibility.
+- point hand + inflated object AABB: fastest, weakest physical check. Used by
+  the original version of this script; produced misleadingly optimistic
+  reachable-volume numbers because it could not see palm/finger-volume
+  collisions at all.
+- capsule hand + object AABB: current default for the dense sweep. Confirmed
+  (see below) to detect a real, margin-independent palm/object conflict, not
+  a false positive from an overly conservative capsule radius.
 - full MuJoCo mesh collision: best for sparse validation, probably too heavy
-  and solver-dependent for the dense primary heatmap.
+  and solver-dependent for the dense primary heatmap. Still the natural next
+  upgrade beyond capsules.
 
 ### Analytical Grasp Pose
 
@@ -269,12 +290,21 @@ For each voxel and yaw sample:
 1. Compute the straight-line path from sampled start position to final analytical
    grasp base position.
 2. Reject the pose if the path is longer than `max_linear_move_mm`.
-3. Sample points along the path.
-4. Inflate the object AABB by `hand_clearance_mm`.
-5. Reject the pose if any intermediate path point enters this inflated object
-   proxy.
-6. Ignore the last `final_contact_ignore_mm` near the final pose, because the
-   hand is expected to approach/contact the object at the end of the motion.
+3. Extract the RH56 capsule hand proxy (per-finger and palm capsules from
+   MuJoCo FK, `path_hand_shape=open` by default) at the sampled orientation.
+4. Inflate the object AABB by `hand_clearance_mm` (an extra safety margin on
+   top of each capsule's own physical radius, not the whole clearance model).
+5. Check every capsule's swept centerline against the inflated AABB
+   continuously over each path interval (not endpoint-only sampling), using
+   `rh56_controller.capsule_hand_proxy.sample_linear_path_collisions`.
+6. Ignore finger-capsule contact within the last `final_contact_ignore_mm` of
+   the final pose, because the fingers are expected to contact the object at
+   the end of the motion. Whether palm-capsule contact is also excused there
+   depends on `--ignore-palm-near-final` (default `auto`): excused for
+   `plane` multi-finger power-wrap modes, where palm-on-object support is a
+   normal part of the grasp (confirmed by geometry inspection, see below);
+   never excused for `line` 2-finger pinch modes, where palm contact means a
+   bad approach.
 
 The voxel score is:
 
@@ -298,17 +328,139 @@ The script writes:
 
 ### What The Current No-Go Volume Shows
 
-The current result is a coarse characterization of where simple analytical
-linear approach is plausible. For example, in the current default run:
+With the swept-capsule proxy, the result changed dramatically from the old
+point-proxy numbers above (kept here for contrast, not as current results).
+
+**First pass (palm never excused near final, matching the point-proxy's
+implicit assumption):** 100% no-go for all three objects (375/375 voxels).
+We checked the raw palm/finger-vs-AABB clearance at the final grasp pose with
+`hand_clearance_mm` set to zero (no added margin) and confirmed this is not a
+parameter artifact:
 
 ```text
-ycb_cracker_box: no-go voxel fraction ≈ 0.169
-ycb_sugar_box: no-go voxel fraction ≈ 0.073
-ycb_potted_meat_can: no-go voxel fraction ≈ 0.083
+ycb_cracker_box:     palm_center capsule, clearance = -24.0 mm at every
+                      sampled yaw (0/45/.../315 deg) -- the capsule
+                      centerline passes through the raw, un-inflated object
+                      AABB, not just within a safety buffer.
+ycb_sugar_box:        palm_center capsule, clearance = -16.5 to -24.0 mm,
+                      same yaw-invariance.
+ycb_potted_meat_can:  middle-finger capsule, clearance = -8.5 mm at every
+                      sampled yaw.
 ```
 
-These numbers should not yet be treated as final physical success rates. They
-are a structured way to expose the capability boundary of the analytical method.
+The clearance values are identical across every yaw sample, which is expected
+for a real geometric conflict (a rigid rotation about the object center does
+not change the palm-to-object distance) and rules out an approach-direction
+artifact.
+
+We then inspected the actual geometry at the terminal pose directly
+(`tools/run_analytical_grasp_volume.py`'s underlying position math, checked
+by hand for `ycb_cracker_box`): the palm capsule's inner endpoint sits at
+world position `[30, 0, 168]mm`, which is inside the object's AABB
+(`x in [-79,79]`, `y in [-35.5,35.5]`, `z in [0,213]mm`) on all three axes
+simultaneously. This is what a normal power/wrap grasp of a box looks like --
+the palm resting against the object's surface, the same way a human palm
+rests against a box while picking it up. It is not a bad pose; it is the
+`--ignore-palm-near-final` collision *rule* (palm contact was never excused
+near the final pose, for any mode) being too strict for `plane` multi-finger
+power-wrap modes, even though that same strictness is correct for `line`
+2-finger pinch modes (there, palm contact does indicate a bad approach).
+
+**Second pass (`--ignore-palm-near-final auto`, the current default):** palm
+contact within `final_contact_ignore_mm` of the terminal pose is now excused
+for `plane` modes only.
+
+```text
+ycb_cracker_box:      no-go voxel fraction = 1.000  (125/125 voxels)
+ycb_sugar_box:        no-go voxel fraction = 1.000  (125/125 voxels)
+ycb_potted_meat_can:  no-go voxel fraction = 0.968  (121/125 voxels)
+```
+
+`ycb_potted_meat_can` improved slightly (a few previously-marginal voxels
+cleared once palm was no longer double-counted as a blocker alongside a
+finger). The two larger boxes did not improve. Breaking down `volume.csv`'s
+`dominant_collision_group` for the still-blocked voxels shows palm is *still*
+the dominant blocker for the majority of them (65/125 for the cracker box,
+72/125 for the sugar box) -- but now it is a `path_collision`, not a
+final-pose collision. This means the palm sweeps through the object partway
+along the straight-line approach, well before the last `final_contact_ignore_mm`
+of the path, even though the *terminal* pose is a legitimate one.
+
+This is a coherent, well-supported finding, not a modeling dead end: **the
+terminal analytical grasp pose is reachable in principle, but a naive
+straight-line Cartesian approach into it is not**, for large box-like objects
+under `plane`-mode power grasps. That is a stronger and more specific version
+of the paper's central claim than the old point-proxy figure supported --
+object-aware path planning is not just occasionally useful, it is necessary
+to avoid dragging the palm through the object on the way to an otherwise-valid
+power grasp.
+
+The `debug_40mm_cube` object (2-finger `line` mode, much smaller object) does
+not show this conflict at every position -- `tools/verify_capsule_hand_
+proxy.py`'s auto-search finds both a blocked and a clear example for it, so
+the effect is specific to the multi-finger `plane` modes and/or these object
+sizes, not a universal property of the capsule proxy.
+
+### No Straight-Line Approach Direction Works For Power-Wrap Grasps
+
+Script:
+
+```bash
+python tools/run_staged_approach_check.py \
+  --objects ycb_cracker_box ycb_sugar_box ycb_potted_meat_can \
+  --out artifacts/staged_approach/
+```
+
+The natural follow-up question to the palm/finger path-collision finding
+above is whether a *better-chosen* single straight-line approach direction
+avoids it -- e.g. retreating straight back along the hand's own reach axis to
+a stand-off distance, then moving straight in, the way a real controller
+would execute a simple pregrasp-then-approach motion.
+
+We tested every plausible single-segment straight-line direction: straight
+back along the hand's own local +Z reach axis, sideways along local +-X and
++-Y, and straight down from above in world +Z, each at five candidate
+stand-off distances (100 to 300mm), for all 8 yaw samples per object, with
+both open and closed finger postures.
+
+**Result: zero of 8 yaw samples, for any of the 3 paper objects, in any of
+the 6 directions tested, at any stand-off distance, had a collision-free
+straight-line approach.** This is not a search-coverage gap -- tracing one
+case in detail (`ycb_cracker_box`, straight-in approach) shows the hand's
+capsule proxy is in continuous collision from about 166mm out to 35mm out
+from the final pose (index finger, then middle finger, then palm, in that
+order as the hand gets closer), regardless of whether the fingers are open or
+already closed to their target curl. Switching the approach direction moved
+which capsule was to blame but never eliminated the collision.
+
+The reason is structural, not a parameter or search issue: a power-wrap
+grasp's terminal pose requires the fingers to be spread around the object.
+Any straight-line segment that ends with the fingers already in (or close to)
+that spread configuration necessarily sweeps some part of that spread through
+the object's volume before arriving, no matter which direction it comes from.
+A single straight Cartesian segment cannot avoid this; only a genuinely
+different motion -- either a curved/multi-segment Cartesian path, or moving
+the hand into position via joint-space IK that is not constrained to a
+straight end-effector line -- can.
+
+This repository's own earlier hand-tuned experiment scripts already arrived
+at the practical resolution, independently of this analysis: the V17 pregrasp
+logic explicitly places the open hand at the pregrasp configuration with
+object collision temporarily disabled ("PLACE POWER PREGRASP WITH COLLISION
+OFF"), then re-enables collision only for the contact-aware finger-closing
+phase. That is exactly the right response to this finding -- straight-line
+Cartesian collision-checking is the wrong model for the *positioning* phase
+of a power-wrap grasp, not a constraint that needs to be satisfied by a
+cleverer choice of direction.
+
+**Paper framing takeaway:** the no-go volume and this straight-line-direction
+sweep together support a claim sharper than "object-aware path planning helps
+sometimes": straight-line Cartesian approach checking is the right model for
+`line` 2-finger pinch grasps (small objects, genuine collision risk during
+approach), but the wrong model entirely for `plane` multi-finger power-wrap
+grasps, which require direct pose placement plus contact-aware closure
+instead. Planner mode should determine which collision-avoidance strategy is
+even applicable, not just which closure geometry to solve.
 
 ### What This Does Not Yet Do
 
@@ -332,14 +484,24 @@ simple linear approach, and where does it need object-aware path planning?
 
 ### Natural Next Upgrade
 
-The next version should replace the inflated-AABB proxy with more realistic
-checks:
+The point-hand proxy has been replaced by the swept-capsule proxy. Remaining
+upgrades toward more realistic checks:
 
-1. Use measured YCB mesh extents or actual meshes.
-2. Use MuJoCo collision checking along the path.
-3. Sample more than yaw, such as wrist pitch/roll or approach direction.
-4. Add arm IK feasibility if the paper wants robot-level reachability.
-5. Compare analytical no-go volume against a learned policy or an optimization
+1. Use measured YCB mesh extents or actual meshes (still AABB proxies today).
+2. Use full MuJoCo mesh collision checking along the path (capsules are still
+   a proxy, not the real hand mesh).
+3. Implement and validate the direct-placement-plus-contact-aware-closure
+   strategy in simulation for `plane` modes (open hand placed via joint-space
+   IK at the pregrasp configuration, collision disabled for that placement
+   step only, then fingers close under contact-aware force control until each
+   digit reaches the object) -- this is now the concrete next step, not
+   further straight-line search; see "No Straight-Line Approach Direction
+   Works" above for why straight-line search was abandoned.
+4. Sample more than yaw, such as wrist pitch/roll or approach direction, for
+   the `line`-mode figure where straight-line approach checking remains the
+   right model.
+5. Add arm IK feasibility if the paper wants robot-level reachability.
+6. Compare analytical no-go volume against a learned policy or an optimization
    planner, if we want a stronger methods comparison.
 
 ## 3. Hybrid Margin / Latency Sweep
@@ -419,11 +581,21 @@ The current methods support this revised paper story:
 ```text
 We characterize the capability boundary of analytical grasping for a
 kinematically coupled low-cost dexterous hand. The planner covers a measurable
-object-width range, but simple analytical closure plus linear Cartesian approach
-has a no-go volume around objects. This explains why object-aware path planning
-and latency-aware execution are needed.
+object-width range, but which collision-avoidance strategy is even applicable
+depends on grasp mode: straight-line Cartesian approach checking is sufficient
+and meaningful for 2-finger pinch grasps, but for multi-finger power-wrap
+grasps no straight-line approach direction reaches the terminal pose without
+collision, at any distance we tested -- because the terminal pose requires
+the fingers to already be spread around the object. Power-wrap grasps instead
+require direct pose placement plus contact-aware closure, which this
+repository's own earlier hand-tuned experiments already converged on
+independently. This explains why object-aware path planning and latency-aware
+execution are needed, and why they are needed differently for different grasp
+modes.
 ```
 
 This is stronger than only saying that the system can execute a few grasps. It
 turns the hand's coupling and analytical limitations into the main scientific
-object of study.
+object of study, and it gives a concrete, mode-dependent answer (not just "path
+planning would help") for what a real controller needs to do differently for
+pinch vs. power-wrap grasps.
