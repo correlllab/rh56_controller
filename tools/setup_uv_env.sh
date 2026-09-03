@@ -13,6 +13,7 @@ Profiles:
   sim-core           Minimal MuJoCo + math stack
   sim-hand           Floating RH56 hand planner/viewer (+mink comparison)
   sim-ur5            UR5 + RH56 MuJoCo viewer
+  sim-ur5-vision     UR5 + RH56 fixed-camera calibration simulation
   sim-h12            H1-2 + RH56 MuJoCo viewer
   sim-h12-ur5        H1-2 and UR5 sim workflows
   real-hand          Real RH56 hand serial workflows
@@ -41,6 +42,7 @@ Supported profiles:
   sim-core
   sim-hand
   sim-ur5
+  sim-ur5-vision
   sim-h12
   sim-h12-ur5
   real-hand
@@ -160,6 +162,10 @@ case "$PROFILE" in
     add_extra "sim-ur5"
     add_submodule "h1_mujoco"
     add_submodule "mink"
+    ;;
+  sim-ur5-vision)
+    add_extra "sim-ur5-vision"
+    add_submodule "h1_mujoco"
     ;;
   sim-h12)
     add_extra "sim-h12"

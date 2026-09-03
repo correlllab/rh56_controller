@@ -537,27 +537,53 @@ class ClosureResult:
 
     def world_tips(self, world_grasp_z: float = 0.0,
                    plane_rx: float = 0.0, plane_ry: float = 0.0,
-                   plane_rz: float = 0.0) -> Dict[str, np.ndarray]:
+                   plane_rz: float = 0.0,
+                   center_policy: str = "contact-centroid") -> Dict[str, np.ndarray]:
         """
         Convert tip positions to world frame with tilt correction and optional
-        plane orientation.  The grasp midpoint is placed at (0, 0, world_grasp_z).
+        plane orientation.  The selected grasp center is placed at
+        (0, 0, world_grasp_z).
 
         plane_rx/ry/rz (radians): additional rotation applied in world frame on top
         of the auto-computed tilt, allowing arbitrary contact-plane orientations.
         """
         R = self._plane_rot(plane_rx, plane_ry, plane_rz) @ self._rot_matrix(self.base_tilt_y)
-        mid_w = R @ self.midpoint
+        mid_w = R @ self.grasp_center(center_policy)
         # base offset: shift so that rotated midpoint lands at world_grasp_z on Z
         base_w = np.array([-mid_w[0], -mid_w[1], world_grasp_z - mid_w[2]])
         return {fname: R @ pos + base_w for fname, pos in self.tip_positions.items()}
 
     def world_base(self, world_grasp_z: float = 0.0,
                    plane_rx: float = 0.0, plane_ry: float = 0.0,
-                   plane_rz: float = 0.0) -> np.ndarray:
+                   plane_rz: float = 0.0,
+                   center_policy: str = "contact-centroid") -> np.ndarray:
         """World-frame position of hand base origin (= [0,0,0] in base frame)."""
         R = self._plane_rot(plane_rx, plane_ry, plane_rz) @ self._rot_matrix(self.base_tilt_y)
-        mid_w = R @ self.midpoint
+        mid_w = R @ self.grasp_center(center_policy)
         return np.array([-mid_w[0], -mid_w[1], world_grasp_z - mid_w[2]])
+
+    def grasp_center(self, policy: str = "contact-centroid") -> np.ndarray:
+        """Return the hand-frame point to place at the requested grasp target.
+
+        ``contact-centroid`` preserves the historical arithmetic mean of all
+        active fingertip contacts. ``antipodal`` returns the midpoint between
+        the thumb and the centroid of the opposing non-thumb fingertips, which
+        is the object-center marker drawn by the plane-grasp viewer.
+        """
+        if policy == "contact-centroid":
+            return self.midpoint.copy()
+        if policy != "antipodal":
+            raise ValueError(f"Unsupported grasp center policy: {policy}")
+
+        thumb = self.tip_positions.get("thumb")
+        nonthumb = [
+            point for name, point in self.tip_positions.items()
+            if name != "thumb"
+        ]
+        if thumb is None or not nonthumb:
+            return self.midpoint.copy()
+        nonthumb_centroid = np.vstack(nonthumb).mean(axis=0)
+        return 0.5 * (thumb + nonthumb_centroid)
 
 
 # ---------------------------------------------------------------------------
@@ -684,7 +710,7 @@ class ClosureGeometry:
         s_min, d_min, d_open = self._joint_closure_range(ref_finger, ctrl_yaw)
 
         if target_width >= d_open:
-            return 0.0, 0.0, 0.0
+            return 0.0, self.fk.ctrl_min["thumb_proximal"], self.fk.ctrl_min[ref_finger]
         if target_width <= d_min:
             s = s_min
         else:

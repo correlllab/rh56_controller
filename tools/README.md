@@ -12,6 +12,22 @@ The scripts here are grouped by how they should be used.
 
 - `demos/demo_h12_rh56_mujoco.py`: direct H1-2 + RH56 MuJoCo demo.
 
+## Camera Calibration
+
+- `calibrate_ur5_external_camera_sim.py`: fixed external-camera intrinsic and
+  eye-to-hand calibration in the UR5+RH56 MuJoCo scene. It writes the reusable
+  calibration schema, numeric validation, and image overlays under `artifacts/`.
+
+## Grasp safety preflight
+
+- `preflight_ggx_ur5_table.py`: simulation-only GraspGen-X candidate screening
+  against an adjustable desk, with YAML setup reuse, annotated review videos,
+  multiple confidence-ranked PASS options, and explicit human veto records
+  with UR5e IK, the RH56 collision model, an adjustable desk height, sampled
+  approach/closure/lift motion, CSV diagnostics, and optional review video or
+  live viewer. It never imports a hardware bridge; see
+  `docs/graspgenx_ur5_table_preflight.md`.
+
 ## Hardware
 
 Scripts in `hardware/` talk to real RH56 hardware, serial ports, or timing loops.

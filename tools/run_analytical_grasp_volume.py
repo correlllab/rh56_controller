@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Characterize no-go volume for analytical RH56 grasps.
 
-This script is a first-pass, simulation-only reachability proxy. It does not
-perform full MuJoCo collision checking or robot-arm IK. Instead, it asks a
-paper-facing question:
+This script is a simulation-only reachability proxy. It does not perform robot
+arm IK or object-aware path planning. Instead, it asks a paper-facing question:
 
     From each sampled hand-base position around an object, what fraction of
     sampled yaw poses can reach the analytical grasp pose with a straight
-    Cartesian move without crossing an inflated object bounding box?
+    Cartesian move without the capsule hand proxy colliding with the object
+    bounding box?
 
 The output is intended to expose where simple analytical closure plus a linear
 approach is plausible, and where object-aware path planning is needed.
@@ -20,6 +20,7 @@ import csv
 import json
 import math
 import os
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -28,9 +29,24 @@ os.environ.setdefault(
     str(Path(os.environ.get("TMPDIR", "/tmp")) / "rh56_controller_matplotlib"),
 )
 
+import mujoco
 import numpy as np
 
-from rh56_controller.grasp_geometry import ClosureGeometry, ClosureResult, InspireHandFK
+from rh56_controller.capsule_hand_proxy import (
+    Capsule,
+    build_capsule_proxy,
+    closure_base_position,
+    closure_base_rotation,
+    sample_linear_path_collisions,
+    set_closure_qpos,
+)
+from rh56_controller.grasp_geometry import (
+    ACTUATOR_NAMES,
+    CTRL_MAX,
+    ClosureGeometry,
+    ClosureResult,
+    InspireHandFK,
+)
 from rh56_controller.paper_v2_objects import BUILTIN_OBJECTS, ObjectSpec
 
 
@@ -55,28 +71,52 @@ def parse_args() -> argparse.Namespace:
         help="Added to object width before calling line/plane analytical solvers.",
     )
     parser.add_argument("--mode-override", choices=["line", "plane3", "plane4", "plane5"], default=None)
-    parser.add_argument("--x-range-mm", type=float, nargs=2, default=[-180.0, 180.0])
-    parser.add_argument("--y-range-mm", type=float, nargs=2, default=[-180.0, 180.0])
-    parser.add_argument("--z-range-mm", type=float, nargs=2, default=[-120.0, 180.0])
-    parser.add_argument("--grid-step-mm", type=float, default=30.0)
-    parser.add_argument("--yaw-samples", type=int, default=16)
+    parser.add_argument("--x-range-mm", type=float, nargs=2, default=[-240.0, 240.0])
+    parser.add_argument("--y-range-mm", type=float, nargs=2, default=[-240.0, 240.0])
+    parser.add_argument("--z-range-mm", type=float, nargs=2, default=[40.0, 280.0])
+    parser.add_argument("--grid-step-mm", type=float, default=60.0)
+    parser.add_argument("--yaw-samples", type=int, default=8)
     parser.add_argument(
         "--path-samples",
         type=int,
-        default=20,
-        help="Samples along each straight-line base path for the proxy collision test.",
+        default=8,
+        help="Visible intervals along each straight-line path; capsule checks are swept over each interval.",
+    )
+    parser.add_argument(
+        "--collision-model",
+        choices=["capsule", "point-inflated"],
+        default="capsule",
+        help="Capsule swept hand proxy, or legacy hand-base point against inflated AABB.",
+    )
+    parser.add_argument(
+        "--path-hand-shape",
+        choices=["open", "closed"],
+        default="open",
+        help="Hand qpos used when extracting the capsule proxy.",
+    )
+    parser.add_argument(
+        "--radius-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor applied to all capsule radii.",
+    )
+    parser.add_argument(
+        "--final-ignore-groups",
+        choices=["fingers", "all", "none"],
+        default="fingers",
+        help="Capsule groups allowed to be ignored in the final-contact region.",
+    )
+    parser.add_argument(
+        "--final-contact-ignore-mm",
+        type=float,
+        default=0.0,
+        help="Only ignore selected capsule contacts this close to the analytical target pose.",
     )
     parser.add_argument(
         "--hand-clearance-mm",
         type=float,
         default=35.0,
-        help="Inflation radius around object AABB used as a coarse hand/wrist clearance proxy.",
-    )
-    parser.add_argument(
-        "--final-contact-ignore-mm",
-        type=float,
-        default=35.0,
-        help="Do not reject the final segment this close to the grasp pose.",
+        help="Only used by --collision-model point-inflated.",
     )
     parser.add_argument(
         "--max-linear-move-mm",
@@ -113,22 +153,49 @@ def solve_object_grasp(
     return None, f"unsupported_mode:{mode}"
 
 
-def base_rotation(result: ClosureResult, yaw_rad: float) -> np.ndarray:
-    cz, sz = math.cos(yaw_rad), math.sin(yaw_rad)
-    rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=float)
-    return rz @ ClosureResult._rot_matrix(result.base_tilt_y)
+def path_ctrl_values(result: ClosureResult, shape: str) -> dict[str, float]:
+    if shape == "closed":
+        return dict(result.ctrl_values)
+    if shape == "open":
+        values = {name: 0.0 for name in ACTUATOR_NAMES}
+        values["thumb_yaw"] = CTRL_MAX["thumb_yaw"]
+        return values
+    raise ValueError(f"Unsupported path hand shape: {shape}")
 
 
-def final_base_position(result: ClosureResult, yaw_rad: float) -> np.ndarray:
-    # Object/grasp centroid is at the world origin. Place the hand base so the
-    # analytical grasp midpoint maps to that origin.
-    return -(base_rotation(result, yaw_rad) @ result.midpoint)
+def tabletop_object_center(obj: ObjectSpec) -> np.ndarray:
+    """Place the object AABB on the ground plane instead of centered on it."""
+
+    return np.array([0.0, 0.0, obj.size_m[2] / 2.0], dtype=float)
+
+
+def final_ignore_groups(mode: str) -> tuple[str, ...] | None:
+    if mode == "all":
+        return None
+    if mode == "none":
+        return ()
+    if mode == "fingers":
+        return ("thumb", "index", "middle", "ring", "pinky")
+    raise ValueError(f"Unsupported final-ignore-groups mode: {mode}")
+
+
+def build_path_capsules(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    result: ClosureResult,
+    *,
+    shape: str,
+    radius_scale: float,
+) -> list[Capsule]:
+    set_closure_qpos(model, data, path_ctrl_values(result, shape))
+    return build_capsule_proxy(model, data, radius_scale=radius_scale)
 
 
 def path_crosses_inflated_object(
     start: np.ndarray,
     final: np.ndarray,
     half_extents: np.ndarray,
+    aabb_center: np.ndarray,
     clearance_m: float,
     final_ignore_m: float,
     n_samples: int,
@@ -140,16 +207,54 @@ def path_crosses_inflated_object(
         p = start + t * (final - start)
         if np.linalg.norm(p - final) <= final_ignore_m:
             continue
-        if np.all(np.abs(p) <= inflated):
+        if np.all(np.abs(p - aabb_center) <= inflated):
             return True
     return False
 
 
+def evaluate_capsule_path(
+    capsules_base: list[Capsule],
+    *,
+    start: np.ndarray,
+    final: np.ndarray,
+    rotation: np.ndarray,
+    half_extents: np.ndarray,
+    aabb_center: np.ndarray,
+    path_samples: int,
+    final_ignore_m: float,
+    final_ignore_group_mode: str,
+) -> tuple[bool, float, str, int]:
+    rows = sample_linear_path_collisions(
+        capsules_base,
+        start=start,
+        final=final,
+        rotation=rotation,
+        half_extents=half_extents,
+        aabb_center=aabb_center,
+        path_samples=path_samples,
+        final_ignore_m=final_ignore_m,
+        final_ignore_groups=final_ignore_groups(final_ignore_group_mode),
+    )
+    active_collisions = [row for row in rows if bool(row["collision"])]
+    usable = [row for row in rows if not bool(row["ignored_for_final_contact"])] or rows
+    min_row = min(usable, key=lambda row: float(row["clearance_m"]))
+    nearest = f"{min_row['nearest_group']}/{min_row['nearest_capsule']}"
+    return (
+        bool(active_collisions),
+        float(min_row["clearance_m"]),
+        nearest,
+        max(int(row["active_collision_count"]) for row in rows),
+    )
+
+
 def evaluate_object(
     closure: ClosureGeometry,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
     obj: ObjectSpec,
     args: argparse.Namespace,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
+    t0 = time.perf_counter()
     mode = args.mode_override or obj.mode
     width_offset_m = args.object_width_offset_mm / 1000.0
     result, solve_reason = solve_object_grasp(closure, obj, mode, width_offset_m)
@@ -160,12 +265,31 @@ def evaluate_object(
     yaws = np.linspace(0.0, 2.0 * math.pi, args.yaw_samples, endpoint=False)
 
     half_extents = np.array(obj.size_m, dtype=float) / 2.0
+    aabb_center = tabletop_object_center(obj)
     clearance_m = args.hand_clearance_mm / 1000.0
     final_ignore_m = args.final_contact_ignore_mm / 1000.0
     max_linear_move_m = args.max_linear_move_mm / 1000.0
 
     rows: list[dict[str, object]] = []
-    final_by_yaw = [final_base_position(result, yaw) for yaw in yaws] if result else []
+    capsules_base = (
+        build_path_capsules(
+            model,
+            data,
+            result,
+            shape=args.path_hand_shape,
+            radius_scale=args.radius_scale,
+        )
+        if result and args.collision_model == "capsule"
+        else []
+    )
+    final_and_rotation_by_yaw = [
+        (
+            closure_base_position(result, yaw, object_center=aabb_center),
+            closure_base_rotation(result, yaw),
+            math.degrees(yaw),
+        )
+        for yaw in yaws
+    ] if result else []
 
     for x in xs:
         for y in ys:
@@ -175,24 +299,47 @@ def evaluate_object(
                 blockers = {
                     "solve_failed": 0,
                     "move_too_long": 0,
-                    "path_intersects_object_proxy": 0,
+                    "path_collision": 0,
                 }
                 path_lengths: list[float] = []
-                for final in final_by_yaw:
+                clearances: list[float] = []
+                nearest_blockers: dict[str, int] = {}
+                max_active_collision_count = 0
+                for final, rotation, _yaw_deg in final_and_rotation_by_yaw:
                     path_len = float(np.linalg.norm(final - start))
                     path_lengths.append(path_len)
                     if path_len > max_linear_move_m:
                         blockers["move_too_long"] += 1
                         continue
-                    if path_crosses_inflated_object(
+
+                    if args.collision_model == "capsule":
+                        collided, min_clearance_m, nearest, active_count = evaluate_capsule_path(
+                            capsules_base,
+                            start=start,
+                            final=final,
+                            rotation=rotation,
+                            half_extents=half_extents,
+                            aabb_center=aabb_center,
+                            path_samples=args.path_samples,
+                            final_ignore_m=final_ignore_m,
+                            final_ignore_group_mode=args.final_ignore_groups,
+                        )
+                        clearances.append(min_clearance_m)
+                        max_active_collision_count = max(max_active_collision_count, active_count)
+                        if collided:
+                            blockers["path_collision"] += 1
+                            nearest_blockers[nearest] = nearest_blockers.get(nearest, 0) + 1
+                            continue
+                    elif path_crosses_inflated_object(
                         start,
                         final,
                         half_extents,
+                        aabb_center,
                         clearance_m,
                         final_ignore_m,
                         args.path_samples,
                     ):
-                        blockers["path_intersects_object_proxy"] += 1
+                        blockers["path_collision"] += 1
                         continue
                     viable += 1
                 if result is None:
@@ -213,10 +360,26 @@ def evaluate_object(
                         "y_mm": f"{y * 1000.0:.3f}",
                         "z_mm": f"{z * 1000.0:.3f}",
                         "object_width_mm": f"{obj.grasp_width_m * 1000.0:.3f}",
+                        "object_center_z_mm": f"{aabb_center[2] * 1000.0:.3f}",
                         "internal_width_mm": f"{(obj.grasp_width_m + width_offset_m) * 1000.0:.3f}",
+                        "collision_model": args.collision_model,
+                        "path_hand_shape": args.path_hand_shape if args.collision_model == "capsule" else "",
                         "viable_poses": viable,
                         "total_poses": total,
                         "viability": f"{viability:.6f}",
+                        "move_too_long_count": blockers["move_too_long"],
+                        "path_collision_count": blockers["path_collision"],
+                        "max_active_collision_count": max_active_collision_count,
+                        "best_clearance_mm": (
+                            f"{max(clearances) * 1000.0:.3f}" if clearances else ""
+                        ),
+                        "mean_clearance_mm": (
+                            f"{np.mean(clearances) * 1000.0:.3f}" if clearances else ""
+                        ),
+                        "most_common_blocker": (
+                            max(nearest_blockers.items(), key=lambda item: item[1])[0]
+                            if nearest_blockers else ""
+                        ),
                         "mean_path_mm": (
                             f"{np.mean(path_lengths) * 1000.0:.3f}" if path_lengths else ""
                         ),
@@ -232,11 +395,15 @@ def evaluate_object(
         "grid_points": len(rows),
         "yaw_samples": args.yaw_samples,
         "object_width_mm": f"{obj.grasp_width_m * 1000.0:.3f}",
+        "object_center_z_mm": f"{aabb_center[2] * 1000.0:.3f}",
         "internal_width_mm": f"{(obj.grasp_width_m + width_offset_m) * 1000.0:.3f}",
+        "collision_model": args.collision_model,
+        "path_hand_shape": args.path_hand_shape if args.collision_model == "capsule" else "",
         "mean_viability": f"{float(np.mean(viabilities)):.6f}",
         "reachable_voxel_fraction": f"{float(np.mean(viabilities > 0.0)):.6f}",
         "no_go_voxel_fraction": f"{float(np.mean(viabilities <= 0.0)):.6f}",
         "solve_reason": solve_reason,
+        "elapsed_s": f"{time.perf_counter() - t0:.3f}",
         "notes": obj.notes,
     }
     return rows, summary
@@ -251,10 +418,19 @@ def write_volume_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "y_mm",
         "z_mm",
         "object_width_mm",
+        "object_center_z_mm",
         "internal_width_mm",
+        "collision_model",
+        "path_hand_shape",
         "viable_poses",
         "total_poses",
         "viability",
+        "move_too_long_count",
+        "path_collision_count",
+        "max_active_collision_count",
+        "best_clearance_mm",
+        "mean_clearance_mm",
+        "most_common_blocker",
         "mean_path_mm",
         "dominant_blocker",
     ]
@@ -272,11 +448,15 @@ def write_summary_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "grid_points",
         "yaw_samples",
         "object_width_mm",
+        "object_center_z_mm",
         "internal_width_mm",
+        "collision_model",
+        "path_hand_shape",
         "mean_viability",
         "reachable_voxel_fraction",
         "no_go_voxel_fraction",
         "solve_reason",
+        "elapsed_s",
         "notes",
     ]
     with path.open("w", newline="") as f:
@@ -298,6 +478,8 @@ def write_assumptions(path: Path, args: argparse.Namespace, objects: list[Object
             obj.name: {
                 "label": obj.label,
                 "size_m": obj.size_m,
+                "aabb_center_m": tabletop_object_center(obj).tolist(),
+                "bottom_z_m": 0.0,
                 "grasp_width_m": obj.grasp_width_m,
                 "default_mode": obj.mode,
                 "notes": obj.notes,
@@ -314,14 +496,18 @@ def write_assumptions(path: Path, args: argparse.Namespace, objects: list[Object
         },
         "assumptions": {
             "object_width_offset_mm": args.object_width_offset_mm,
-            "hand_clearance_mm": args.hand_clearance_mm,
+            "collision_model": args.collision_model,
+            "path_hand_shape": args.path_hand_shape,
+            "radius_scale": args.radius_scale,
+            "final_ignore_groups": args.final_ignore_groups,
+            "hand_clearance_mm": args.hand_clearance_mm if args.collision_model == "point-inflated" else None,
             "final_contact_ignore_mm": args.final_contact_ignore_mm,
             "max_linear_move_mm": args.max_linear_move_mm,
-            "object_model": "axis-aligned bounding box inflated by hand_clearance_mm",
+            "object_model": "tabletop axis-aligned bounding box",
             "pose_samples": "yaw samples around object with analytical grasp midpoint at object center",
             "viability": (
                 "fraction of yaw samples whose straight-line hand-base path to the "
-                "analytical grasp pose does not cross the inflated object proxy"
+                "analytical grasp pose is collision-free under the selected proxy"
             ),
         },
     }
@@ -353,8 +539,15 @@ def maybe_write_plots(out_dir: Path, volume_rows: list[dict[str, object]]) -> No
             for row in rows
         }
 
-        slice_zs = [zs[0], zs[len(zs) // 2], zs[-1]]
-        fig, axes = plt.subplots(1, len(slice_zs), figsize=(4.2 * len(slice_zs), 3.8), sharex=True, sharey=True)
+        slice_indices = sorted({0, len(zs) // 2, len(zs) - 1})
+        slice_zs = [zs[index] for index in slice_indices]
+        fig, axes = plt.subplots(
+            1,
+            len(slice_zs),
+            figsize=(4.2 * len(slice_zs), 3.8),
+            sharex=True,
+            sharey=True,
+        )
         if len(slice_zs) == 1:
             axes = [axes]
         for ax, z in zip(axes, slice_zs):
@@ -428,16 +621,25 @@ def main() -> int:
     print("RH56 analytical grasp volume assumptions:")
     print("  simulation_only: true")
     print("  hardware_required: false")
-    print("  collision_model: inflated AABB proxy")
+    print(f"  collision_model: {args.collision_model}")
+    if args.collision_model == "capsule":
+        print(f"  path_hand_shape: {args.path_hand_shape}")
     print(f"  objects: {', '.join(args.objects)}")
     print(f"  output: {args.out}")
 
     all_volume_rows: list[dict[str, object]] = []
     summary_rows: list[dict[str, object]] = []
     for obj in objects:
-        rows, summary = evaluate_object(closure, obj, args)
+        model = mujoco.MjModel.from_xml_path(str(args.xml or fk.xml_path))
+        data = mujoco.MjData(model)
+        rows, summary = evaluate_object(closure, model, data, obj, args)
         all_volume_rows.extend(rows)
         summary_rows.append(summary)
+        print(
+            f"  {obj.name}: mean_viability={summary['mean_viability']} "
+            f"no_go_fraction={summary['no_go_voxel_fraction']} "
+            f"elapsed_s={summary['elapsed_s']}"
+        )
 
     write_volume_csv(args.out / "volume.csv", all_volume_rows)
     write_summary_csv(args.out / "summary.csv", summary_rows)

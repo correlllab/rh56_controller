@@ -19,6 +19,19 @@ test = [
     "pytest>=8",
 ]
 
+# Paper-facing MP4 renderers; kept optional to avoid adding a video binary to
+# the default simulation install.
+video = [
+    "imageio-ffmpeg>=0.6",
+    "Pillow>=10",
+]
+
+# Camera calibration and image-space object-localization tools. OpenCV 5.0
+# currently omits calibrateHandEye from its Python wheel, so stay on 4.x.
+vision = [
+    "opencv-python-headless>=4.10,<5",
+]
+
 # RH56 hardware serial stack (real hand)
 hand = [
     "pyserial",
@@ -62,6 +75,9 @@ sim-hand = [
 ]
 sim-ur5 = [
     "mink",
+]
+sim-ur5-vision = [
+    "opencv-python-headless>=4.10,<5",
 ]
 sim-h12 = [
     "pin>=3.7.0",

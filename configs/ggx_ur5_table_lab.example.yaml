@@ -1,0 +1,43 @@
+# Copy this file for each physical setup and replace every measured value.
+# Relative file paths are resolved from the rh56_controller repository root.
+
+graspgenx_yaml: artifacts/graspgenx_success_comparison/graspgenx_candidates.yml
+xml: h1_mujoco/inspire/ur5_inspire.xml
+out: artifacts/graspgenx_ur5_table_preflight/first_lab_day
+
+# All positions are expressed in the UR base frame.
+table_height_m: 0.070
+desk_clearance_mm: 2.0
+object_x_m: 0.0
+object_y_m: -0.50
+object_size_mm: [40.0, 40.0, 40.0]
+object_shape: box
+
+# Replace with the six joint angles read from the robot before the trial.
+start_q_deg: [0.0, -90.0, 90.0, -90.0, 0.0, 0.0]
+standoff_mm: 80.0
+lift_mm: 80.0
+
+# Produce several automatically feasible options for human safety review.
+max_candidates: 100
+review_passes: 5
+path_step_deg: 1.0
+cartesian_step_mm: 10.0
+close_samples: 30
+contact_compression: 0.10
+opposing_span_fraction: 0.30
+
+ik_max_iters: 250
+ik_dt: 0.05
+ik_position_tol_mm: 3.0
+ik_orientation_tol_deg: 3.0
+solver: daqp
+
+video: true
+viewer: false
+video_width: 720
+video_height: 540
+fps: 24
+camera_azimuth: 180.0
+camera_elevation: -20.0
+camera_distance: 1.55

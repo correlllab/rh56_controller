@@ -34,7 +34,7 @@ class Capsule:
 
 @dataclass(frozen=True)
 class CapsuleCollision:
-    """Distance result for one capsule against one object AABB."""
+    """Distance result for one capsule against one object proxy."""
 
     capsule_name: str
     capsule_group: str
@@ -48,7 +48,13 @@ class CapsuleCollision:
 
     @property
     def intersects(self) -> bool:
-        return self.clearance <= 0.0
+        return self.clearance < -COLLISION_NUMERICAL_EPSILON_M
+
+
+# Optimized point/segment distances can land a few micrometres below zero at
+# exact analytical fingertip contact. This epsilon rejects numerical overlap
+# without masking physically meaningful penetration.
+COLLISION_NUMERICAL_EPSILON_M = 1e-5
 
 
 FINGER_RADII_M = {
@@ -279,6 +285,75 @@ def point_aabb_distance(
     return float(np.linalg.norm(outside))
 
 
+def point_cylinder_distance(
+    point: np.ndarray,
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+) -> float:
+    """Euclidean distance from a point to a solid upright cylinder."""
+
+    center = (
+        np.zeros(3, dtype=float)
+        if object_center is None
+        else np.asarray(object_center, dtype=float)
+    )
+    half_extents = np.asarray(half_extents, dtype=float)
+    if not np.isclose(half_extents[0], half_extents[1], atol=1e-9):
+        raise ValueError("cylinder collision proxies require equal x/y radii")
+    radial_outside = float(np.linalg.norm(np.asarray(point)[:2] - center[:2])) - float(
+        half_extents[0]
+    )
+    axial_outside = abs(float(point[2] - center[2])) - float(half_extents[2])
+    outside = np.maximum(np.array([radial_outside, axial_outside]), 0.0)
+    return float(np.linalg.norm(outside))
+
+
+def point_sphere_distance(
+    point: np.ndarray,
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+) -> float:
+    """Euclidean distance from a point to a solid sphere."""
+
+    center = (
+        np.zeros(3, dtype=float)
+        if object_center is None
+        else np.asarray(object_center, dtype=float)
+    )
+    half_extents = np.asarray(half_extents, dtype=float)
+    if not np.allclose(half_extents, half_extents[0], atol=1e-9):
+        raise ValueError("sphere collision proxies require equal x/y/z radii")
+    return max(float(np.linalg.norm(np.asarray(point) - center) - half_extents[0]), 0.0)
+
+
+def point_object_distance(
+    point: np.ndarray,
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+    object_shape: str = "box",
+) -> float:
+    """Euclidean distance from a point to a supported solid object proxy."""
+
+    if object_shape == "box":
+        return point_aabb_distance(point, half_extents, aabb_center=object_center)
+    if object_shape == "cylinder":
+        return point_cylinder_distance(
+            point,
+            half_extents,
+            object_center=object_center,
+        )
+    if object_shape == "sphere":
+        return point_sphere_distance(
+            point,
+            half_extents,
+            object_center=object_center,
+        )
+    raise ValueError(f"Unsupported object collision shape: {object_shape}")
+
+
 def segment_aabb_distance(
     p0: np.ndarray,
     p1: np.ndarray,
@@ -302,6 +377,54 @@ def segment_aabb_distance(
             p0 + float(t) * delta,
             half_extents,
             aabb_center=aabb_center,
+        )
+        return distance * distance
+
+    result = minimize_scalar(
+        squared_distance,
+        bounds=(0.0, 1.0),
+        method="bounded",
+        options={"xatol": 1e-6},
+    )
+    return math.sqrt(max(float(result.fun), 0.0)), float(result.x)
+
+
+def segment_object_distance(
+    p0: np.ndarray,
+    p1: np.ndarray,
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+    object_shape: str = "box",
+) -> tuple[float, float]:
+    """Compute shortest centerline distance to a supported object proxy."""
+
+    if object_shape == "box":
+        return segment_aabb_distance(
+            p0,
+            p1,
+            half_extents,
+            aabb_center=object_center,
+        )
+
+    delta = p1 - p0
+    if np.linalg.norm(delta) < 1e-12:
+        return (
+            point_object_distance(
+                p0,
+                half_extents,
+                object_center=object_center,
+                object_shape=object_shape,
+            ),
+            0.0,
+        )
+
+    def squared_distance(t: float) -> float:
+        distance = point_object_distance(
+            p0 + float(t) * delta,
+            half_extents,
+            object_center=object_center,
+            object_shape=object_shape,
         )
         return distance * distance
 
@@ -386,6 +509,85 @@ def swept_segment_aabb_distance(
     return math.sqrt(max(best_fun, 0.0)), float(best_x[0]), float(best_x[1])
 
 
+def swept_segment_object_distance(
+    p0_start: np.ndarray,
+    p1_start: np.ndarray,
+    p0_end: np.ndarray,
+    p1_end: np.ndarray,
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+    object_shape: str = "box",
+) -> tuple[float, float, float]:
+    """Compute shortest distance from a swept segment to an object proxy."""
+
+    if object_shape == "box":
+        return swept_segment_aabb_distance(
+            p0_start,
+            p1_start,
+            p0_end,
+            p1_end,
+            half_extents,
+            aabb_center=object_center,
+        )
+
+    axis = p1_start - p0_start
+    path_delta = 0.5 * ((p0_end - p0_start) + (p1_end - p1_start))
+    if np.linalg.norm(axis) < 1e-12:
+        distance, t_path = segment_object_distance(
+            p0_start,
+            p0_end,
+            half_extents,
+            object_center=object_center,
+            object_shape=object_shape,
+        )
+        return distance, 0.0, t_path
+    if np.linalg.norm(path_delta) < 1e-12:
+        distance, t_segment = segment_object_distance(
+            p0_start,
+            p1_start,
+            half_extents,
+            object_center=object_center,
+            object_shape=object_shape,
+        )
+        return distance, t_segment, 0.0
+
+    def squared_distance(params: np.ndarray) -> float:
+        t_segment = float(params[0])
+        t_path = float(params[1])
+        point = p0_start + t_segment * axis + t_path * path_delta
+        distance = point_object_distance(
+            point,
+            half_extents,
+            object_center=object_center,
+            object_shape=object_shape,
+        )
+        return distance * distance
+
+    starts = (
+        np.array([0.5, 0.5]),
+        np.array([0.0, 0.0]),
+        np.array([1.0, 0.0]),
+        np.array([0.0, 1.0]),
+        np.array([1.0, 1.0]),
+    )
+    best_fun = math.inf
+    best_x = starts[0]
+    for guess in starts:
+        result = minimize(
+            squared_distance,
+            guess,
+            bounds=((0.0, 1.0), (0.0, 1.0)),
+            method="L-BFGS-B",
+            options={"ftol": 1e-14, "gtol": 1e-10, "maxiter": 100},
+        )
+        if float(result.fun) < best_fun:
+            best_fun = float(result.fun)
+            best_x = np.asarray(result.x, dtype=float)
+
+    return math.sqrt(max(best_fun, 0.0)), float(best_x[0]), float(best_x[1])
+
+
 def closest_capsule_to_aabb(
     capsules: Iterable[Capsule],
     half_extents: np.ndarray,
@@ -414,13 +616,35 @@ def capsule_collisions_against_aabb(
 ) -> list[CapsuleCollision]:
     """Return clearance records for every capsule against an AABB."""
 
+    return capsule_collisions_against_object(
+        capsules,
+        half_extents,
+        object_center=aabb_center,
+        object_shape="box",
+        path_alpha=path_alpha,
+        near_final=near_final,
+    )
+
+
+def capsule_collisions_against_object(
+    capsules: Iterable[Capsule],
+    half_extents: np.ndarray,
+    *,
+    object_center: np.ndarray | None = None,
+    object_shape: str = "box",
+    path_alpha: float = 0.0,
+    near_final: bool = False,
+) -> list[CapsuleCollision]:
+    """Return clearance records for every capsule against an object proxy."""
+
     collisions: list[CapsuleCollision] = []
     for capsule in capsules:
-        distance, t_segment = segment_aabb_distance(
+        distance, t_segment = segment_object_distance(
             capsule.p0,
             capsule.p1,
             half_extents,
-            aabb_center=aabb_center,
+            object_center=object_center,
+            object_shape=object_shape,
         )
         clearance = distance - capsule.radius
         collisions.append(
@@ -451,6 +675,33 @@ def swept_capsule_collisions_against_aabb(
 ) -> list[CapsuleCollision]:
     """Return clearance records for every capsule swept across one path interval."""
 
+    return swept_capsule_collisions_against_object(
+        capsules_start,
+        capsules_end,
+        half_extents,
+        object_center=aabb_center,
+        object_shape="box",
+        alpha_start=alpha_start,
+        alpha_end=alpha_end,
+        path_length_m=path_length_m,
+        final_ignore_m=final_ignore_m,
+    )
+
+
+def swept_capsule_collisions_against_object(
+    capsules_start: Iterable[Capsule],
+    capsules_end: Iterable[Capsule],
+    half_extents: np.ndarray,
+    *,
+    alpha_start: float,
+    alpha_end: float,
+    path_length_m: float,
+    final_ignore_m: float,
+    object_center: np.ndarray | None = None,
+    object_shape: str = "box",
+) -> list[CapsuleCollision]:
+    """Return clearance records for capsules swept past an object proxy."""
+
     start_list = list(capsules_start)
     end_list = list(capsules_end)
     if len(start_list) != len(end_list):
@@ -460,13 +711,14 @@ def swept_capsule_collisions_against_aabb(
     for capsule_start, capsule_end in zip(start_list, end_list):
         if capsule_start.name != capsule_end.name or capsule_start.group != capsule_end.group:
             raise ValueError("Start and end capsule lists must have matching order")
-        distance, t_segment, t_path = swept_segment_aabb_distance(
+        distance, t_segment, t_path = swept_segment_object_distance(
             capsule_start.p0,
             capsule_start.p1,
             capsule_end.p0,
             capsule_end.p1,
             half_extents,
-            aabb_center=aabb_center,
+            object_center=object_center,
+            object_shape=object_shape,
         )
         path_alpha = alpha_start + t_path * (alpha_end - alpha_start)
         near_final = path_length_m * (1.0 - path_alpha) <= final_ignore_m
@@ -563,9 +815,10 @@ def sample_linear_path_collisions(
     path_samples: int,
     final_ignore_m: float,
     aabb_center: np.ndarray | None = None,
+    object_shape: str = "box",
     final_ignore_groups: Iterable[str] | None = ("thumb", "index", "middle", "ring", "pinky"),
 ) -> list[dict[str, object]]:
-    """Check capsule-vs-AABB clearance along a straight hand-base path.
+    """Check capsule-vs-object clearance along a straight hand-base path.
 
     The returned rows are organized by visible path interval.  Row zero checks
     the static start pose; later rows report the continuous swept-capsule
@@ -599,20 +852,22 @@ def sample_linear_path_collisions(
         capsules_world = transform_capsules(capsules_base, rotation, base_position)
 
         if sample_idx == 0:
-            collisions = capsule_collisions_against_aabb(
+            collisions = capsule_collisions_against_object(
                 capsules_world,
                 half_extents,
-                aabb_center=aabb_center,
+                object_center=aabb_center,
+                object_shape=object_shape,
                 path_alpha=alpha,
                 near_final=near_final,
             )
             check_type = "static_start"
         else:
-            collisions = swept_capsule_collisions_against_aabb(
+            collisions = swept_capsule_collisions_against_object(
                 previous_capsules,
                 capsules_world,
                 half_extents,
-                aabb_center=aabb_center,
+                object_center=aabb_center,
+                object_shape=object_shape,
                 alpha_start=interval_start_alpha,
                 alpha_end=interval_end_alpha,
                 path_length_m=path_length_m,

@@ -142,6 +142,9 @@ class GraspVizCore:
         self._plane_rx = 0.0
         self._plane_ry = 0.0
         self._plane_rz = 0.0
+        # Preserve legacy viewer/experiment behavior unless a caller explicitly
+        # requests the physical midpoint between thumb and opposing fingers.
+        self._grasp_center_policy = "contact-centroid"
         self._robot_only_mode = False
 
         self._wrist3_pos: Optional[np.ndarray] = None
@@ -457,7 +460,13 @@ class GraspVizCore:
     def _build_world_T_hand(self, r: ClosureResult) -> np.ndarray:
         """Build 4×4 world_T_hand from closure result + current slider state."""
         gz    = self._grasp_z
-        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+        wbase = r.world_base(
+            gz,
+            self._plane_rx,
+            self._plane_ry,
+            self._plane_rz,
+            center_policy=self._grasp_center_policy,
+        )
         if self._robot_mode or self._h12_mode:
             wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
         R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
@@ -613,7 +622,13 @@ class GraspVizCore:
             rot_x, rot_y, rot_z = _mat_to_xyz_euler(T_wrist[:3, :3])
         else:
             gz    = self._grasp_z
-            wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+            wbase = r.world_base(
+                gz,
+                self._plane_rx,
+                self._plane_ry,
+                self._plane_rz,
+                center_policy=self._grasp_center_policy,
+            )
             if self._robot_mode:
                 wbase = wbase + np.array([self._grasp_x, self._grasp_y, 0.0])
             R_full = self._plane_R_matrix() @ ClosureResult._rot_matrix(r.base_tilt_y)
@@ -632,7 +647,13 @@ class GraspVizCore:
     def _build_state_array(self, r: ClosureResult) -> np.ndarray:
         gz       = self._grasp_z
         mode_idx = MODES.index(r.mode) if r.mode in MODES else 0
-        wtips    = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+        wtips    = r.world_tips(
+            gz,
+            self._plane_rx,
+            self._plane_ry,
+            self._plane_rz,
+            center_policy=self._grasp_center_policy,
+        )
         if self._robot_mode or self._h12_mode:
             xy_off = np.array([self._grasp_x, self._grasp_y, 0.0])
             wtips  = {f: p + xy_off for f, p in wtips.items()}

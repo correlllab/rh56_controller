@@ -109,16 +109,16 @@ the user explicitly asks:
 
 ### Next likely task
 
-Build the paper-facing no-go volume figure:
+Refine the paper-facing no-go volume figure after the first capsule pass:
 
-1. Use the capsule proxy and tabletop object center logic from the debug GUI.
-2. Sample a 3D volume around simple object proxies.
-3. For each voxel and yaw, report whether a straight-line analytical approach
-   is collision-free.
-4. Produce a concise figure that answers: where do analytical RH56 grasps work,
-   and where is object-aware path planning necessary?
+1. Run a coarse full sweep with `tools/run_analytical_grasp_volume.py`.
+2. Inspect whether the no-go slices are visually interpretable and whether the
+   `most_common_blocker` labels match the MuJoCo GUI intuition.
+3. Tune grid/yaw/path sampling only after the coarse result is understandable.
+4. Decide whether to add sparse MuJoCo mesh-collision validation points before
+   using the figure in paper v2.
 
-Keep the first no-go volume pass simulation-only and avoid hardware/H1-2 scope.
+Keep this line simulation-only and avoid hardware/H1-2 scope.
 
 ---
 

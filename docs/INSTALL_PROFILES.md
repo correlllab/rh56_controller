@@ -24,6 +24,7 @@ you intentionally want the maintainer/full checkout.
 | Minimal sim imports / CI smoke test | `sim-core` | 3.12 | none | `h1_mujoco` for viewers | `uv run python -m rh56_controller.grasp_viz --no-mink` |
 | Floating RH56 hand planner with Mink comparison | `sim-hand` | 3.12 | `sim-hand` | `h1_mujoco`, `mink` | `uv run python -m rh56_controller.grasp_viz` |
 | UR5 + RH56 MuJoCo viewer | `sim-ur5` | 3.12 | `sim-ur5` | `h1_mujoco`, `mink` | `uv run python -m rh56_controller.grasp_viz --robot` |
+| UR5 + RH56 fixed-camera calibration | `sim-ur5-vision` | 3.12 | `sim-ur5-vision` | `h1_mujoco` | `python tools/calibrate_ur5_external_camera_sim.py` |
 | H1-2 + RH56 MuJoCo viewer | `sim-h12` | 3.12 | `sim-h12` | `h1_mujoco` | `uv run python -m rh56_controller.grasp_viz --h12` |
 | H1-2 and UR5 sim workflows | `sim-h12-ur5` | 3.12 | `sim-h12-ur5` | `h1_mujoco`, `mink`, `magpie_control` | `uv run python -m rh56_controller.grasp_viz --h12` |
 | Real RH56 hand only | `real-hand` | 3.12 | `real-hand` | `h1_mujoco` for visualizers | `uv run python -m rh56_controller.hand_mirror --port /dev/ttyUSB0` |
@@ -110,6 +111,7 @@ Optional groups add only their subsystem:
 |:--|:--|
 | `hand` / `real-hand` | `pyserial` for RH56 hardware |
 | `mink` | Mink differential IK comparison |
+| `vision` | OpenCV 4.x camera calibration and image processing |
 | `ur5` | `magpie_control` and `spatialmath-python` for real UR5 control |
 | `h12` | Pinocchio, PINK, DAQP/QPSolvers, Meshcat for H1-2 simulation/control |
 | `ros` | Semantic marker only; ROS Python packages come from ROS/apt/colcon |

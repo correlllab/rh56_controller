@@ -58,6 +58,17 @@ PROFILE_SPECS: tuple[ProfileSpec, ...] = (
         command="uv run python -m rh56_controller.grasp_viz --robot",
     ),
     ProfileSpec(
+        name="sim-ur5-vision",
+        python="3.12",
+        extras=("sim-ur5-vision",),
+        modules=BASE_MODULES + ("cv2",),
+        paths=("h1_mujoco",),
+        command=(
+            "python tools/calibrate_ur5_external_camera_sim.py "
+            "--out artifacts/ur5_external_camera_calibration"
+        ),
+    ),
+    ProfileSpec(
         name="sim-h12",
         python="3.12",
         extras=("sim-h12",),

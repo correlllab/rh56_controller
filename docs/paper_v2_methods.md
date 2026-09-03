@@ -78,8 +78,14 @@ Script:
 ```bash
 python tools/run_analytical_grasp_volume.py \
   --objects ycb_cracker_box ycb_sugar_box ycb_potted_meat_can \
-  --grid-step-mm 30 \
-  --yaw-samples 16 \
+  --collision-model capsule \
+  --path-hand-shape open \
+  --x-range-mm -240 240 \
+  --y-range-mm -240 240 \
+  --z-range-mm 40 280 \
+  --grid-step-mm 60 \
+  --yaw-samples 8 \
+  --path-samples 8 \
   --out artifacts/analytical_grasp_volume/
 ```
 
@@ -93,7 +99,7 @@ The question answered by each voxel is:
 ```text
 From this sampled hand-base position, what fraction of sampled yaw poses can
 reach the analytical grasp pose with a straight-line Cartesian move without
-crossing an inflated object proxy?
+the swept capsule hand proxy colliding with the object AABB?
 ```
 
 ### Object Model
@@ -106,9 +112,11 @@ The current implementation uses coarse YCB-like object proxies:
 | `ycb_sugar_box` | 89 x 39 x 175 mm | `plane4` | 39 mm |
 | `ycb_potted_meat_can` | 101 x 58 x 83 mm | `plane4` | 58 mm |
 
-These are axis-aligned bounding-box proxies, not final mesh measurements. They
-are good enough for the first characterization figure, but should be replaced
-with measured mesh extents before final submission.
+These are tabletop axis-aligned bounding-box proxies, not final mesh
+measurements. The object center is placed at `[0, 0, height / 2]`, so the bottom
+face sits on the ground plane instead of half the object spawning under it. The
+proxies are good enough for the first characterization figure, but should be
+validated against measured mesh extents before final submission.
 
 ### Capsule Hand Proxy Verification
 
@@ -211,6 +219,287 @@ C: reset the moving hand to the start pose
 Q or Esc: quit
 ```
 
+### Strategy Pre-Grasp Demo
+
+Before turning this into a dense volume sweep, we now keep a one-example demo
+for the three paper-level execution strategies:
+
+```bash
+python tools/demo_strategy_pregrasp_collision.py \
+  --object debug_40mm_cube \
+  --mode plane4 \
+  --out artifacts/strategy_pregrasp_demo/
+```
+
+This is not a paper result. Its job is to verify that the strategy-specific
+pre-grasp hand shapes are the ones we intend to analyze:
+
+- `naive`: fully open fingers with thumb yaw already rotated to the final
+  opposing direction; thumb bend and non-thumb fingers close together after the
+  arm reaches the final grasp pose.
+- `iterative_closure`: the analytical planner posture at a wider approach
+  width. The default policy is `--iterative-pregrasp-policy planner-max-width`,
+  which uses the same mode-specific maximum width available to the analytical
+  planner. `--iterative-pregrasp-policy final-plus-preopen` is kept only as a
+  comparison/debug option.
+- `thumb_reflex`: final thumb bend/yaw with all non-thumb fingers open.
+
+For one fixed object and one fixed analytical grasp target, the script
+uses each strategy's pre-grasp hand shape and checks whether the capsule hand
+proxy can move from a sampled hand-base start pose to the pre-grasp target without
+hitting either:
+
+- the object's box/cylinder/sphere collision primitive, or
+- the floor plane at `z = 0`.
+
+It writes `summary.csv`, `assumptions.json`, and
+`strategy_pregrasp_demo.png`. This is the gate for deciding whether the
+strategy-specific no-go volume is worth running. For example, a low-object
+case such as:
+
+```bash
+python tools/demo_strategy_pregrasp_collision.py \
+  --object debug_20mm_cube \
+  --mode plane4 \
+  --out artifacts/strategy_pregrasp_demo_20mm/
+```
+
+shows that floor collision can dominate the feasibility decision. That is the
+behavior we need before claiming that a larger no-go volume comes from an
+extended thumb or other strategy-specific hand geometry.
+
+### Strategy Pre-Grasp Feasible Rate
+
+After the one-example demo looks sensible, the first coarse rate script is:
+
+```bash
+python tools/run_strategy_pregrasp_rate.py \
+  --object debug_40mm_cube \
+  --mode line \
+  --iterative-pregrasp-policy planner-max-width \
+  --start-sampler paper-approach-points \
+  --start-reference grasp-center \
+  --approach-axis y- \
+  --out artifacts/strategy_pregrasp_rate_40mm/
+```
+
+This keeps the same object model and strategy definitions as the demo, but
+samples the paper-style initial hand positions instead of a rectangular debug
+grid. The sampled point is the pre-grasp center, not the raw hand-base pose.
+The three strategies are fixed across objects. Object identity changes the
+selected analytical grasp mode, target width, and grasp target point; it does
+not introduce a hand-tuned pre-grasp shape. For the Plan/iterative strategy,
+the default pre-grasp width is the planner's maximum feasible width for the
+selected mode, unless `--iterative-width-mm` is explicitly provided.
+
+The object proxy now separates two concepts:
+
+- `aabb_center`: the geometric center of the tabletop collision AABB.
+- `grasp_target`: the point where the analytical grasp center should land.
+
+Small/debug objects default to `grasp_target = aabb_center`. For tall upright
+paper objects such as bottles, cups, cans, mustard, and sugar boxes, the
+default target is 10 mm below the top of the object. A fixed top offset matches
+the experimental setup more directly than a height fraction: a 72% target on
+a 190 mm bottle would still be about 53 mm below its top. The 10 mm offset is
+an explicit first-pass metadata assumption and can be overridden with
+`--grasp-target-top-offset-mm`; it should be replaced by measured or annotated
+object-specific grasp targets before reporting final paper numbers. Round
+objects such as the orange retain a fractional target because "10 mm below
+the top" does not describe the intended contact band as well.
+Open cups are an explicit exception: Metal Cup and Paper Cup use a rim-level
+target (`0 mm` below the top), matching the top-rim approach visible in the
+experiments. Their primitive remains a conservative solid cylinder, so this
+target choice avoids a false collision with the primitive's nonexistent closed
+top face. The 12 mm-thick Pen also uses a top-surface pre-grasp target: placing
+the target at its 6 mm geometric center forces the capsule hand into the table,
+whereas the top target preserves table clearance for the subsequent pinch.
+
+Capsule/object contact uses a `0.01 mm` numerical epsilon. Analytical contact
+can otherwise produce clearances around `-0.002 mm` from optimizer precision,
+which incorrectly marks intended fingertip tangency as penetration. The
+epsilon is several orders of magnitude below the hand-capsule radii and does
+not mask millimetre-scale collision.
+The current default point set is:
+
+```text
+P1: approach distance = 250 mm, lateral d = 0 mm, h = 0 mm
+P2: approach distance = 0 mm, lateral d = 0 mm, h = 250 mm
+level 1: approach distance = 250 mm, h = 100 mm,
+         lateral d = -150, -50, 50, 150 mm
+level 2: approach distance = 250 mm, h = 250 mm,
+         lateral d = -150, -50, 50, 150 mm
+```
+
+The important geometry is that P1, P2, and the grasp point define the vertical
+approach plane. The eight level points are not in that same plane. They are in
+the vertical plane through P1 that is perpendicular to the approach plane, so
+they keep the same approach distance as P1 and vary laterally by `d`. `h` is
+measured upward from the final grasp center. With `--approach-axis y-`, P1 is
+250 mm on the `y-` side of the object, the P1-to-grasp movement direction is
+world `y+`, and the level-point `d` axis is world `x`.
+
+These points are interpreted as strategy grasp-center waypoints relative to
+the grasp target, not raw hand-base positions or raw AABB-center offsets. For
+each strategy, the script converts the sampled grasp-center waypoint to the
+corresponding hand-base start pose. The hand yaw is set from the approach axis
+so the hand faces the object along the
+P1-to-grasp movement direction, then applies the paper-view hand yaw offset.
+The current default offset is `--paper-hand-yaw-offset-deg -90`, which rotates
+the hand 90 degrees right in the world xy plane. A start is counted as feasible
+only if the capsule path to that strategy's pre-grasp target avoids both:
+
+- the object's shape-aware collision primitive, and
+- the floor plane at `z = 0`.
+
+The script writes `final_grasp_center_error_mm_max` and
+`target_grasp_center_error_mm_max_by_strategy` to `assumptions.json`. These
+check that the analytical grasp center and each fixed pre-grasp center are
+aligned with the requested `grasp_target`, which may differ from the object
+AABB center. With the current paper-point default,
+`yaw_samples = 1`; yaw sweeps are reserved for later sensitivity analysis, not
+the first paper-facing figure.
+The default center policy is `antipodal`: the midpoint between the thumb tip
+and the centroid of the non-thumb fingertips. The legacy
+`contact-centroid` policy is still available for comparison with the viewer's
+historical `ClosureResult.midpoint` placement, but it can bias multi-finger
+objects toward the finger side.
+
+Two older samplers are still available for debugging:
+
+- `--start-sampler final-offset-grid`: each sampled hand-base start is
+  `final_grasp_base(yaw) + [dx, dy, dz]` from the configured offset grid.
+- `--start-sampler approach-plane-grid`: samples a rectangular side-approach
+  grid. This is useful for coarse exploration but no longer the default paper
+  debug geometry.
+- `--start-sampler object-top-grid`: samples a horizontal grid above the object.
+  This is useful for geometric debugging, but it is less representative of the
+  physical approach setup.
+
+The output includes:
+
+- `summary.csv`: aggregate feasible rate per strategy.
+- `volume.csv`: one row per strategy, paper point, and yaw angle.
+  The paper points are stored as grasp-center references in
+  `start_center_*`/`target_center_*`; the actual wrist/base control poses are
+  stored separately in `start_*`/`target_*`.
+- `strategy_feasible_rate.png`: aggregate bar plot.
+- `strategy_paper_approach_points_validity.png`: for paper-point runs, each cell
+  shows the valid fraction at that lateral `d/h` point.
+- `strategy_approach_plane_validity.png`: for rectangular approach-plane debug
+  runs, each cell shows the valid fraction at that lateral/height grid point.
+- `strategy_top_grid_yaw_fraction.png`: for top-grid debugging runs, each cell
+  shows the fraction of yaw samples that were valid at that grid point.
+
+The current 10-point paper-style run is not a final paper number. It is a
+sanity check for whether the strategy-specific collision logic produces
+different access rates before scaling to denser grids or additional objects.
+The capsule path check is not free: a 3 x 3 x 36 yaw run already takes a few
+minutes, so dense sweeps should be staged, cached, or optimized rather than
+blindly expanded to full 6D sampling.
+
+For the current paper object set, use:
+
+```bash
+python tools/run_strategy_pregrasp_paper_batch.py \
+  --out artifacts/strategy_pregrasp_rate_paper_objects_top_10mm/
+```
+
+This runs the same 10 paper-style approach points for the 15 grasping objects
+shown on the project website: big screwdriver, bottle, can, charger, metal cup,
+mustard, orange, pen, small screwdriver, sugar box, egg, nut, paper cup,
+raspberry, and strawberry. The first-pass `paper_*` entries use estimated
+tabletop primitives in `rh56_controller/paper_v2_objects.py`: Bottle, Can,
+Metal Cup, and Paper Cup use upright cylinders; Orange uses a sphere; box-like
+and unmeasured irregular objects retain boxes. These are not measured meshes,
+so the rates remain exploratory until object dimensions and grasp alignment
+are validated.
+
+For grasp-target sensitivity, the rate script also supports:
+
+```bash
+python tools/run_strategy_pregrasp_rate.py \
+  --object paper_bottle \
+  --mode object-default \
+  --start-sampler paper-approach-points \
+  --start-reference grasp-center \
+  --approach-axis y- \
+  --grasp-target-top-offset-mm 10 \
+  --grasp-target-approach-offset-mm 25 \
+  --out artifacts/strategy_pregrasp_rate_bottle_target_sensitivity/
+```
+
+The fixed-top-offset, shape-aware batch is written to
+`artifacts/strategy_pregrasp_rate_paper_objects_top_10mm/`. Moving the target
+to 10 mm below the top changes several large-object results substantially: can,
+mustard, and sugar box now contain feasible approach points, confirming that
+the previous proportional targets were too low. Shape-aware collision removes
+the artificial corners of round-object AABBs without changing the hand
+capsules or path definition. This experiment evaluates only the fixed
+pre-grasp hand shape along the start-to-target approach path. The target is
+the endpoint of path planning, not a simulated closed hand. The experiment
+does not simulate or score finger closure after arrival.
+
+For visual verification, render the exact sampled paths with:
+
+```bash
+python tools/render_strategy_grid_paths.py \
+  --volume artifacts/strategy_pregrasp_rate_40mm/volume.csv \
+  --strategy all \
+  --out artifacts/strategy_pregrasp_grid_paths_40mm/
+```
+
+The GIFs animate the hand mesh with wrist/base position control, but the
+visible markers and path lines are the grasp-center points. This distinction is
+important: the paper-style points describe where the hand's grasp point should
+move, not where the wrist origin should be placed.
+
+To render all 15 objects, three strategies, and 10 start points into one
+streamed MP4, use:
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv312 uv run --extra video \
+  python tools/render_strategy_paper_trials.py
+```
+
+This writes `artifacts/current/all_trials/all_trials.mp4` together with
+`trial_index.csv`, which maps every object/strategy/point trial to an exact
+timestamp. The video keeps each pre-grasp hand shape fixed during the linear
+approach. It does not render or evaluate finger closure after arrival.
+
+Generate the paper-object overview figures with:
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv312 uv run \
+  python tools/plot_strategy_pregrasp_overview.py
+```
+
+The output under `artifacts/current/visualizations/` separates three questions:
+
+- `object_strategy_feasible_rate.png`: which pre-grasp strategies can approach
+  each object from the 10 sampled starts.
+- `start_point_feasible_rate.png`: which P1-P10 start locations are generally
+  accessible across all, YCB/YCB-like, and delicate objects.
+- `failure_modes.png`: whether failed paths are blocked by the object or floor,
+  during motion or at the target pose.
+
+### Sweep Scaling / Optimization Plan
+
+For larger sweeps, use a staged plan:
+
+1. Start with the 10 paper-style approach points and `yaw_samples = 1`.
+2. Increase position density before adding yaw. For example, use 50 mm spacing
+   over the same plane to identify interesting boundary regions.
+3. Add yaw only as a sensitivity sweep after the position grid is stable.
+4. Use coarse-to-fine refinement: run a sparse grid, then densify near cells
+   whose neighboring validity differs.
+5. Add an early-exit viability path for dense sweeps. The current function keeps
+   detailed clearance diagnostics, which is useful for debugging but slower
+   than a boolean "first collision fails" check.
+6. Parallelize over strategy/start/yaw samples once the sampler is finalized.
+7. Cache all strategy-specific capsule proxies and rotation/grasp-center terms;
+   those should not be recomputed for every grid point.
+
 The current verifier has already exposed an important modeling issue: if the
 object is placed only by the fingertip analytical midpoint, the final palm
 envelope can overlap the object AABB. That is exactly the kind of failure mode
@@ -218,7 +507,8 @@ the no-go volume should reveal, but it also means the dense sweep should report
 which proxy is being used:
 
 - point hand + inflated object AABB: fastest, weakest physical check.
-- capsule hand + object AABB: useful next step for hand-volume feasibility.
+- capsule hand + object AABB: current paper-facing first pass for hand-volume
+  feasibility.
 - full MuJoCo mesh collision: best for sparse validation, probably too heavy
   and solver-dependent for the dense primary heatmap.
 
@@ -242,7 +532,7 @@ analytical grasp midpoint lands at the object center:
 
 ```text
 R_final = Rz(yaw) * R_grasp_tilt
-p_base_final = -R_final * grasp_midpoint
+p_base_final = object_center - R_final * grasp_midpoint
 ```
 
 This means each yaw sample represents a different hand orientation around the
@@ -253,14 +543,14 @@ same object, while preserving the analytical closure geometry.
 The script samples a regular 3D grid of candidate hand-base start positions:
 
 ```text
-x: -180 to 180 mm
-y: -180 to 180 mm
-z: -120 to 180 mm
-step: 30 mm
+x: -240 to 240 mm
+y: -240 to 240 mm
+z: 40 to 280 mm
+step: 60 mm
 ```
 
 At each voxel, it evaluates `yaw_samples` orientations around the object. The
-default is 16 yaw samples.
+current capsule default is 8 yaw samples.
 
 ### Linear-Approach Test
 
@@ -269,12 +559,18 @@ For each voxel and yaw sample:
 1. Compute the straight-line path from sampled start position to final analytical
    grasp base position.
 2. Reject the pose if the path is longer than `max_linear_move_mm`.
-3. Sample points along the path.
-4. Inflate the object AABB by `hand_clearance_mm`.
-5. Reject the pose if any intermediate path point enters this inflated object
-   proxy.
-6. Ignore the last `final_contact_ignore_mm` near the final pose, because the
-   hand is expected to approach/contact the object at the end of the motion.
+3. Put the hand in the selected path shape. The current default is
+   `--path-hand-shape open`, which keeps fingers open and sets thumb yaw to the
+   maximum qpos, matching the collision-avoiding pre-grasp shape we want to use.
+4. Build a capsule proxy from MuJoCo FK body origins, fingertip sites, and a
+   conservative palm envelope.
+5. Sweep every capsule along the sampled straight-line path.
+6. Reject the yaw sample if any active capsule intersects the object AABB before
+   the final allowed contact region.
+
+The older `--collision-model point-inflated` path is still available as a fast
+debug baseline, but it is too weak for the paper-facing no-go volume because it
+does not model the hand's occupied volume.
 
 The voxel score is:
 
@@ -299,13 +595,10 @@ The script writes:
 ### What The Current No-Go Volume Shows
 
 The current result is a coarse characterization of where simple analytical
-linear approach is plausible. For example, in the current default run:
-
-```text
-ycb_cracker_box: no-go voxel fraction ≈ 0.169
-ycb_sugar_box: no-go voxel fraction ≈ 0.073
-ycb_potted_meat_can: no-go voxel fraction ≈ 0.083
-```
+linear approach is plausible under the capsule hand proxy. Each object gets a
+mean viability score and a no-go voxel fraction in `summary.csv`; each sampled
+voxel keeps the path blocker, clearance, and active collision count in
+`volume.csv`.
 
 These numbers should not yet be treated as final physical success rates. They
 are a structured way to expose the capability boundary of the analytical method.
@@ -332,11 +625,11 @@ simple linear approach, and where does it need object-aware path planning?
 
 ### Natural Next Upgrade
 
-The next version should replace the inflated-AABB proxy with more realistic
-checks:
+The next version should validate and refine the capsule/AABB proxy with more
+realistic checks:
 
 1. Use measured YCB mesh extents or actual meshes.
-2. Use MuJoCo collision checking along the path.
+2. Use sparse MuJoCo mesh collision checks as validation points along the path.
 3. Sample more than yaw, such as wrist pitch/roll or approach direction.
 4. Add arm IK feasibility if the paper wants robot-level reachability.
 5. Compare analytical no-go volume against a learned policy or an optimization
