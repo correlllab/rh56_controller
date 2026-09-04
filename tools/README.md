@@ -31,6 +31,10 @@ The scripts here are grouped by how they should be used.
   clearly qualified base-frame height estimate under `artifacts/`. Pass an
   independent ruler measurement with `--measured-desk-z-mm` to report the
   absolute height discrepancy against a configurable threshold.
+- `analyze_ur5_camera_colored_target.py`: offline independent-height check for
+  a colored target in a saved aligned RGB-D frame. It rejects farther depth-hole
+  background, reports the target top center in the UR base frame, writes a
+  `summary.csv`, and can optionally quality-gate an independently measured XY.
 - `replay_ur5_camera_calibration.py`: dry-run by default. With the explicit
   `--execute-motion` flag and exact interactive confirmation, it replays a
   saved TCP calibration path using low-speed `moveL`, captures a new dataset,
