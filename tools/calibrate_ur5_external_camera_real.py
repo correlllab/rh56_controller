@@ -1038,6 +1038,19 @@ def calibrate_dataset(args: argparse.Namespace, output_dir: Path) -> dict[str, o
         camera_matrix = intrinsic.camera_matrix
         distortion = intrinsic.distortion
         intrinsic_rms_px = intrinsic.rms_reprojection_error_px
+    elif args.intrinsics_source == "baseline":
+        baseline_path = getattr(args, "baseline_calibration", None)
+        if baseline_path is None:
+            raise ValueError(
+                "intrinsics_source=baseline requires baseline_calibration"
+            )
+        baseline = yaml.safe_load(Path(baseline_path).read_text(encoding="utf-8"))
+        selected = baseline["selected_intrinsics"]
+        camera_matrix = np.asarray(selected["camera_matrix"], dtype=float)
+        distortion = np.asarray(selected["distortion_coefficients"], dtype=float)
+        intrinsic_rms_px = float(
+            baseline.get("metrics", {}).get("intrinsic_rms_px", float("nan"))
+        )
     else:
         if "inverse_brown_conrady" in factory_model and not np.allclose(
             factory_distortion, 0.0
@@ -1181,6 +1194,11 @@ def calibrate_dataset(args: argparse.Namespace, output_dir: Path) -> dict[str, o
             "source": args.intrinsics_source,
             "camera_matrix": camera_matrix.tolist(),
             "distortion_coefficients": distortion.tolist(),
+            "baseline_calibration": (
+                str(args.baseline_calibration)
+                if args.intrinsics_source == "baseline"
+                else None
+            ),
         },
         "chessboard": chessboard,
         "transforms": {

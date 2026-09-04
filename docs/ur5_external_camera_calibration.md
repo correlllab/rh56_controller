@@ -271,8 +271,20 @@ error aborts the run; Ctrl-C requests `stopL`.
 
 After all poses, the tool solves a fresh calibration and compares
 `T_base_camera` with the baseline `camera_calibration.yaml` beside the reference
-manifest. Outputs include `capture_manifest.yaml`, `summary.csv`,
+manifest. By default it freezes the baseline camera intrinsics so a fresh
+intrinsic fit cannot appear as false extrinsic drift. Outputs include
+`capture_manifest.yaml`, `summary.csv`,
 `replay_summary.csv`, `drift_summary.csv`, `camera_drift.yaml`, raw captures,
 and a held-out overlay. The defaults flag translation drift above 5 mm or
 rotation drift above 1 degree. A failed drift check blocks use of the old
 calibration but does not by itself authorize motion with the newly fitted one.
+
+To recompute an already captured replay with the baseline intrinsics, without
+opening RTDE or the camera and without changing `replay_summary.csv`, run:
+
+```bash
+.venv312/bin/python tools/replay_ur5_camera_calibration.py \
+  --reference artifacts/ur5_external_camera_calibration_real/first_lab_dataset/capture_manifest.yaml \
+  --out artifacts/ur5_external_camera_calibration_replay/observed_run \
+  --recompute-existing
+```

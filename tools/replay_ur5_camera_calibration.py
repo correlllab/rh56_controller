@@ -87,7 +87,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--settle-frames", type=int, default=5)
     parser.add_argument("--laser-power", type=float, default=None)
     parser.add_argument("--no-save-depth", action="store_true")
-    parser.add_argument("--intrinsics-source", choices=("factory", "estimate"), default="estimate")
+    parser.add_argument(
+        "--intrinsics-source",
+        choices=("baseline", "factory", "estimate"),
+        default="baseline",
+        help=(
+            "Use the baseline calibration's fixed intrinsics by default so daily "
+            "extrinsic drift is not coupled to a fresh intrinsic estimate."
+        ),
+    )
     parser.add_argument("--holdout-every", type=int, default=5)
     parser.add_argument("--max-holdout-translation-mm", type=float, default=5.0)
     parser.add_argument("--max-holdout-rotation-deg", type=float, default=2.0)
@@ -118,12 +126,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "important default safety gate and requires the normal motion confirmation."
         ),
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--execute-motion",
         action="store_true",
         help=(
             "Connect RTDE control and execute motion after interactive confirmation. "
             "Without this flag the tool only writes an offline replay plan."
+        ),
+    )
+    mode.add_argument(
+        "--recompute-existing",
+        action="store_true",
+        help=(
+            "Recompute calibration and drift from the capture_manifest.yaml already "
+            "under --out. This is offline and sends no motion command."
         ),
     )
     args = parser.parse_args(argv)
@@ -161,6 +178,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--holdout-every must be at least 2")
     if args.laser_power is not None and args.laser_power < 0.0:
         raise ValueError("--laser-power cannot be negative")
+    if args.recompute_existing and args.out is None:
+        raise ValueError("--recompute-existing requires --out")
 
 
 def _default_output_dir() -> Path:
@@ -252,6 +271,103 @@ def calibration_drift(
         np.linalg.norm(observed[:3, 3] - baseline[:3, 3])
     )
     return translation_mm, rotation_error_deg(baseline, observed)
+
+
+def write_drift_report(
+    args: argparse.Namespace,
+    output_dir: Path,
+    baseline_path: Path,
+    calibration_summary: dict[str, object],
+    motion_command_count: int,
+) -> tuple[bool, dict[str, object]]:
+    """Compare a completed calibration with its baseline and write reports."""
+
+    baseline = yaml.safe_load(baseline_path.read_text(encoding="utf-8"))
+    observed_path = output_dir / "camera_calibration.yaml"
+    observed = yaml.safe_load(observed_path.read_text(encoding="utf-8"))
+    drift_translation_mm, drift_rotation_deg = calibration_drift(
+        np.asarray(
+            baseline["transforms"]["base_from_camera"]["matrix"], dtype=float
+        ),
+        np.asarray(
+            observed["transforms"]["base_from_camera"]["matrix"], dtype=float
+        ),
+    )
+    drift_pass = bool(
+        drift_translation_mm <= args.max_camera_drift_mm
+        and drift_rotation_deg <= args.max_camera_drift_deg
+    )
+    drift_row = {
+        "camera_translation_drift_mm": drift_translation_mm,
+        "camera_rotation_drift_deg": drift_rotation_deg,
+        "max_camera_drift_mm": args.max_camera_drift_mm,
+        "max_camera_drift_deg": args.max_camera_drift_deg,
+        "camera_drift_quality_pass": int(drift_pass),
+        "hardware_motion_commands_sent": motion_command_count,
+    }
+    _write_one_row_csv(output_dir / "drift_summary.csv", drift_row)
+    combined_summary = {**calibration_summary, **drift_row}
+    combined_summary["overall_quality_pass"] = int(
+        bool(calibration_summary["quality_pass"]) and drift_pass
+    )
+    _write_one_row_csv(output_dir / "summary.csv", combined_summary)
+    (output_dir / "camera_drift.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "rh56_ur5_camera_drift_check/v1",
+                "baseline_calibration": str(baseline_path),
+                "observed_calibration": str(observed_path),
+                "translation_drift_mm": drift_translation_mm,
+                "rotation_drift_deg": drift_rotation_deg,
+                "quality_thresholds": {
+                    "max_translation_drift_mm": args.max_camera_drift_mm,
+                    "max_rotation_drift_deg": args.max_camera_drift_deg,
+                },
+                "quality_pass": drift_pass,
+                "hardware_motion_commands_sent": motion_command_count,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    print(
+        f"Camera drift: {drift_translation_mm:.3f} mm, "
+        f"{drift_rotation_deg:.3f} deg; pass={drift_pass}"
+    )
+    print(f"Result: {output_dir / 'camera_drift.yaml'}")
+    return drift_pass, combined_summary
+
+
+def recompute_existing_dataset(
+    args: argparse.Namespace,
+    output_dir: Path,
+    baseline_path: Path,
+) -> int:
+    """Recompute reports from saved captures without opening RTDE or the camera."""
+
+    manifest_path = output_dir / "capture_manifest.yaml"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(manifest_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "rh56_ur5_external_camera_capture/v1":
+        raise ValueError(f"unsupported capture manifest schema in {manifest_path}")
+    safety = manifest.get("safety", {})
+    motion_command_count = int(
+        safety.get(
+            "motion_command_count",
+            int(bool(safety.get("hardware_motion_commands_sent", False))),
+        )
+    )
+    calibration_summary = calibrate_dataset(args, output_dir)
+    _drift_pass, combined_summary = write_drift_report(
+        args,
+        output_dir,
+        baseline_path,
+        calibration_summary,
+        motion_command_count,
+    )
+    print("Offline recompute complete; RTDE and camera were not opened; motion commands sent: 0")
+    return 0 if combined_summary["overall_quality_pass"] else 3
 
 
 def _write_one_row_csv(path: Path, row: dict[str, object]) -> None:
@@ -643,53 +759,12 @@ def execute_replay(
         output_dir / "printable_chessboard.svg", pattern_size, square_size_mm
     )
     calibration_summary = calibrate_dataset(args, output_dir)
-    baseline = yaml.safe_load(baseline_path.read_text(encoding="utf-8"))
-    observed_path = output_dir / "camera_calibration.yaml"
-    observed = yaml.safe_load(observed_path.read_text(encoding="utf-8"))
-    drift_translation_mm, drift_rotation_deg = calibration_drift(
-        np.asarray(
-            baseline["transforms"]["base_from_camera"]["matrix"], dtype=float
-        ),
-        np.asarray(
-            observed["transforms"]["base_from_camera"]["matrix"], dtype=float
-        ),
-    )
-    drift_pass = bool(
-        drift_translation_mm <= args.max_camera_drift_mm
-        and drift_rotation_deg <= args.max_camera_drift_deg
-    )
-    drift_row = {
-        "camera_translation_drift_mm": drift_translation_mm,
-        "camera_rotation_drift_deg": drift_rotation_deg,
-        "max_camera_drift_mm": args.max_camera_drift_mm,
-        "max_camera_drift_deg": args.max_camera_drift_deg,
-        "camera_drift_quality_pass": int(drift_pass),
-        "hardware_motion_commands_sent": motion_command_count,
-    }
-    _write_one_row_csv(output_dir / "drift_summary.csv", drift_row)
-    combined_summary = {**calibration_summary, **drift_row}
-    combined_summary["overall_quality_pass"] = int(
-        bool(calibration_summary["quality_pass"]) and drift_pass
-    )
-    _write_one_row_csv(output_dir / "summary.csv", combined_summary)
-    (output_dir / "camera_drift.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "schema": "rh56_ur5_camera_drift_check/v1",
-                "baseline_calibration": str(baseline_path),
-                "observed_calibration": str(observed_path),
-                "translation_drift_mm": drift_translation_mm,
-                "rotation_drift_deg": drift_rotation_deg,
-                "quality_thresholds": {
-                    "max_translation_drift_mm": args.max_camera_drift_mm,
-                    "max_rotation_drift_deg": args.max_camera_drift_deg,
-                },
-                "quality_pass": drift_pass,
-                "hardware_motion_commands_sent": motion_command_count,
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+    _drift_pass, combined_summary = write_drift_report(
+        args,
+        output_dir,
+        baseline_path,
+        calibration_summary,
+        motion_command_count,
     )
     replay_row = {
         **metrics,
@@ -702,11 +777,6 @@ def execute_replay(
         "hardware_motion_commands_sent": motion_command_count,
     }
     _write_one_row_csv(output_dir / "replay_summary.csv", replay_row)
-    print(
-        f"Camera drift: {drift_translation_mm:.3f} mm, "
-        f"{drift_rotation_deg:.3f} deg; pass={drift_pass}"
-    )
-    print(f"Result: {output_dir / 'camera_drift.yaml'}")
     return 0 if combined_summary["overall_quality_pass"] else 3
 
 
@@ -722,10 +792,13 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(reference_path)
     if not baseline_path.is_file():
         raise FileNotFoundError(baseline_path)
+    args.baseline_calibration = baseline_path
+    output_dir = (args.out if args.out is not None else _default_output_dir()).resolve()
+    if args.recompute_existing:
+        return recompute_existing_dataset(args, output_dir, baseline_path)
     reference, poses = load_replay_poses(reference_path, args.pose_indices)
     metrics = trajectory_metrics(poses)
     failures = validate_trajectory(metrics, args)
-    output_dir = (args.out if args.out is not None else _default_output_dir()).resolve()
     _write_plan(
         output_dir,
         args,

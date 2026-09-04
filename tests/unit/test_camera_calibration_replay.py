@@ -50,12 +50,46 @@ def test_default_cli_is_dry_run_and_enforces_low_speed(tmp_path) -> None:
     args = parse_args(["--reference", str(reference)])
 
     assert not args.execute_motion
+    assert not args.recompute_existing
     assert args.speed_m_s == 0.02
     assert args.accel_m_s2 == 0.05
+    assert args.intrinsics_source == "baseline"
     assert args.expected_tcp_offset == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="speed"):
         parse_args(["--reference", str(reference), "--speed-m-s", "0.06"])
+
+
+def test_recompute_requires_output_and_is_mutually_exclusive(tmp_path) -> None:
+    reference = tmp_path / "capture_manifest.yaml"
+    _write_manifest(reference)
+
+    with pytest.raises(ValueError, match="requires --out"):
+        parse_args(["--reference", str(reference), "--recompute-existing"])
+
+    args = parse_args(
+        [
+            "--reference",
+            str(reference),
+            "--out",
+            str(tmp_path / "observed"),
+            "--recompute-existing",
+        ]
+    )
+    assert args.recompute_existing
+    assert not args.execute_motion
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--reference",
+                str(reference),
+                "--out",
+                str(tmp_path / "observed"),
+                "--execute-motion",
+                "--recompute-existing",
+            ]
+        )
 
 
 def test_loads_selected_tcp_poses_and_rejects_too_few(tmp_path) -> None:
