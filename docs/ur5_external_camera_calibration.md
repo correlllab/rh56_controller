@@ -232,3 +232,47 @@ residuals, and an explicit quality result. `summary.csv`,
 `calibration_views.csv`, and `verification_holdout.png` provide the
 paper-facing numeric and visual checks. A saved dataset can be recomputed
 without hardware using `--calibrate-only --out <dataset>`.
+
+## Low-speed TCP replay and camera-drift check
+
+Preview the complete recorded TCP sequence offline before enabling motion:
+
+```bash
+.venv312/bin/python tools/replay_ur5_camera_calibration.py \
+  --reference artifacts/ur5_external_camera_calibration_real/first_lab_dataset/capture_manifest.yaml \
+  --out artifacts/ur5_external_camera_calibration_replay/dry_run
+```
+
+Dry-run is the default and opens neither the camera nor RTDE. It writes
+`replay_plan.yaml` and `summary.csv`, including the maximum recorded segment,
+TCP height/radius bounds, low motion settings, and all assumptions. Inspect
+every straight TCP segment against the current real scene. A manually guided
+path is not evidence that a straight `moveL` segment is collision-free.
+
+For an observed run, attach the board rigidly, restore the same active TCP,
+clear the workspace, manually place the arm near the first saved pose, and use:
+
+```bash
+.venv312/bin/python tools/replay_ur5_camera_calibration.py \
+  --reference artifacts/ur5_external_camera_calibration_real/first_lab_dataset/capture_manifest.yaml \
+  --out artifacts/ur5_external_camera_calibration_replay/observed_run \
+  --speed-m-s 0.02 \
+  --accel-m-s2 0.05 \
+  --execute-motion
+```
+
+The program then requires the exact interactive phrase printed in the terminal.
+It rejects speeds above 0.05 m/s and accelerations above 0.10 m/s squared,
+checks that the active TCP offset is the expected all-zero TCP by default, and
+aborts if the arm is not near the first pose. The explicit
+`--skip-start-proximity-check` escape hatch should only be used after visually
+checking the initial straight segment. Protective stop or excessive target
+error aborts the run; Ctrl-C requests `stopL`.
+
+After all poses, the tool solves a fresh calibration and compares
+`T_base_camera` with the baseline `camera_calibration.yaml` beside the reference
+manifest. Outputs include `capture_manifest.yaml`, `summary.csv`,
+`replay_summary.csv`, `drift_summary.csv`, `camera_drift.yaml`, raw captures,
+and a held-out overlay. The defaults flag translation drift above 5 mm or
+rotation drift above 1 degree. A failed drift check blocks use of the old
+calibration but does not by itself authorize motion with the newly fitted one.

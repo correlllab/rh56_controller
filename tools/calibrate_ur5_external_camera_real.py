@@ -1004,6 +1004,9 @@ def calibrate_dataset(args: argparse.Namespace, output_dir: Path) -> dict[str, o
     import cv2
 
     manifest = _load_manifest(output_dir)
+    hardware_motion_commands_sent = bool(
+        manifest.get("safety", {}).get("hardware_motion_commands_sent", False)
+    )
     entries = manifest.get("captures", [])
     if len(entries) < 5:
         raise RuntimeError(f"only {len(entries)} accepted captures; at least five are required")
@@ -1134,7 +1137,7 @@ def calibrate_dataset(args: argparse.Namespace, output_dir: Path) -> dict[str, o
         "max_rotation_span_deg": diversity["max_rotation_span_deg"],
         "rotation_axis_rank_over_2deg": diversity["rotation_axis_rank_over_2deg"],
         "quality_pass": int(quality_pass),
-        "hardware_motion_commands_sent": 0,
+        "hardware_motion_commands_sent": int(hardware_motion_commands_sent),
     }
     _write_csv(output_dir / "summary.csv", [summary])
 
@@ -1198,7 +1201,7 @@ def calibrate_dataset(args: argparse.Namespace, output_dir: Path) -> dict[str, o
         },
         "quality_pass": quality_pass,
         "safety": {
-            "hardware_motion_commands_sent": False,
+            "hardware_motion_commands_sent": hardware_motion_commands_sent,
             "calibration_does_not_authorize_robot_motion": True,
         },
         "assumptions": manifest["assumptions"],

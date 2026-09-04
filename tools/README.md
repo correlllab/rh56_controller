@@ -31,6 +31,13 @@ The scripts here are grouped by how they should be used.
   clearly qualified base-frame height estimate under `artifacts/`. Pass an
   independent ruler measurement with `--measured-desk-z-mm` to report the
   absolute height discrepancy against a configurable threshold.
+- `replay_ur5_camera_calibration.py`: dry-run by default. With the explicit
+  `--execute-motion` flag and exact interactive confirmation, it replays a
+  saved TCP calibration path using low-speed `moveL`, captures a new dataset,
+  recalibrates, and reports camera translation/rotation drift. It checks the
+  active TCP offset, start proximity, scalar workspace bounds, protective-stop
+  state, target error, and board detection; the operator must still clear and
+  watch every recorded straight segment.
 
 ## Grasp safety preflight
 
