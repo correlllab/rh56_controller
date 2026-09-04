@@ -110,6 +110,11 @@ real-ur5 = [
     "magpie_control",
     "spatialmath-python",
 ]
+real-ur5-vision = [
+    "opencv-python-headless>=4.10,<5",
+    "pyrealsense2>=2.56",
+    "ur-rtde>=1.6",
+]
 real-ur5-ros = [
     "pyserial",
     "mink",

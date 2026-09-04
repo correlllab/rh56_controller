@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 usage() {
   cat <<'EOF'
 Usage:
-  tools/setup_uv_env.sh [--profile NAME] [--python VERSION] [--env DIR] [--telemetry] [--list]
+  tools/setup_uv_env.sh [--profile NAME] [--python VERSION] [--env DIR] [--tests] [--telemetry] [--list]
 
 Profiles:
   sim-core           Minimal MuJoCo + math stack
@@ -18,6 +18,7 @@ Profiles:
   sim-h12-ur5        H1-2 and UR5 sim workflows
   real-hand          Real RH56 hand serial workflows
   real-ur5           Real RH56 + UR5, no ROS
+  real-ur5-vision    Read-only D435 + UR5 external-camera calibration
   real-ur5-ros       Real RH56 + UR5 with ROS2 bridge
   real-h12-ros       Real H1-2 arm with ROS2, no RH56 serial hand
   real-h12-hand-ros  Real H1-2 + real RH56 hand with ROS2
@@ -29,7 +30,7 @@ Compatibility aliases:
 
 Examples:
   tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312
-  tools/setup_uv_env.sh --profile real-ur5-ros --python 3.10 --env .venv310 --telemetry
+  tools/setup_uv_env.sh --profile real-ur5-vision --python 3.12 --env .venv312 --tests
 
 See docs/INSTALL_PROFILES.md for profile boundaries, required submodules,
 and first-run commands.
@@ -47,6 +48,7 @@ Supported profiles:
   sim-h12-ur5
   real-hand
   real-ur5
+  real-ur5-vision
   real-ur5-ros
   real-h12-ros
   real-h12-hand-ros
@@ -102,6 +104,7 @@ PROFILE="sim-core"
 PYTHON_VERSION="3.12"
 ENV_DIR=""
 ADD_TELEMETRY=0
+ADD_TESTS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,6 +122,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --telemetry)
       ADD_TELEMETRY=1
+      shift
+      ;;
+    --tests)
+      ADD_TESTS=1
       shift
       ;;
     --list)
@@ -189,6 +196,9 @@ case "$PROFILE" in
     add_submodule "magpie_control"
     USES_MAGPIE=1
     ;;
+  real-ur5-vision)
+    add_extra "real-ur5-vision"
+    ;;
   real-robot)
     add_extra "real-robot"
     add_submodule "h1_mujoco"
@@ -243,6 +253,9 @@ esac
 
 if [[ $ADD_TELEMETRY -eq 1 ]]; then
   add_extra "telemetry"
+fi
+if [[ $ADD_TESTS -eq 1 ]]; then
+  add_extra "test"
 fi
 
 warn_missing_submodules

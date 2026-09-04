@@ -25,6 +25,7 @@ you intentionally want the maintainer/full checkout.
 | Floating RH56 hand planner with Mink comparison | `sim-hand` | 3.12 | `sim-hand` | `h1_mujoco`, `mink` | `uv run python -m rh56_controller.grasp_viz` |
 | UR5 + RH56 MuJoCo viewer | `sim-ur5` | 3.12 | `sim-ur5` | `h1_mujoco`, `mink` | `uv run python -m rh56_controller.grasp_viz --robot` |
 | UR5 + RH56 fixed-camera calibration | `sim-ur5-vision` | 3.12 | `sim-ur5-vision` | `h1_mujoco` | `python tools/calibrate_ur5_external_camera_sim.py` |
+| Real D435 + UR5 fixed-camera calibration | `real-ur5-vision` | 3.12 | `real-ur5-vision` | none | `python tools/calibrate_ur5_external_camera_real.py --check-only` |
 | H1-2 + RH56 MuJoCo viewer | `sim-h12` | 3.12 | `sim-h12` | `h1_mujoco` | `uv run python -m rh56_controller.grasp_viz --h12` |
 | H1-2 and UR5 sim workflows | `sim-h12-ur5` | 3.12 | `sim-h12-ur5` | `h1_mujoco`, `mink`, `magpie_control` | `uv run python -m rh56_controller.grasp_viz --h12` |
 | Real RH56 hand only | `real-hand` | 3.12 | `real-hand` | `h1_mujoco` for visualizers | `uv run python -m rh56_controller.hand_mirror --port /dev/ttyUSB0` |
@@ -49,6 +50,17 @@ git submodule update --init --recursive --depth 1 h1_mujoco mink
 tools/setup_uv_env.sh --profile sim-hand --python 3.12 --env .venv312
 source .venv312/bin/activate
 python tools/check_profile_imports.py --profile sim-hand
+```
+
+Add `--tests` when the environment should also contain `pytest`. For the
+read-only real-camera calibration workflow:
+
+```bash
+tools/setup_uv_env.sh \
+  --profile real-ur5-vision \
+  --python 3.12 \
+  --env .venv312 \
+  --tests
 ```
 
 ROS2 Humble workflows should use Python 3.10 and source ROS before running ROS

@@ -2744,6 +2744,11 @@ real-ur5-ros = [
     { name = "pyserial" },
     { name = "spatialmath-python" },
 ]
+real-ur5-vision = [
+    { name = "opencv-python-headless" },
+    { name = "pyrealsense2" },
+    { name = "ur-rtde" },
+]
 sim-h12 = [
     { name = "meshcat" },
     { name = "meshcat-shapes" },
@@ -2824,6 +2829,7 @@ requires-dist = [
     { name = "mink", marker = "extra == 'sim-ur5'", directory = "mink" },
     { name = "mujoco", specifier = ">=3.3.6" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "opencv-python-headless", marker = "extra == 'real-ur5-vision'", specifier = ">=4.10,<5" },
     { name = "opencv-python-headless", marker = "extra == 'sim-ur5-vision'", specifier = ">=4.10,<5" },
     { name = "opencv-python-headless", marker = "extra == 'vision'", specifier = ">=4.10,<5" },
     { name = "pillow", marker = "extra == 'video'", specifier = ">=10" },
@@ -2841,6 +2847,7 @@ requires-dist = [
     { name = "pin-pink", marker = "extra == 'real-h12-ros'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'sim-h12'", specifier = ">=4.1.0" },
     { name = "pin-pink", marker = "extra == 'sim-h12-ur5'", specifier = ">=4.1.0" },
+    { name = "pyrealsense2", marker = "extra == 'real-ur5-vision'", specifier = ">=2.56" },
     { name = "pyserial", marker = "extra == 'dev-full'" },
     { name = "pyserial", marker = "extra == 'full'" },
     { name = "pyserial", marker = "extra == 'hand'" },
@@ -2869,8 +2876,9 @@ requires-dist = [
     { name = "spatialmath-python", marker = "extra == 'real-ur5-ros'" },
     { name = "spatialmath-python", marker = "extra == 'sim-h12-ur5'" },
     { name = "spatialmath-python", marker = "extra == 'ur5'" },
+    { name = "ur-rtde", marker = "extra == 'real-ur5-vision'", specifier = ">=1.6" },
 ]
-provides-extras = ["test", "video", "vision", "hand", "real-hand", "ur5", "mink", "h12", "telemetry", "ros", "sim-hand", "sim-ur5", "sim-ur5-vision", "sim-h12", "sim-h12-ur5", "real-robot", "real-ur5", "real-ur5-ros", "real-h12-ros", "real-h12-hand-ros", "full", "dev-full"]
+provides-extras = ["test", "video", "vision", "hand", "real-hand", "ur5", "mink", "h12", "telemetry", "ros", "sim-hand", "sim-ur5", "sim-ur5-vision", "sim-h12", "sim-h12-ur5", "real-robot", "real-ur5", "real-ur5-vision", "real-ur5-ros", "real-h12-ros", "real-h12-hand-ros", "full", "dev-full"]
 
 [[package]]
 name = "rpds-py"

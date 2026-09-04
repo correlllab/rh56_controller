@@ -47,6 +47,22 @@ class HandEyeCalibration:
     residual_rotation_rms_deg: float
 
 
+@dataclass(frozen=True)
+class CalibrationResiduals:
+    """Per-view consistency errors for a solved eye-to-hand calibration."""
+
+    translation_m: np.ndarray
+    rotation_deg: np.ndarray
+
+    @property
+    def translation_rms_m(self) -> float:
+        return float(np.sqrt(np.mean(np.square(self.translation_m))))
+
+    @property
+    def rotation_rms_deg(self) -> float:
+        return float(np.sqrt(np.mean(np.square(self.rotation_deg))))
+
+
 def _require_cv2():
     try:
         import cv2
@@ -76,6 +92,24 @@ def make_transform(rotation: np.ndarray, translation: Sequence[float]) -> np.nda
     transform[:3, :3] = rotation_array
     transform[:3, 3] = translation_array
     return transform
+
+
+def pose_vector_xyz_rotvec_to_transform(pose: Sequence[float]) -> np.ndarray:
+    """Convert UR's ``[x, y, z, rx, ry, rz]`` pose vector to a transform.
+
+    The translation is in metres and the last three values are an axis-angle
+    rotation vector in radians, matching ``getActualTCPPose`` from UR RTDE.
+    """
+
+    pose_array = np.asarray(pose, dtype=float)
+    if pose_array.shape != (6,):
+        raise ValueError("pose must contain x, y, z, rx, ry, rz")
+    if not np.all(np.isfinite(pose_array)):
+        raise ValueError("pose values must be finite")
+    return make_transform(
+        Rotation.from_rotvec(pose_array[3:]).as_matrix(),
+        pose_array[:3],
+    )
 
 
 def invert_transform(transform: np.ndarray) -> np.ndarray:
@@ -248,6 +282,61 @@ def detect_chessboard(
     return np.asarray(corners, dtype=np.float32)
 
 
+def solve_chessboard_pose(
+    object_points: np.ndarray,
+    image_points: np.ndarray,
+    camera_matrix: np.ndarray,
+    distortion: np.ndarray,
+) -> np.ndarray:
+    """Estimate ``T_camera_target`` for one detected chessboard view."""
+
+    cv2 = _require_cv2()
+    object_array = np.asarray(object_points, dtype=np.float32)
+    image_array = np.asarray(image_points, dtype=np.float32)
+    camera_array = np.asarray(camera_matrix, dtype=float)
+    distortion_array = np.asarray(distortion, dtype=float).reshape(-1)
+    if object_array.ndim != 2 or object_array.shape[1] != 3:
+        raise ValueError("object_points must have shape (N, 3)")
+    if image_array.reshape(-1, 2).shape[0] != object_array.shape[0]:
+        raise ValueError("object_points and image_points must contain the same count")
+    if camera_array.shape != (3, 3):
+        raise ValueError("camera_matrix must have shape (3, 3)")
+    success, rotation_vector, translation_vector = cv2.solvePnP(
+        object_array,
+        image_array.reshape(-1, 1, 2),
+        camera_array,
+        distortion_array,
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not success:
+        raise RuntimeError("OpenCV solvePnP failed for the chessboard view")
+    rotation, _ = cv2.Rodrigues(rotation_vector)
+    return make_transform(rotation, np.asarray(translation_vector).reshape(3))
+
+
+def project_target_points(
+    object_points: np.ndarray,
+    camera_from_target: np.ndarray,
+    camera_matrix: np.ndarray,
+    distortion: np.ndarray,
+) -> np.ndarray:
+    """Project target-frame 3-D points into the camera image."""
+
+    cv2 = _require_cv2()
+    target_pose = np.asarray(camera_from_target, dtype=float)
+    if target_pose.shape != (4, 4):
+        raise ValueError("camera_from_target must have shape (4, 4)")
+    rotation_vector, _ = cv2.Rodrigues(target_pose[:3, :3])
+    projected, _ = cv2.projectPoints(
+        np.asarray(object_points, dtype=np.float32),
+        rotation_vector,
+        target_pose[:3, 3],
+        np.asarray(camera_matrix, dtype=float),
+        np.asarray(distortion, dtype=float).reshape(-1),
+    )
+    return np.asarray(projected, dtype=float).reshape(-1, 2)
+
+
 def calibrate_intrinsics(
     object_points: Sequence[np.ndarray],
     image_points: Sequence[np.ndarray],
@@ -359,21 +448,58 @@ def estimate_eye_to_hand(
     ]
     gripper_from_target = average_transforms(mount_estimates)
 
-    translation_errors: list[float] = []
-    rotation_errors: list[float] = []
-    for base_from_gripper_pose, camera_from_target_pose in zip(robot_poses, target_poses):
-        robot_target = base_from_gripper_pose @ gripper_from_target
-        camera_target = base_from_camera @ camera_from_target_pose
-        translation_errors.append(
-            float(np.linalg.norm(robot_target[:3, 3] - camera_target[:3, 3]))
-        )
-        rotation_errors.append(rotation_error_deg(robot_target, camera_target))
+    residuals = evaluate_hand_eye(
+        robot_poses,
+        target_poses,
+        base_from_camera,
+        gripper_from_target,
+    )
 
     return HandEyeCalibration(
         base_from_camera=base_from_camera,
         gripper_from_target=gripper_from_target,
-        residual_translation_rms_m=float(np.sqrt(np.mean(np.square(translation_errors)))),
-        residual_rotation_rms_deg=float(np.sqrt(np.mean(np.square(rotation_errors)))),
+        residual_translation_rms_m=residuals.translation_rms_m,
+        residual_rotation_rms_deg=residuals.rotation_rms_deg,
+    )
+
+
+def evaluate_hand_eye(
+    base_from_gripper: Sequence[np.ndarray],
+    camera_from_target: Sequence[np.ndarray],
+    base_from_camera: np.ndarray,
+    gripper_from_target: np.ndarray,
+) -> CalibrationResiduals:
+    """Evaluate ``T_bg T_gt = T_bc T_ct`` for each paired capture."""
+
+    robot_poses = tuple(np.asarray(transform, dtype=float) for transform in base_from_gripper)
+    target_poses = tuple(np.asarray(transform, dtype=float) for transform in camera_from_target)
+    base_camera = np.asarray(base_from_camera, dtype=float)
+    gripper_target = np.asarray(gripper_from_target, dtype=float)
+    if len(robot_poses) != len(target_poses) or not robot_poses:
+        raise ValueError("paired robot/camera pose sequences must be non-empty and equal")
+    if any(transform.shape != (4, 4) for transform in robot_poses + target_poses):
+        raise ValueError("all paired poses must have shape (4, 4)")
+    if base_camera.shape != (4, 4) or gripper_target.shape != (4, 4):
+        raise ValueError("calibration transforms must have shape (4, 4)")
+
+    translation_errors: list[float] = []
+    rotation_errors: list[float] = []
+    for base_gripper, camera_target in zip(robot_poses, target_poses):
+        target_from_robot = base_gripper @ gripper_target
+        target_from_camera = base_camera @ camera_target
+        translation_errors.append(
+            float(
+                np.linalg.norm(
+                    target_from_robot[:3, 3] - target_from_camera[:3, 3]
+                )
+            )
+        )
+        rotation_errors.append(
+            rotation_error_deg(target_from_robot, target_from_camera)
+        )
+    return CalibrationResiduals(
+        translation_m=np.asarray(translation_errors, dtype=float),
+        rotation_deg=np.asarray(rotation_errors, dtype=float),
     )
 
 

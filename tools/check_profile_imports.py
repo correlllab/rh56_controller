@@ -104,6 +104,17 @@ PROFILE_SPECS: tuple[ProfileSpec, ...] = (
         ),
     ),
     ProfileSpec(
+        name="real-ur5-vision",
+        python="3.12",
+        extras=("real-ur5-vision",),
+        modules=BASE_MODULES + ("cv2", "pyrealsense2", "rtde_receive"),
+        paths=(),
+        command=(
+            "python tools/calibrate_ur5_external_camera_real.py --check-only"
+        ),
+        note="Read-only camera/RTDE receive path; never sends motion commands.",
+    ),
+    ProfileSpec(
         name="real-ur5-ros",
         python="3.10",
         extras=("real-ur5-ros", "ros"),

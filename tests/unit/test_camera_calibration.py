@@ -7,6 +7,7 @@ from scipy.spatial.transform import Rotation
 from rh56_controller.camera_calibration import (
     average_transforms,
     chessboard_object_points,
+    evaluate_hand_eye,
     estimate_eye_to_hand,
     interpolate_joint_positions,
     invert_transform,
@@ -14,7 +15,10 @@ from rh56_controller.camera_calibration import (
     make_transform,
     mujoco_camera_pose_opencv,
     pinhole_intrinsics_from_fovy,
+    pose_vector_xyz_rotvec_to_transform,
+    project_target_points,
     rotation_error_deg,
+    solve_chessboard_pose,
 )
 
 
@@ -25,6 +29,20 @@ def test_transform_inverse_and_average() -> None:
     )
     assert np.allclose(first @ invert_transform(first), np.eye(4), atol=1e-12)
     assert np.allclose(average_transforms([first, first]), first, atol=1e-12)
+
+
+def test_ur_pose_vector_conversion() -> None:
+    pose = [0.4, -0.5, 0.6, 0.1, -0.2, 0.3]
+    transform = pose_vector_xyz_rotvec_to_transform(pose)
+
+    np.testing.assert_allclose(transform[:3, 3], pose[:3])
+    np.testing.assert_allclose(
+        transform[:3, :3],
+        Rotation.from_rotvec(pose[3:]).as_matrix(),
+    )
+
+    with pytest.raises(ValueError, match="x, y, z"):
+        pose_vector_xyz_rotvec_to_transform([0.0] * 5)
 
 
 def test_interpolate_joint_positions_caps_step_and_includes_target() -> None:
@@ -96,3 +114,42 @@ def test_eye_to_hand_recovers_synthetic_camera() -> None:
     assert rotation_error_deg(result.base_from_camera, truth_base_from_camera) < 1e-8
     assert result.residual_translation_rms_m < 1e-9
     assert result.residual_rotation_rms_deg < 1e-8
+
+    residuals = evaluate_hand_eye(
+        base_from_gripper,
+        camera_from_target,
+        result.base_from_camera,
+        result.gripper_from_target,
+    )
+    assert residuals.translation_m.shape == (20,)
+    assert residuals.translation_rms_m < 1e-9
+    assert residuals.rotation_rms_deg < 1e-8
+
+
+def test_chessboard_pnp_recovers_projected_pose() -> None:
+    pytest.importorskip("cv2")
+    object_points = chessboard_object_points((9, 6), 0.025)
+    camera_matrix = np.array(
+        [[925.0, 0.0, 647.0], [0.0, 925.0, 364.0], [0.0, 0.0, 1.0]]
+    )
+    distortion = np.zeros(5)
+    truth = make_transform(
+        Rotation.from_euler("xyz", [0.15, -0.25, 0.08]).as_matrix(),
+        [-0.08, -0.05, 0.72],
+    )
+    image_points = project_target_points(
+        object_points,
+        truth,
+        camera_matrix,
+        distortion,
+    )
+
+    estimated = solve_chessboard_pose(
+        object_points,
+        image_points,
+        camera_matrix,
+        distortion,
+    )
+
+    np.testing.assert_allclose(estimated[:3, 3], truth[:3, 3], atol=1e-6)
+    assert rotation_error_deg(estimated, truth) < 1e-4
