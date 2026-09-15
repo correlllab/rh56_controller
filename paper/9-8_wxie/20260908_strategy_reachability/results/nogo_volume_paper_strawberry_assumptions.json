@@ -1,0 +1,39 @@
+{
+  "generated_utc": "2026-09-10T03:15:12.598443+00:00",
+  "simulation_only": true,
+  "object": "paper_strawberry",
+  "collision_shape": "box",
+  "grasp_mode": "line",
+  "grasp_height_mm": 15.0,
+  "contact_policy": "contact-fingers",
+  "yaw_mode": "fixed",
+  "region": "quarter-ball",
+  "region_radius_mm": 300.0,
+  "full_grid": true,
+  "clutter": null,
+  "clutter_offset_mm": null,
+  "iterative_step_mm": 15.0,
+  "ggx_topk": 10,
+  "n_ggx_candidates": 10,
+  "grid": {
+    "xy_range_mm": [
+      -300.0,
+      300.0
+    ],
+    "xy_step_mm": 30.0,
+    "z_range_mm": [
+      15.0,
+      315.0
+    ],
+    "z_step_mm": 30.0,
+    "n_poses": 1206,
+    "n_cells": 4851
+  },
+  "layers": [
+    "naive",
+    "iterative_closure",
+    "thumb_reflex",
+    "ggx_best",
+    "ggx_worst"
+  ]
+}

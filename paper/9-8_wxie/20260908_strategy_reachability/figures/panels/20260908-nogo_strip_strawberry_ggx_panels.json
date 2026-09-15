@@ -1,0 +1,51 @@
+{
+  "object": "paper_strawberry",
+  "grasp_height_mm": 15.0,
+  "px_per_m": 762.6756071861569,
+  "panel_size": [
+    460,
+    400
+  ],
+  "colours": {
+    "reachable": [
+      0.145,
+      0.635,
+      0.322
+    ],
+    "unreachable": [
+      0.788,
+      0.114,
+      0.11
+    ]
+  },
+  "panels": [
+    {
+      "layer": "iterative_closure",
+      "name": "Iterative",
+      "note": "77% unreachable",
+      "file": "20260908-nogo_strip_strawberry_ggx_iterative_closure.png",
+      "locked_fraction": 0.7694859038142621
+    },
+    {
+      "layer": "thumb_reflex",
+      "name": "Reflex",
+      "note": "53% unreachable",
+      "file": "20260908-nogo_strip_strawberry_ggx_thumb_reflex.png",
+      "locked_fraction": 0.533167495854063
+    },
+    {
+      "layer": "naive",
+      "name": "Naive",
+      "note": "100% unreachable",
+      "file": "20260908-nogo_strip_strawberry_ggx_naive.png",
+      "locked_fraction": 1.0
+    },
+    {
+      "layer": "ggx_best",
+      "name": "GraspGen-X",
+      "note": "best of k, 100% unreachable",
+      "file": "20260908-nogo_strip_strawberry_ggx_ggx_best.png",
+      "locked_fraction": 1.0
+    }
+  ]
+}

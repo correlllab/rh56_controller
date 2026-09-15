@@ -127,8 +127,8 @@ BUILTIN_OBJECTS: dict[str, ObjectSpec] = {
     "paper_big_screwdriver": ObjectSpec(
         name="paper_big_screwdriver",
         label="Big Screwdriver",
-        size_m=(0.240, 0.035, 0.035),
-        grasp_width_m=0.035,
+        size_m=(0.240, 0.025, 0.025),
+        grasp_width_m=0.025,
         mode="line",
         notes="estimated proxy; elongated tool grasped by two-finger line mode",
     ),
@@ -155,8 +155,8 @@ BUILTIN_OBJECTS: dict[str, ObjectSpec] = {
     "paper_charger": ObjectSpec(
         name="paper_charger",
         label="Charger",
-        size_m=(0.095, 0.060, 0.030),
-        grasp_width_m=0.060,
+        size_m=(0.095, 0.035, 0.030),
+        grasp_width_m=0.035,
         mode="plane4",
         notes="estimated low rectangular charger proxy",
     ),
@@ -192,8 +192,8 @@ BUILTIN_OBJECTS: dict[str, ObjectSpec] = {
     "paper_pen": ObjectSpec(
         name="paper_pen",
         label="Pen",
-        size_m=(0.145, 0.012, 0.012),
-        grasp_width_m=0.012,
+        size_m=(0.145, 0.015, 0.015),
+        grasp_width_m=0.015,
         mode="line",
         notes=(
             "estimated thin pen proxy grasped by two-finger line mode; "
@@ -204,10 +204,14 @@ BUILTIN_OBJECTS: dict[str, ObjectSpec] = {
     "paper_small_screwdriver": ObjectSpec(
         name="paper_small_screwdriver",
         label="Small Screwdriver",
-        size_m=(0.145, 0.022, 0.022),
-        grasp_width_m=0.022,
+        size_m=(0.145, 0.015, 0.024),
+        grasp_width_m=0.015,
         mode="line",
-        notes="estimated small elongated tool proxy grasped by two-finger line mode",
+        notes=(
+            "small elongated tool proxy grasped by two-finger line mode; the "
+            "handle stands taller off the table than the 15 mm it is pinched "
+            "across, putting the grasp point at 12 mm"
+        ),
     ),
     "paper_sugar_box": ObjectSpec(
         name="paper_sugar_box",
@@ -255,8 +259,8 @@ BUILTIN_OBJECTS: dict[str, ObjectSpec] = {
     "paper_strawberry": ObjectSpec(
         name="paper_strawberry",
         label="Strawberry",
-        size_m=(0.030, 0.030, 0.035),
-        grasp_width_m=0.030,
+        size_m=(0.025, 0.025, 0.030),
+        grasp_width_m=0.025,
         mode="line",
         notes="estimated delicate strawberry proxy represented as an AABB",
     ),

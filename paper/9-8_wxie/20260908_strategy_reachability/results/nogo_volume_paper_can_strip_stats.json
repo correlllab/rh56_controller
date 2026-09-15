@@ -1,0 +1,14 @@
+{
+  "iterative_closure": {
+    "locked_fraction": 0.33996683250414594,
+    "never_admissible_fraction": 0.6462585034013606
+  },
+  "thumb_reflex": {
+    "locked_fraction": 0.3208955223880597,
+    "never_admissible_fraction": 0.6462585034013606
+  },
+  "naive": {
+    "locked_fraction": 0.33996683250414594,
+    "never_admissible_fraction": 0.6462585034013606
+  }
+}

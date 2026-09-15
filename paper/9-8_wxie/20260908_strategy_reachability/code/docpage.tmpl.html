@@ -1,0 +1,1038 @@
+<title>RH56 Closure Admissibility</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --ink: #12161c;
+  --ink-2: #4d5663;
+  --muted: #868f9c;
+  --rule: #dfe4ea;
+  --rule-strong: #c3cbd5;
+  --accent: #2a78d6;
+  --s-naive: #2a78d6;
+  --s-iter: #eb6834;
+  --s-reflex: #1baf7a;
+  --s-ggx: #eda100;
+  --plate: #ffffff;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --measure: 68ch;
+  --wide: 1120px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #101317;
+    --surface: #171b21;
+    --surface-2: #1e242b;
+    --ink: #eef1f5;
+    --ink-2: #a9b3bf;
+    --muted: #78828e;
+    --rule: #262d35;
+    --rule-strong: #38414b;
+    --accent: #5a9bea;
+    --s-naive: #3987e5;
+    --s-iter: #d95926;
+    --s-reflex: #199e70;
+    --s-ggx: #c98500;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101317;
+  --surface: #171b21;
+  --surface-2: #1e242b;
+  --ink: #eef1f5;
+  --ink-2: #a9b3bf;
+  --muted: #78828e;
+  --rule: #262d35;
+  --rule-strong: #38414b;
+  --accent: #5a9bea;
+  --s-naive: #3987e5;
+  --s-iter: #d95926;
+  --s-reflex: #199e70;
+  --s-ggx: #c98500;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 16.5px;
+  line-height: 1.62;
+  margin: 0;
+  padding: 0 24px 96px;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: var(--wide); margin: 0 auto; }
+.col { max-width: var(--measure); }
+
+/* ---- masthead ---- */
+header.mast {
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 40px 0 22px;
+  margin-bottom: 34px;
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+h1 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: clamp(27px, 3.6vw, 38px);
+  line-height: 1.16;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+  margin: 0 0 14px;
+  max-width: 22ch;
+}
+.standfirst {
+  font-size: 18px;
+  color: var(--ink-2);
+  margin: 0;
+  max-width: 62ch;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  margin-top: 26px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+/* ---- sections ---- */
+section { margin: 46px 0 0; }
+h2 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 19px;
+  letter-spacing: -0.008em;
+  color: var(--ink);
+  margin: 0 0 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+h2 .num {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+}
+h2 + .rule { height: 1px; background: var(--rule); margin: 0 0 18px; }
+h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 14.5px;
+  color: var(--ink);
+  margin: 26px 0 6px;
+}
+p { margin: 0 0 15px; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.87em; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; color: var(--ink); }
+strong { font-weight: 600; }
+
+/* ---- key figures row ---- */
+.headline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  margin: 22px 0 8px;
+}
+.headline > div { background: var(--surface); padding: 16px 18px 15px; }
+.headline .k {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 9px;
+}
+.headline .v {
+  font-family: var(--sans);
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.headline .s { font-size: 13px; color: var(--ink-2); margin-top: 7px; font-family: var(--sans); }
+.v.naive { color: var(--s-naive); }
+.v.iter { color: var(--s-iter); }
+.v.reflex { color: var(--s-reflex); }
+.v.ggx { color: var(--s-ggx); }
+
+/* ---- strategy cards ---- */
+.strategies { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin: 20px 0 6px; }
+.strat { border-top: 3px solid var(--rule-strong); padding-top: 13px; }
+.strat.n { border-top-color: var(--s-naive); }
+.strat.i { border-top-color: var(--s-iter); }
+.strat.r { border-top-color: var(--s-reflex); }
+.strat h4 {
+  font-family: var(--sans); font-size: 14px; font-weight: 600; margin: 0 0 3px;
+}
+.strat .wrist {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 9px;
+}
+.strat p { font-size: 14.5px; margin: 0; color: var(--ink-2); }
+
+/* ---- figure plates ---- */
+figure { margin: 26px 0; }
+.plate {
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  padding: 10px;
+  overflow-x: auto;
+}
+.plate img { display: block; width: 100%; height: auto; min-width: 620px; }
+figcaption {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-top: 10px;
+  max-width: 88ch;
+}
+figcaption b { color: var(--ink); font-weight: 600; }
+
+/* ---- tables ---- */
+.tablewrap { overflow-x: auto; margin: 20px 0; }
+table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: 13.5px; }
+caption {
+  text-align: left; font-family: var(--sans); font-size: 13px; color: var(--ink-2);
+  padding-bottom: 9px;
+}
+th, td { padding: 7px 12px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th {
+  font-weight: 600; font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px solid var(--rule-strong);
+}
+tbody td { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+tbody td:first-child { color: var(--ink); }
+tbody tr.hw td { color: var(--ink); font-weight: 600; border-top: 1px solid var(--rule-strong); }
+td.naive { color: var(--s-naive); font-weight: 600; }
+td.iter { color: var(--s-iter); font-weight: 600; }
+td.reflex { color: var(--s-reflex); font-weight: 600; }
+td.ggx { color: var(--s-ggx); font-weight: 600; }
+tbody tr.zero td.zero { color: var(--s-naive); font-weight: 600; }
+
+/* ---- criteria list ---- */
+.criteria { display: grid; gap: 14px; margin: 18px 0; }
+.crit { display: grid; grid-template-columns: 210px 1fr; gap: 18px; align-items: start; }
+.crit .name {
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink);
+  padding-top: 2px;
+}
+.crit .desc { font-size: 15px; color: var(--ink-2); }
+@media (max-width: 660px) { .crit { grid-template-columns: 1fr; gap: 4px; } }
+
+/* ---- callout ---- */
+.note {
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  padding: 14px 18px;
+  margin: 20px 0;
+}
+.note p { margin: 0; font-size: 15px; }
+.note p + p { margin-top: 10px; }
+
+/* ---- paths ---- */
+.paths { font-family: var(--mono); font-size: 12.5px; }
+.paths div { padding: 6px 0; border-bottom: 1px solid var(--rule); display: flex; gap: 14px; flex-wrap: wrap; }
+.paths span:first-child { color: var(--muted); min-width: 172px; }
+.paths span:last-child { color: var(--ink-2); word-break: break-all; }
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  padding: 13px 15px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: var(--ink-2);
+  margin: 14px 0;
+}
+ul.tight { margin: 0 0 15px; padding-left: 20px; }
+ul.tight li { margin-bottom: 8px; }
+footer {
+  margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule);
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Simulation study · RH56 grasp strategies</p>
+  <h1>Approach and closure admissibility for three RH56 grasp strategies</h1>
+  <p class="standfirst">
+    A geometric feasibility model for the commanded motion of naive, iterative and
+    thumb-reflex closure, run over the same 15 objects and 10 approach conditions as
+    the hardware benchmark.
+  </p>
+  <div class="meta">
+    <span><b>Date</b> 2026-09-08</span>
+    <span><b>Status</b> simulation only, no hardware</span>
+    <span><b>Trials</b> {{N_TRIALS}} per variant</span>
+    <span><b>Model</b> {{XML_NAME}}</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="num">§1</span> Why this experiment exists</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      Reviewer 15 of the IROS submission accepted the hardware results and rejected the
+      reasoning around them: &ldquo;All elements are selected empirically, and even if each
+      step sounds reasonable, it does not provide a clear assessment that the strategy will
+      correctly operate.&rdquo; The three closure strategies were designed by hand, ranked by
+      a 450-trial benchmark, and never shown to follow from the hand's geometry. The author
+      response promised a simulation analysis of the reachability of each strategy as a
+      function of object shape and volume and of initial hand pose.
+    </p>
+    <p>
+      That analysis is what this page reports. The question it answers is narrow and
+      geometric: for a given object on a table and a given starting hand pose, can each
+      strategy execute the motion it commands without striking the support surface, without
+      hitting the object before the grasp closes, and with its contacts ending up on the
+      object? Grasp success is not predicted here, and no dynamics, friction or object
+      compliance are modelled.
+    </p>
+    <p>
+      An earlier attempt at this analysis exists in the repository and does not answer the
+      question. <code>tools/run_strategy_pregrasp_rate.py</code> checks whether the hand can
+      translate to each strategy's pre-grasp pose with the fingers held in a fixed shape. Naive
+      and reflex closure both approach with the opposing fingers open and both target the
+      analytical final pose, so that check admits them at nearly identical rates and cannot
+      separate the strategies at all. On the sugar box it returns 100% for naive and 100% for
+      reflex. The discriminating phase is closure, which that tool never simulates.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§2</span> The mechanism under test</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      The RH56 finger linkages are coupled, so a commanded width sets fingertip position and
+      the hand pose needed to hold a grasp plane at the same time. Sweeping the analytical
+      solver across its width range gives the size of the effect directly. In four-finger
+      plane mode the hand tilt runs from {{TILT_WIDE}}&deg; at the widest solvable width
+      ({{W_MAX}}&nbsp;mm) to 90&deg; at the narrowest ({{W_MIN}}&nbsp;mm), and the antipodal
+      contact midpoint moves {{CENTER_TRAVEL}}&nbsp;mm within the hand frame over that range.
+    </p>
+    <p>
+      A parallel-jaw gripper has neither property: its fingertips converge on the aperture
+      midpoint and the wrist pose that was correct with the jaws open stays correct as they
+      close. Any strategy that treats this hand as a parallel jaw therefore inherits an
+      uncompensated pose error equal to that travel, and the error is largest exactly where
+      clearance above the table is smallest.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§3</span> What each strategy commands</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      Each strategy is modelled as an ordered sequence of waypoints in hand-base position,
+      hand-base rotation, and the six actuator commands, following Sec. IV of the manuscript.
+      The three differ only in what the wrist does while the fingers close.
+    </p>
+  </div>
+  <div class="strategies">
+    <div class="strat n">
+      <h4>Naive closure</h4>
+      <p class="wrist">Wrist fixed at the open-hand pose</p>
+      <p>
+        The fully open hand is placed so its antipodal midpoint sits on the grasp target, as a
+        parallel-jaw pipeline would, and the width command is then applied with the wrist held
+        still. The whole coupled fingertip travel is uncompensated.
+      </p>
+    </div>
+    <div class="strat i">
+      <h4>Iterative closure</h4>
+      <p class="wrist">Wrist tracks the width sequence</p>
+      <p>
+        The hand starts at the widest analytical pose and steps down in {{ITER_STEP}}&nbsp;mm
+        width increments. Wrist pose and actuator command move together, so the grasp plane is
+        held at every step and the terminal contact is exact.
+      </p>
+    </div>
+    <div class="strat r">
+      <h4>Thumb reflex</h4>
+      <p class="wrist">Wrist fixed at the final pose</p>
+      <p>
+        The thumb is placed at its final bend and opposition while the other active fingers stay
+        open, with the wrist already at the final analytical pose. Only the opposing fingers
+        move during closure, which is the smallest swept volume of the three.
+      </p>
+    </div>
+  </div>
+  <div class="col">
+    <p style="margin-top:18px">
+      Every strategy is released from the same world hand-base position, because the arm
+      commands the wrist and all three start from the same arm state. Each then holds its own
+      pre-grasp orientation and finger shape, which is the difference under test.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§4</span> Hypotheses</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>Three predictions follow from the coupling, and each can fail against the model.</p>
+    <ul class="tight">
+      <li>
+        <strong>H1.</strong> Naive closure loses admissibility first as the grasp point
+        approaches the table, because the uncompensated fingertip travel is directed into the
+        support surface. Falsified if naive's admissible fraction is independent of grasp-point
+        height.
+      </li>
+      <li>
+        <strong>H2.</strong> Naive closure alone produces terminal contact misalignment, of
+        the order of the fingertip travel in &sect;2. Falsified if iterative or reflex closure
+        also miss their targets, or if naive's offset is small compared with object size.
+      </li>
+      <li>
+        <strong>H3.</strong> Reflex closure retains more of the low-clearance region than
+        iterative closure, because it holds the opposing fingers extended and moves the wrist
+        once. Falsified if reflex incurs at least as many support-surface collisions as
+        iterative.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§5</span> Admissibility criteria</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      The hand is checked against the object proxy and against the support plane at
+      {{N_SAMPLES}} sampled configurations along each commanded motion. Object contact uses
+      the 13-capsule proxy already in the repository; the support plane uses the model's own
+      collision geometry, so that test needs no tolerance. A trial is admissible when none
+      of three failure modes fires.
+    </p>
+  </div>
+  <div class="criteria">
+    <div class="crit">
+      <div class="name">table_collision</div>
+      <div class="desc">
+        Any part of the hand's collision geometry &mdash; palm boxes and cylinder, phalanx
+        meshes &mdash; falls below the support plane at any sampled configuration. This test
+        carries no clearance tolerance. &sect;7 measures what a tolerance would have to be if
+        the faster capsule proxy were used instead.
+      </div>
+    </div>
+    <div class="crit">
+      <div class="name">premature_object_contact</div>
+      <div class="desc">
+        Any part of the hand other than the planned contact fingertips penetrates the object.
+        The distal capsules of the thumb and of the opposing fingers named by the analytical
+        solution are exempt, since those are the grasp contacts; the palm, the inactive
+        fingers and the proximal phalanges are not.
+      </div>
+    </div>
+    <div class="crit">
+      <div class="name">terminal_misalignment</div>
+      <div class="desc">
+        The antipodal contact midpoint actually reached at the end of the motion lies outside
+        the object proxy, so the commanded closure no longer straddles the object.
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <p>
+      The planned grasp width is the object width plus {{WIDTH_OFFSET}}&nbsp;mm, matching the
+      planner, so a correctly executed grasp leaves roughly {{HALF_OFFSET}}&nbsp;mm of clearance
+      per side and any contact in this model is unintended.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§6</span> Results</h2>
+  <div class="rule"></div>
+
+  <div class="headline">
+    <div>
+      <div class="k">Naive</div>
+      <div class="v naive">{{ADM_NAIVE}}</div>
+      <div class="s">admissible of 150<br>hardware success 48.0%</div>
+    </div>
+    <div>
+      <div class="k">Iterative</div>
+      <div class="v iter">{{ADM_ITER}}</div>
+      <div class="s">admissible of 150<br>hardware success 82.0%</div>
+    </div>
+    <div>
+      <div class="k">Thumb reflex</div>
+      <div class="v reflex">{{ADM_REFLEX}}</div>
+      <div class="s">admissible of 150<br>hardware success 86.7%</div>
+    </div>
+  </div>
+
+  <div class="col">
+    <p style="margin-top:22px">
+      Naive closure lands on the measured hardware rate exactly at 48.0%, and reflex closure
+      is 4.0 points high at 90.7% against 86.7%; both sit inside the hardware 95% confidence
+      interval for 150 trials (39.8&ndash;56.3% and 80.2&ndash;91.7%). Iterative closure is 10.7
+      points low, 71.3% against 82.0%. No quantity in the model is fitted to a success rate:
+      the object cross-sections were measured, the &plusmn;3&nbsp;cm lateral jitter comes from
+      the protocol description, and the support-plane test runs directly on the hand's
+      collision geometry. &sect;7 measures the one tolerance an earlier version of this page
+      did fit, and locates the iterative residual.
+    </p>
+  </div>
+
+  <figure>
+    <div class="plate"><img src="{{FIG_MAIN}}" alt="Admissible approach conditions per object ordered by grasp-point height, and failure-mode counts per strategy."></div>
+    <figcaption>
+      <b>A:</b> admissible approach conditions out of 10 for each of the 15 benchmark objects,
+      ordered by the height of the grasp point above the table; a tick at zero marks a strategy
+      that admits nothing. Naive closure admits no condition for any object whose grasp point
+      is at or below {{NAIVE_ZERO_MAX}}&nbsp;mm and 9 of 10 for every object at or above
+      {{NAIVE_OK_MIN}}&nbsp;mm, with nothing in between. <b>B:</b> failure-mode counts out of
+      150 trials per strategy; a trial can trigger more than one. Terminal contact misalignment
+      occurs only for naive closure and for the learned generator.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>H1 — support-surface collision</h3>
+    <p>
+      Naive closure records {{FAIL_TABLE_NAIVE}} support-surface collisions of 150 trials,
+      against {{FAIL_TABLE_ITER}} for iterative and {{FAIL_TABLE_REFLEX}} for reflex. Its
+      admissible fraction is a step in grasp-point height, not a gradient: zero for all
+      {{N_LOW_OBJECTS}} objects with a grasp point at or below {{NAIVE_ZERO_MAX}}&nbsp;mm, and
+      9 of 10 for all {{N_HIGH_OBJECTS}} objects at or above {{NAIVE_OK_MIN}}&nbsp;mm. Its
+      rate is also identical at both elevated approach heights, 53.3% at 150&nbsp;mm and at
+      250&nbsp;mm, so the mechanism is set by the object rather than by the start pose. The
+      prediction holds.
+    </p>
+
+    <h3>H2 — terminal contact misalignment</h3>
+    <p>
+      Naive closure displaces the terminal contact midpoint by a median
+      {{NAIVE_OFFSET_MED}}&nbsp;mm, range {{NAIVE_OFFSET_MIN}} to
+      {{NAIVE_OFFSET_MAX}}&nbsp;mm, which is the same order as the in-hand contact travel
+      measured in &sect;2. Iterative and reflex closure reach their targets to within
+      {{OTHER_OFFSET_MAX}}&nbsp;mm, exactly as the analytical construction requires. For the
+      six objects whose grasp width is 25&nbsp;mm or less, the displacement carries the
+      contact midpoint outside the object and the grasp misses it entirely, at every one of
+      the ten approach conditions: {{FAIL_TERM_NAIVE}} of the 150 trials. The prediction holds.
+    </p>
+
+    <h3>H3 — clearance during approach</h3>
+    <p>
+      Reflex closure records {{FAIL_TABLE_REFLEX}} support-surface collisions against
+      {{FAIL_TABLE_ITER}} for iterative, and it is the only strategy that admits any trial at
+      P1, the condition level with the grasp point that the manuscript calls adversarial
+      ({{P1_REFLEX}} of 15, against {{P1_ITER}} and {{P1_NAIVE}}). The advantage is confined to
+      the low approach conditions: at 150&nbsp;mm the two differ 100% to 80%, and at
+      250&nbsp;mm both admit every trial. The prediction holds in the region it was made for.
+    </p>
+  </div>
+
+  <figure>
+    <div class="plate"><img src="{{FIG_B}}" alt="Failure-mode counts per strategy, and admissible fraction by approach condition."></div>
+    <figcaption>
+      <b>Failure modes and approach conditions.</b> Left: counts of each failure mode out of
+      150 trials; a trial can trigger more than one. Terminal misalignment is unique to naive
+      closure. Right: admissible fraction against approach condition, ordered by height above
+      the grasp point. Naive closure is flat, because its failures are set by object geometry
+      rather than by where the approach starts; the two planned strategies both recover as the
+      approach rises, and separate only at the low conditions.
+    </figcaption>
+  </figure>
+
+
+
+  <div class="col">
+    <h3>The start poses each strategy cannot reach from</h3>
+    <p>
+      The condition set samples ten start poses per object. Sweeping the start pose instead
+      over the region an arm is actually commanded from &mdash; the quarter ball of radius
+      300&nbsp;mm above the grasp point and on the approach side &mdash; gives the set of
+      poses each strategy cannot execute from. Every cell is evaluated independently rather
+      than scanning each column down to its lowest admissible height, so the result can
+      represent overhangs; over five object and grasp-height combinations no column was
+      non-monotone in height, which is a property of the problem rather than an assumption
+      of the model. The strips below draw one strategy per panel on a shared camera, in the
+      same column order as the three photographed strategies.
+    </p>
+  </div>
+
+  {{STRIP_FIGURES}}
+
+  <div class="col">
+    <p>
+      The same three sets nested in one scene, which shows the containment the strips cannot
+      and costs the contrast the strips have:
+    </p>
+  </div>
+
+  {{VOLUME_FIGURES}}
+
+  <div class="tablewrap">
+    <table>
+      <caption>Admissible fraction of 150 trials per strategy, against the support-plane geometry. The capsule tolerances span the measured 5th to 95th percentile of the proxy's over-approximation; 10&nbsp;mm is what an earlier version of this page fitted. Naive closure is insensitive to all of them because its failures are terminal misalignments.</caption>
+      <thead>
+        <tr><th>Model variant</th><th>Naive</th><th>Iterative</th><th>Reflex</th></tr>
+      </thead>
+      <tbody>{{TABLE_SENS}}</tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      Loosening the support-plane test moves iterative and reflex closure and leaves naive
+      closure at 48.0% throughout, because its {{FAIL_TERM_NAIVE}} terminal misalignments are
+      not clearance failures and no tolerance can remove them. The ordering is unchanged in
+      every row. Replacing the straight-line approach with an L-shaped travel-then-descend
+      move reproduces the primary rates in all 450 trials, so every support-plane collision
+      reported here happens during closure rather than during transit.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">&sect;7</span> Calibrating the model against the hardware</h2>
+  <div class="rule"></div>
+
+  <div class="col">
+    <p>
+      An earlier version of this page recorded the opposite of the result above: the two
+      planned strategies saturated at 65% and 78% however the collision proxy was loosened,
+      the residual failures were 30&ndash;60&nbsp;mm deep, and the conclusion was that the
+      gap could not be closed by tuning. That reading was right about the proxy and wrong
+      about the cause. The gap was in the model's inputs.
+    </p>
+    <p>
+      <b>Object cross-sections.</b> The proxies were first-pass estimates. Measured values for
+      six objects: raspberry 20&nbsp;mm (unchanged), small screwdriver 22&rarr;15, pen
+      12&rarr;15, charger 60&rarr;35, big screwdriver 35&rarr;25, strawberry 30&rarr;25. Five
+      of the six shrink, which lowers their grasp points and moves two more objects below the
+      height at which the naive terminal pose misses the object entirely.
+    </p>
+    <p>
+      <b>Small screwdriver handle height.</b> Taking the 15&nbsp;mm as the whole proxy put the
+      screwdriver's grasp point at 7.5&nbsp;mm and took it to 0/10 on every strategy, against
+      0/5/9 for the raspberry at the same 20&nbsp;mm class. The 15&nbsp;mm is the width the
+      handle is pinched across, not its height off the table, and the handle is the taller
+      dimension. Sweeping it gives a cliff between 10.0 and 11.0&nbsp;mm of grasp height and a
+      flat plateau from 11 to 15&nbsp;mm where the screwdriver returns exactly the raspberry's
+      0/5/9; above 17.5&nbsp;mm it reaches 0/9/9. The proxy is now
+      145&times;15&times;24&nbsp;mm, grasp point 12&nbsp;mm, mid-plateau. This is worth 5
+      iterative and 9 reflex trials of the 150, and it is the difference between the 68.0% and
+      84.7% an earlier version of this page reported and the 71.3% and 90.7% here.
+    </p>
+    <p>
+      <b>Approach conditions.</b> The hardware protocol samples ten approach poses per object
+      with lateral jitter of &plusmn;3&nbsp;cm and exactly one adversarial pose level with the
+      grasp point. The reconstruction used &plusmn;150&nbsp;mm of lateral offset and put the
+      eight elevated conditions at 100 and 250&nbsp;mm. Lateral jitter is now &plusmn;30&nbsp;mm
+      as stated, and the elevated conditions sit at 150 and 250&nbsp;mm.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <caption>The two corrections, isolated. Same model, same tolerances, all four combinations.</caption>
+      <thead>
+        <tr><th>Object sizes and approach conditions</th><th>Naive</th><th>Iterative</th><th>Reflex</th></tr>
+      </thead>
+      <tbody>{{TABLE_ABLATION}}</tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      The approach conditions carry iterative closure, 65.3% to 84.7% either way the
+      object sizes are set, because the &plusmn;150&nbsp;mm starts require a diagonal transit
+      that drives the fingers through the support plane on the way in. The object sizes carry
+      naive closure, pulling it back from 60.0% to 48.0% by moving the strawberry and the
+      charger below the height at which a wrist held at the open-hand pose no longer lands its
+      contacts on the object; terminal misalignments go from 40 to 60 of 150. Neither
+      correction alone reproduces the hardware. This table is computed at the 10&nbsp;mm
+      tolerance the four combinations were originally compared at, so its rows are directly
+      comparable with each other but sit above the primary configuration below.
+    </p>
+    <p>
+      The full record, including the tolerance and capsule-radius grid, is in
+      <code>results/calibration/README.md</code>.
+    </p>
+  </div>
+
+  <h3>Measuring the support-plane tolerance</h3>
+  <div class="col">
+    <p>
+      An earlier version of this page called the support-plane tolerance "the one fitted
+      parameter" and set it to 10&nbsp;mm, on the argument that a capsule of radius
+      7.5&ndash;10&nbsp;mm wrapped around a thin finger link can breach the plane by less than
+      its own radius without the link doing so. That argument is testable, and the number it
+      supports is not 10&nbsp;mm.
+    </p>
+    <p>
+      <code>code/calibrate_capsule_envelope.py</code> compares two lowest points of the hand in
+      the same world frame at every one of the {{ENV_N}} hand states the three strategies
+      command across the 15 objects and 10 approach conditions: the lowest point of the
+      13-capsule proxy, and the lowest point of the model's own collision geometry. A capsule
+      test with tolerance &tau; and a mesh test with no tolerance agree exactly when &tau;
+      equals the difference, so the distribution of that difference <em>is</em> the tolerance.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <caption>How far the capsule envelope hangs below the hand it stands for, along the direction the support-plane test looks.</caption>
+      <thead>
+        <tr><th>Hand states</th><th>Median</th><th>p05</th><th>p95</th></tr>
+      </thead>
+      <tbody>{{TABLE_ENVELOPE}}</tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      The capsule proxy encloses the collision geometry at every one of the {{ENV_N}} states,
+      so the tolerance is one-sided and the capsule test is never optimistic. The capsule
+      that reaches lowest is a distal phalanx in 96.6% of those states &mdash; the thumb tip
+      alone in 79.9% &mdash; so the tolerance is close to the difference between an
+      8&ndash;10&nbsp;mm capsule radius and the fingertip it wraps.
+    </p>
+    <p>
+      Two checks on the measurement. The gap depends on the hand's configuration and on its
+      wrist pitch but not on its yaw, since the wrist rotation is <code>Rz&middot;Ry</code> and
+      <code>Rz</code> leaves the world vertical fixed; sampling six yaws gives a spread of
+      {{ENV_YAW}}. And MuJoCo collides a mesh as its convex hull, which could make the
+      collision geometry a loose stand-in for the part, so the same measurement was repeated
+      against the undecimated visual meshes: the two agree to a median of
+      {{ENV_VIS}}&nbsp;mm. The collision geometry is the part, and the only meaningful
+      over-approximation in the chain is the capsule proxy.
+    </p>
+    <p>
+      The primary configuration therefore drops the capsule from the support-plane test
+      altogether and uses the collision geometry directly, with no tolerance. The 10&nbsp;mm
+      value is 1.5&times; the p95 of the measured envelope; it is what produced the earlier
+      exact agreement on iterative closure, and it also pushed reflex closure to 90.7% against
+      86.7% measured.
+    </p>
+  </div>
+
+  <h3>Where the iterative residual sits</h3>
+  <div class="col">
+    <p>
+      Under the mesh test iterative closure fails 43 of 150 trials, {{FAIL_TABLE_ITER}} of them
+      support-plane collisions. The depth of those collisions is bimodal: 13 of the
+      {{FAIL_TABLE_ITER}} are grazes no deeper than 1.7&nbsp;mm, at which depth a silicone
+      fingertip deflects rather than the grasp failing, while the upper quartile is past
+      70&nbsp;mm. Reflex closure's {{FAIL_TABLE_REFLEX}} collisions have no shallow population
+      at all: the shallowest is 51.5&nbsp;mm and the median 100.9&nbsp;mm, a hand that cannot
+      reach the pose rather than one that brushes the table.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <caption>Forgiving support-plane contact below a depth threshold, without changing the geometry. Only iterative closure has grazes to forgive, so the threshold moves it alone.</caption>
+      <thead>
+        <tr><th>Grazes forgiven below</th><th>Naive</th><th>Iterative</th><th>Reflex</th></tr>
+      </thead>
+      <tbody>{{TABLE_GRAZE}}</tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      Forgiving grazes between 2 and 5&nbsp;mm moves iterative closure to 79.3&ndash;84.7%,
+      which brackets the measured 82.0%, and leaves naive closure at 48.0% and reflex closure
+      at 90.7% because neither has a shallow collision to forgive. The primary configuration
+      still forgives nothing and reports iterative closure 10.7 points low, because testing
+      the graze hypothesis needs the per-trial failure cause from the hardware benchmark and
+      the current archive does not record it.
+    </p>
+  </div>
+
+  <h3>Three approaches, rendered</h3>
+  <div class="col">
+    <p>
+      The counts say which strategy survives which condition. They do not show why, and the
+      difference is a geometric event a few hundred milliseconds long. Each video runs the
+      full commanded motion &mdash; free-space approach, then closure &mdash; for all four
+      strategies from one shared start pose. Every panel carries the running support-surface
+      and object clearances and turns red at the first sampled configuration that violates a
+      criterion.
+    </p>
+  </div>
+
+  {{VIDEOS}}
+</section>
+
+<section>
+  <h2><span class="num">§8</span> GraspGen-X under the same test</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      A learned grasp generator fits this model without modification. GraspGen-X
+      proposes a 6-DoF hand pose rather than an aperture, and its execution has the same
+      shape as the wrist-fixed strategies: approach the proposed pose with the hand
+      open, then interpolate the descriptor's closure with the wrist held still. It was
+      run over the same 15 object proxies with the released model and the official
+      Inspire-hand descriptor, producing 100 ranked candidates per object.
+    </p>
+    <p>
+      Two things had to change, and both make the test easier for GGX rather than
+      harder. Its terminal check cannot be the antipodal-midpoint test, which assumes a
+      precision pinch; it uses the descriptor's own declared capture volume instead, so
+      the question is whether the proposal engages the object on GGX's terms. And its
+      descriptor closes all five fingers into an enveloping grasp, so the strict
+      fingertip-only contact rule scores it {{GGX_STRICT}} of 150 by construction. The
+      table below is the primary model configuration, whose enveloping contact rule the
+      three hand-designed strategies also benefit from.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <caption>
+        All four strategies under the primary model, over the same 15 objects and 10
+        approach conditions. GraspGen-X is admissible at a start pose when any of its top
+        {{GGX_TOPK}} candidates executes cleanly, as in the manuscript protocol.
+      </caption>
+      <thead>
+        <tr><th>Strategy</th><th>Admissible</th><th>Support-surface collision</th>
+        <th>Premature object contact</th><th>Terminal miss</th></tr>
+      </thead>
+      <tbody>{{TABLE_GGX}}</tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      {{GGX_NARRATIVE}}
+    </p>
+    <p>
+      The failure is not a criticism of the generator so much as of the interface. GGX
+      is given an object mesh and no table, so it proposes grasps from every direction
+      including from underneath, and nothing in its ranking prefers a pose the arm can
+      actually reach on a tabletop. Deep search into the ranked list partly recovers
+      this, which is what the two GraspGen-X volumes in the figure above bracket: the
+      gap between best-of-ten and all-of-ten is the risk carried by trusting the ranking
+      without a collision check.
+    </p>
+    <p>
+      The same strips as &sect;6, with a fourth panel for GGX at its best of ten
+      candidates. Everything left of that panel is unchanged, so the two versions of each
+      strip are interchangeable in the manuscript figure; the paper currently uses the
+      three-panel files.
+    </p>
+  </div>
+
+  {{STRIP_FIGURES_GGX}}
+</section>
+
+<section>
+  <h2><span class="num">§9</span> Where the model disagrees with the hardware</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      On the delicate subset the geometric model puts reflex above iterative,
+      {{DEL_REFLEX}} against {{DEL_ITER}}, while the hardware benchmark puts iterative above
+      reflex, 94% against 80%. The disagreement is expected and locates the boundary of what
+      this analysis explains. Every delicate-object failure the manuscript attributes to reflex
+      closure is a contact-dynamics event, objects skidding or being damaged during the faster
+      single-move closure, and none of those mechanisms exists in a kinematic model.
+    </p>
+    <p>
+      The result is therefore an operating-regime argument rather than a ranking. Geometry
+      accounts for why naive closure fails and why reflex retains the low-clearance region;
+      it does not account for the delicate-object advantage of iterative closure, which the
+      hold-phase force data has to carry.
+    </p>
+    <p>
+      Reflex closure is 4.0 points high in aggregate, 90.7% against 86.7%, which is six trials
+      and inside the hardware confidence interval. Iterative closure is the real disagreement
+      at 10.7 points, and &sect;7 locates it in a population of shallow support-plane grazes
+      the model counts as failures. The mechanism that dominates the
+      hardware reflex residual, the thumb backstop slipping during the closing sweep, has no
+      representation here at all.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§10</span> What this does not settle</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>Each item names the measurement that would close it.</p>
+    <ul class="tight">
+      <li>
+        <strong>Arm reachability is not modelled.</strong> The hand base is commanded directly,
+        so a start pose admitted here may be unreachable for the UR5e. Re-run the sweep with the
+        mink IK from <code>rh56_controller/grasp_viz.py --robot</code> in the loop and report the
+        admissible fraction that survives a UR5e IK solve with joint limits.
+      </li>
+      <li>
+        <strong>Object proxies are boxes, cylinders and spheres.</strong> Concave and irregular
+        geometry, which is where the manuscript reports most learned-planner failures, cannot be
+        represented. Export the measured meshes with
+        <code>tools/export_paper_object_proxy_meshes.py</code> and repeat with mesh collision.
+      </li>
+      <li>
+        <strong>The graze hypothesis is untested.</strong> &sect;7 attributes the 14-point
+        iterative shortfall to support-plane contact shallower than a couple of millimetres,
+        which hardware tolerates and the model does not. Testing it needs the per-trial
+        failure cause from the hardware benchmark: if iterative closure's 27 hardware failures
+        are dominated by object displacement rather than by aborted approaches, the hypothesis
+        is wrong. Nothing in the current archive records hardware failure causes.
+      </li>
+      <li>
+        <strong>Fingertip compliance is not modelled.</strong> The collision geometry is the
+        rigid part. Adding the silicone pad moves the fingertip surface outward by
+        1&ndash;2&nbsp;mm and makes the model more pessimistic, not less, so it cannot close
+        the gap, but it would change which capsule binds. <code>--radius-scale</code> sweeps
+        the capsule radii and not the mesh.
+      </li>
+      <li>
+        <strong>The reflex residual is three trials and cannot be resolved at this sample
+        size.</strong> Simulation gives 90.7% against 86.7% measured, inside the hardware 95%
+        confidence interval of 80.2&ndash;91.7%. Separating a real 2-point difference from
+        binomial noise needs roughly 1500 trials per strategy, which is not the experiment
+        this benchmark ran.
+      </li>
+      <li>
+        <strong>The support surface is the plane z = 0, not the measured table.</strong>
+        Registering the real table height would change the low-clearance boundary directly, since
+        every naive failure below {{NAIVE_ZERO_MAX}}&nbsp;mm is set by it.
+      </li>
+      <li>
+        <strong>Approach is a straight line to the pre-grasp pose.</strong> That is the
+        low-complexity motion-planning assumption the reviewer response named. Replacing it
+        with an L-shaped travel-then-descend move, <code>--approach-path via-overhead</code>,
+        reproduces 48.0%, 71.3% and 90.7% in all 450 trials, so every support-plane collision
+        reported here happens during closure rather than during the free-space transit.
+      </li>
+      <li>
+        <strong>Ten approach conditions per object is the hardware protocol, not a
+        convergence-checked sample.</strong> The dense grid in the region maps uses
+        {{GRID_N}} start poses per object and can be extended in
+        <code>run_reachability_sweep.py --sampler grid</code>.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">§11</span> Files and how to reproduce</h2>
+  <div class="rule"></div>
+  <div class="col">
+    <p>
+      Everything below is in the repository. Analysis code for this experiment lives in the
+      timestamped folder; the hand model, closure solver, capsule proxy and object set it
+      imports are the existing repository modules and were not duplicated.
+    </p>
+  </div>
+  <div class="paths">
+    <div><span>experiment folder</span><span>paper/9-8_wxie/20260908_strategy_reachability/</span></div>
+    <div><span>admissibility model</span><span>&hellip;/code/strategy_admissibility.py</span></div>
+    <div><span>sweep runner</span><span>&hellip;/code/run_reachability_sweep.py</span></div>
+    <div><span>envelope calibration</span><span>&hellip;/code/calibrate_capsule_envelope.py</span></div>
+    <div><span>figures</span><span>&hellip;/code/make_figures.py</span></div>
+    <div><span>renderer</span><span>&hellip;/code/mj_snap_rh56.py</span></div>
+    <div><span>GraspGen-X strategy</span><span>&hellip;/code/ggx_strategy.py</span></div>
+    <div><span>no-go volume sweep</span><span>&hellip;/code/run_nogo_volume.py</span></div>
+    <div><span>no-go volume render</span><span>&hellip;/code/render_nogo_volume.py</span></div>
+    <div><span>approach videos</span><span>&hellip;/code/render_approach_video.py</span></div>
+    <div><span>calibration record</span><span>&hellip;/results/calibration/README.md</span></div>
+    <div><span>results (CSV, JSON)</span><span>&hellip;/results/</span></div>
+    <div><span>LaTeX section</span><span>&hellip;/20260908-strategy_reachability.tex</span></div>
+    <div><span>closure solver</span><span>rh56_controller/grasp_geometry.py</span></div>
+    <div><span>capsule proxy</span><span>rh56_controller/capsule_hand_proxy.py</span></div>
+    <div><span>object set</span><span>rh56_controller/paper_v2_objects.py</span></div>
+    <div><span>hand model</span><span>h1_mujoco/inspire/inspire_grasp_scene.xml</span></div>
+    <div><span>superseded pre-grasp tool</span><span>tools/run_strategy_pregrasp_rate.py</span></div>
+  </div>
+<pre>cd /home/humanoid/Programs/rh56_controller
+R=paper/9-8_wxie/20260908_strategy_reachability
+
+# measure the capsule proxy's over-approximation against the collision geometry
+uv run python $R/code/calibrate_capsule_envelope.py --out $R/results/calibration
+# primary result: support plane checked against the collision geometry, no tolerance
+uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions --out $R/results \
+    --tag paper_conditions_meshfloor --contact-policy contact-fingers \
+    --approach-samples 24 --closure-samples 24 --floor-model mesh --floor-tolerance-mm 0
+# earlier variants, kept for the sensitivity table
+uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions --out $R/results
+uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions \
+    --naive-pose-policy final-orientation --tag sens_naive_final_orientation --out $R/results
+uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions \
+    --contact-policy contact-fingers --tag sens_contact_fingers --out $R/results
+
+# dense region maps
+uv run python $R/code/run_reachability_sweep.py --sampler grid --tag grid --out $R/results
+
+# GraspGen-X: meshes and inference need the GraspGen-X environment
+GGXPY=~/Programs/hand/external/GraspGenX/.venv/bin/python
+$GGXPY tools/export_paper_object_proxy_meshes.py \
+    --out artifacts/paper_15_object_grasp_success/proxy_meshes
+$GGXPY tools/run_graspgenx_paper_object_inference.py \
+    --graspgenx-root ~/Programs/hand/external/GraspGenX \
+    --mesh-dir artifacts/paper_15_object_grasp_success/proxy_meshes \
+    --out artifacts/paper_15_object_grasp_success/graspgenx_candidates
+
+# four-strategy sweep, and the no-go volume around one object
+uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions \
+    --contact-policy contact-fingers \
+    --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
+    --tag paper_conditions_ggx_enveloping --out $R/results
+uv run python $R/code/run_nogo_volume.py --object paper_nut \
+    --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
+    --verify-monotonic 6 --out $R/results
+MUJOCO_GL=egl uv run python $R/code/render_nogo_volume.py --object paper_nut \
+    --crop-mm 150 --plain-floor --show-hand \
+    --out $R/figures/20260908-nogo_volumes_nut.png
+
+# figures and this page
+uv run python $R/code/make_figures.py
+uv run python $R/code/build_docpage.py
+
+# look at any configuration
+MUJOCO_GL=egl uv run python $R/code/mj_snap_rh56.py --object paper_nut \
+    --strategy all --stage terminal --views side,iso --out /tmp/look.png</pre>
+</section>
+
+<footer>
+  Generated {{GENERATED}} from {{N_TRIALS}} simulated trials per variant ·
+  rh56_controller · simulation only, no hardware in the loop
+</footer>
+
+</div>

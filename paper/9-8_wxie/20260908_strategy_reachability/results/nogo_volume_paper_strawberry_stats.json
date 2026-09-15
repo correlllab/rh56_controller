@@ -1,0 +1,27 @@
+{
+  "naive": {
+    "locked_fraction": 1.0,
+    "median_floor_mm": 315.0,
+    "never_admissible_fraction": 1.0
+  },
+  "iterative_closure": {
+    "locked_fraction": 0.7694859038142621,
+    "median_floor_mm": 315.0,
+    "never_admissible_fraction": 0.7732426303854876
+  },
+  "thumb_reflex": {
+    "locked_fraction": 0.533167495854063,
+    "median_floor_mm": 315.0,
+    "never_admissible_fraction": 0.6825396825396826
+  },
+  "ggx_best": {
+    "locked_fraction": 1.0,
+    "median_floor_mm": 315.0,
+    "never_admissible_fraction": 1.0
+  },
+  "ggx_worst": {
+    "locked_fraction": 1.0,
+    "median_floor_mm": 315.0,
+    "never_admissible_fraction": 1.0
+  }
+}

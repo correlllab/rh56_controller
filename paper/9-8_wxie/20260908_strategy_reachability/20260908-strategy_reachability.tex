@@ -1,0 +1,290 @@
+% =====================================================================
+% Strategy reachability / no-go analysis  --  standalone section
+% Generated 2026-09-09 from paper/9-8_wxie/20260908_strategy_reachability/
+%
+% This file is self-contained and does NOT modify root_wxie.tex.
+% To use it, copy the figure files from
+%     paper/9-8_wxie/20260908_strategy_reachability/figures/
+% into the paper's plot/ directory and add
+%     \input{20260908-strategy_reachability}
+% where Sec. III.C (the current no-go subsection) sits.
+%
+% It is written to REPLACE the retained proxy-model subsection
+% (\label{sec:nogo_analysis}) and its Fig. 7.  Labels carry the suffix
+% _v2 so the two can coexist while the swap is made.
+%
+% Figure 1 below is a drop-in REPLACEMENT for fig:grasp_strategies: it
+% keeps img/grasp_strategies_complex.png and adds two no-go strips whose
+% three columns line up with the three photographed strategies.
+%
+% Numbers here are produced by:
+%   code/calibrate_capsule_envelope.py --out results/calibration
+%   code/run_reachability_sweep.py --sampler paper-conditions \
+%       --contact-policy contact-fingers --floor-model mesh \
+%       --floor-tolerance-mm 0 --tag paper_conditions_meshfloor
+%   code/run_nogo_volume.py --object paper_strawberry --region quarter-ball \
+%       --full-grid --floor-model mesh --floor-tolerance-mm 0
+%   code/render_strips.sh   (render_nogo_volume.py --strip --panels-dir,
+%                            then compose_nogo_figure.py for the lettered grid)
+% Calibration and ablations: results/calibration/README.md
+% =====================================================================
+
+\subsection{Strategy-Conditioned Approach Feasibility}
+\label{sec:nogo_analysis_v2}
+
+A terminal grasp configuration does not specify a collision-free motion to that
+configuration. Because the RH56 finger linkages are coupled, a commanded width
+also sets fingertip position and the hand pose required to hold a grasp plane, so
+the admissible set depends on which closure strategy issues the command. We
+model each strategy as an ordered sequence of waypoints in hand-base position,
+hand-base rotation, and the six actuator commands, and check the whole commanded
+motion---approach and closure---against the object and the support surface.
+
+Let $\mathbf{x}$ be the world hand-base position at which the motion starts and
+let $\sigma$ index the strategies. Writing $A(\mathbf{x},\sigma)=1$ when the
+commanded motion is admissible, we report
+\begin{equation}
+  \nu(\sigma) = \frac{1}{|\mathcal{X}|}\sum_{\mathbf{x}\in\mathcal{X}} A(\mathbf{x},\sigma),
+  \label{eq:admissible_fraction}
+\end{equation}
+the fraction of sampled start poses admitted for that strategy. The sample
+$\mathcal{X}$ is the ten approach conditions per object used on hardware---one
+adversarial pose level with the grasp point, one overhead, and eight at
+\SI{150}{\milli\metre} and \SI{250}{\milli\metre} above it with
+$\pm\SI{30}{\milli\metre}$ of lateral jitter---over the same 15 objects, giving
+150 trials per strategy.
+
+Admissibility requires three geometric conditions. No part of the hand may
+penetrate the support plane; no part of the hand outside the planned contact
+fingers may penetrate the object; and the antipodal contact midpoint reached at
+the end of the motion must lie inside the object. The planned width is the
+object width plus \SI{20}{\milli\metre}, so a correctly executed grasp leaves
+about \SI{10}{\milli\metre} of clearance per side and any contact in this model
+is unintended. The three strategies differ only in what the wrist does during
+closure: naive closure holds the wrist at the pose that straddled the object with
+the hand open, iterative closure moves the wrist along the analytical width
+sequence, and reflex closure holds the wrist at the final analytical pose while
+only the opposing fingers move.
+
+The support-plane test is run against the hand's own collision geometry---palm
+boxes and cylinder, phalanx meshes---so it carries no clearance tolerance. A
+faster 13-capsule proxy of the hand is used for the object tests, and its
+vertical over-approximation was measured rather than assumed: over the 41{,}250
+hand states the three strategies command, the lowest point of the capsule proxy
+lies a median of \SI{3.4}{\milli\metre} below the lowest point of the collision
+geometry (5th to 95th percentile \SI{1.8}{}--\SI{6.8}{\milli\metre}), and it lies
+below it at every state, so the capsule test is one-sided. The capsule that
+reaches lowest is a distal phalanx in 96.6\% of those states. Because MuJoCo
+collides a mesh as its convex hull, the same measurement was repeated against the
+undecimated visual meshes; the two agree to a median of
+\SI{-0.11}{\milli\metre}, so the collision geometry is the part.
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{img/grasp_strategies_complex.png}\\[3pt]
+  % Both objects and all four strategies in one lettered grid; produced by
+  % code/render_strips.sh (render_nogo_volume.py --panels-dir, then
+  % compose_nogo_figure.py). The three-strategy strips
+  % plot/20260908-nogo_strip_{strawberry,can}.png remain available if the
+  % GraspGen-X column is dropped.
+  \includegraphics[width=0.95\columnwidth]{plot/20260908-nogo_grid_strawberry_can.png}
+  \caption{\textbf{Top:} the three grasp strategies---iterative (left), reflex
+  (centre), naive (right). In the iterative approach the hand rotates downward
+  from a pre-grasp pose to reach the desired grasp pose. In the reflex approach
+  the fingers remain open until the thumb makes contact with the object. In the
+  naive approach the fingers are treated like a parallel jaw gripper prior to
+  closure, leading to ground collisions for small objects.
+  \textbf{Bottom:} start poses each strategy can and cannot execute from, one
+  column per strategy with GraspGen-X at its best of 10 ranked candidates, for
+  (A) the strawberry, grasp point \SI{15}{\milli\metre} above the table, and
+  (B) the can, \SI{110}{\milli\metre}. The sampled region is the quarter ball
+  of radius \SI{300}{\milli\metre} above the grasp point and on the approach
+  side, the poses an arm is commanded from; the red solid is the subset from
+  which the strategy cannot execute and the green shell is the rest, so the two
+  together are the region each percentage is a fraction of. The object is drawn
+  opaque with a post through it. At the strawberry, clearance during closure
+  decides the outcome and the strategies separate: reflex closure leaves 53.3\%
+  of the region unreachable, iterative closure 76.9\%, and naive closure and
+  GraspGen-X all of it. At the can the support surface is never the binding
+  constraint and the three hand-designed sets nearly coincide, 34.0\%, 32.1\%
+  and 34.0\%, while GraspGen-X leaves 67.7\% unreachable at every sampled
+  height, a restriction on approach direction rather than on clearance.
+  Surfaces are the half level of the \SI{30}{\milli\metre} sweep grid, refined
+  and low-passed, so the smoothness is presentational and the boundary is
+  resolved to \SI{30}{\milli\metre}.}
+  \label{fig:grasp_strategies_v2}
+\end{figure}
+
+Naive closure is admissible in 48.0\% of trials, iterative closure in 71.3\% and
+reflex closure in 90.7\%, against measured hardware success rates of 48.0\%,
+82.0\% and 86.7\% over 150 trials each. Naive and reflex closure fall inside the
+hardware 95\% confidence intervals (39.8--56.3\% and 80.2--91.7\%); iterative
+closure is 10.7 points low. No parameter in the model is fitted to a success
+rate.
+
+The naive failures separate into two mechanisms, and neither depends on the start
+pose. Terminal misalignment accounts for 60 of 150 trials and occurs for no other
+hand-designed strategy: holding the wrist fixed through closure leaves the
+coupled fingertip travel uncompensated, displacing the contact midpoint by a
+median \SI{17.4}{\milli\metre} (\SI{16.3}{}--\SI{18.6}{\milli\metre}), which
+carries it outside every object of grasp width \SI{25}{\milli\metre} or less.
+Iterative and reflex closure reach their targets to within
+\SI{0.004}{\milli\metre} by construction. The result is a step in grasp-point
+height rather than a gradient: naive closure admits none of the 70 trials on
+objects whose grasp point lies at or below \SI{15}{\milli\metre} and 72 of the 80
+at or above \SI{29}{\milli\metre}, and its rate is identical at both elevated
+approach heights (53.3\% at \SI{150}{\milli\metre} and at
+\SI{250}{\milli\metre}) because the mechanism is set by object geometry.
+Support-surface collision is recorded in 76 naive trials, at a median
+penetration of \SI{7.9}{\milli\metre}. The two failure modes overlap rather
+than add: every one of the 60 misaligned trials also collides with the support
+surface, the index intermediate phalanx reaching the plane in 54 of them at a
+median depth of \SI{6.1}{\milli\metre}, so the 78 unreachable naive trials are
+the 76 support collisions plus 2 premature object contacts with no collision.
+The counts in Table~\ref{tab:ggx_admissibility} are of trials showing each mode
+and not a partition of the failures.
+
+Reflex closure retains the low-clearance region that iterative closure loses, and
+the advantage is confined to the low approach. At the \SI{250}{\milli\metre}
+approach height the two are identical at 100.0\%; at \SI{150}{\milli\metre}
+reflex closure holds 100.0\% while iterative closure falls to 53.3\%, the same
+rate as naive. Reflex closure is also the only hand-designed strategy admitting
+any trial at the adversarial condition level with the grasp point (1 of 15,
+against 0 and 0). Its 12 support-plane collisions are uniformly deep---the
+shallowest is \SI{51.5}{\milli\metre} and the median
+\SI{100.9}{\milli\metre}---and correspond to poses no clearance allowance
+recovers, whereas 13 of iterative closure's 41 collisions are grazes no deeper
+than \SI{1.7}{\milli\metre}.
+
+That graze population is where the 10.7-point iterative residual sits. Forgiving
+support-plane contact shallower than \SI{2}{\milli\metre} moves iterative closure
+to 79.3\% and shallower than \SI{5}{\milli\metre} to 84.7\%, bracketing the
+measured 82.0\%, on the argument that a silicone fingertip deflects at that depth.
+Naive and reflex closure do not move, because neither has a shallow collision to
+forgive. Testing the argument needs the per-trial failure cause from the hardware
+benchmark, which the archive does not record, so the primary configuration
+forgives nothing.
+
+\subsection{A Learned Generator Under the Same Test}
+\label{sec:ggx_reachability_v2}
+
+The same model accepts a learned grasp generator without modification.
+GraspGen-X proposes a 6-DoF hand pose rather than an aperture, and its execution
+has the shape of the wrist-fixed strategies: approach the proposed pose with the
+hand open, then interpolate the descriptor's closure with the wrist held still.
+We run the released model with the official Inspire-hand descriptor over the same
+15 object proxies, producing 100 ranked candidates each, and test candidates in
+descending confidence order; a start pose is admissible when any of the top 20
+executes cleanly, and a pose with no clean candidate is a planning failure. Its
+terminal check cannot be the antipodal-midpoint test, which presumes a precision
+pinch, so we use the descriptor's own declared capture volume and ask whether the
+proposal engages the object on its terms.
+
+\begin{table}[t]
+  \centering
+  \caption{All four strategies over 15 objects and ten approach conditions,
+  support plane checked against the hand's collision geometry with no clearance
+  tolerance. A trial can trigger more than one failure mode.}
+  \label{tab:ggx_admissibility}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lcccc}
+    \toprule
+    & & Support & Premature & Terminal \\
+    Strategy & Admissible & collision & contact & miss \\
+    \midrule
+    Naive       & 72/150 (48.0\%)  & 76 & 10 & 60 \\
+    Iterative   & 107/150 (71.3\%) & 41 & 10 &  0 \\
+    Reflex      & 136/150 (90.7\%) & 12 &  5 &  0 \\
+    GraspGen-X  & 41/150 (27.3\%)          & 91 & 92 & 32 \\
+    \midrule
+    \multicolumn{2}{l}{Hardware success, 150 trials each} \\
+    Naive / Iterative / Reflex & \multicolumn{4}{c}{48.0\% / 82.0\% / 86.7\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+GraspGen-X is admissible in 27.3\% of trials, below every hand-designed strategy.
+The ranking accounts for much of this: its top-ranked proposal executes cleanly in
+none of the 41 trials that succeed at all, the first collision-free candidate sits
+at rank 3 by median, and 12 of the 41 are found only at rank 10 or deeper in the 20
+tested. Object coverage accounts for the rest: the generator admits no approach
+condition at all for 9 of the 15 objects, including every object in the delicate
+set (0.0\% across those 50 trials against 41.0\% on the YCB-like subset).
+
+This is a statement about the interface rather than about the generator's grasp
+quality. GraspGen-X is given an object mesh and no support surface, so it
+proposes poses from every direction including from beneath the table, and nothing
+in its confidence ordering prefers a pose the arm can reach on a tabletop. A
+collision check over a deep candidate list recovers part of the gap, and the
+depth required is the practical cost: trusting the ranking without such a check
+would leave most of these grasps unexecutable.
+
+\subsection{Limits}
+\label{sec:nogo_limits_v2}
+
+The analysis is geometric and bounds what it can explain. On the delicate subset
+it places reflex closure above iterative closure, 90.0\% (45/50) against 66.0\%
+(33/50), and the hardware benchmark places iterative above reflex, 94\% against
+80\%. The
+delicate-object failures attributed to reflex closure in
+Sec.~\ref{sec:physical_grasp_results} are contact-dynamics events---objects
+skidding or being damaged during the faster single-move closure---and no such
+mechanism exists in a kinematic model. Every reflex failure here is a support
+collision or premature contact. The result is therefore an operating-regime
+argument: geometry accounts for the naive failures and for the reflex clearance
+advantage at low approaches, and the hold-phase force data carries the
+delicate-object case.
+
+Three further limits are quantified rather than asserted. The model omits arm
+inverse kinematics. It uses box, cylinder and sphere object proxies rather than
+measured meshes. And it assumes a straight-line approach to the pre-grasp pose;
+replacing that straight line with an L-shaped travel-then-descend move reproduces
+48.0\%, 71.3\% and 90.7\% in all 450 trials, so every support-plane collision
+reported here happens during closure rather than during transit. Fingertip
+compliance is not modelled at all: adding the silicone pad would move the
+fingertip surface outward and make the model more pessimistic, so it cannot
+account for the iterative residual.
+
+% ---------------------------------------------------------------------
+% APPENDIX MATERIAL
+% ---------------------------------------------------------------------
+
+\begin{table}[t]
+  \centering
+  \caption{Sensitivity of the admissible fraction to the support-plane geometry.
+  The capsule tolerances span the measured 5th to 95th percentile of the capsule
+  proxy's over-approximation; \SI{10}{\milli\metre} is the value an earlier
+  version of this analysis fitted to the hardware rates. The strategy ordering is
+  unchanged throughout, and naive closure is insensitive to every setting because
+  its failures are terminal misalignments.}
+  \label{tab:admissibility_sensitivity}
+  \begin{tabular}{lccc}
+    \toprule
+    Support-plane geometry & Naive & Iterative & Reflex \\
+    \midrule
+    Capsule proxy, tol.\ \SI{1.8}{\milli\metre}  & 48.0\% & 68.0\% & 90.7\% \\
+    Capsule proxy, tol.\ \SI{3.4}{\milli\metre}  & 48.0\% & 68.0\% & 90.7\% \\
+    Collision geometry, no tolerance (primary)   & 48.0\% & 71.3\% & 90.7\% \\
+    Capsule proxy, tol.\ \SI{6.8}{\milli\metre}  & 48.0\% & 79.3\% & 90.7\% \\
+    Capsule proxy, tol.\ \SI{10}{\milli\metre}   & 48.0\% & 84.7\% & 90.7\% \\
+    \midrule
+    Hardware benchmark (measured success) & 48.0\% & 82.0\% & 86.7\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two model inputs were corrected before the rates above were computed, and their
+contributions separate cleanly. Measured object cross-sections replace first-pass
+estimates for six objects---and, for the small screwdriver, the handle height is
+separated from the \SI{15}{\milli\metre} width it is pinched across, which places
+its grasp point at \SI{12}{\milli\metre} rather than \SI{7.5}{\milli\metre} and
+is worth 5 iterative and 9 reflex trials---and the approach conditions use the
+$\pm\SI{3}{\centi\metre}$ lateral jitter and elevated heights stated in the
+hardware protocol in place of a $\pm\SI{150}{\milli\metre}$ reconstruction. With
+the estimated sizes and the wide reconstruction the model gives 48.7\%, 65.3\%
+and 77.3\%; correcting only the conditions gives 60.0\%, 84.7\% and 90.7\%;
+correcting only the sizes gives 42.0\%, 65.3\% and 82.7\%. The conditions carry
+iterative closure, because the $\pm\SI{150}{\milli\metre}$ starts require a
+diagonal transit that drives the fingers through the support plane on the way in;
+the sizes carry naive closure, by moving two more objects below the height at
+which its terminal contact misses.

@@ -18,7 +18,12 @@ logs_old/
 plots/
 mink_vs_analytical/
 mink_vs_analytical_200widths/
-paper/
+# The paper tree stays out of Git except the strategy reachability analysis,
+# whose code, per-trial results and figures the paper's Sec. III.A/IV.C cite.
+paper/*
+!paper/9-8_wxie/
+paper/9-8_wxie/*
+!paper/9-8_wxie/20260908_strategy_reachability/
 
 # Project media is hosted on the project page; keep local video exports out of Git.
 resource/video/

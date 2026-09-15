@@ -51,6 +51,7 @@ For other robot stacks, start with the profile chooser in [docs/INSTALL_PROFILES
 | Force control UI | [docs/force_control.md](docs/force_control.md) |
 | Force visualization | [docs/force_viz.md](docs/force_viz.md) |
 | Local artifacts policy | [docs/ARTIFACTS.md](docs/ARTIFACTS.md) |
+| ICRA strategy reachability analysis (paper Sec. III.A, IV.C: code, per-trial CSVs, figures) | [paper/9-8_wxie/20260908_strategy_reachability/README.md](paper/9-8_wxie/20260908_strategy_reachability/README.md) |
 
 ## Repository Boundaries
 

@@ -1,0 +1,1274 @@
+{
+  "generated_utc": "2026-09-09T06:07:30.520184+00:00",
+  "simulation_only": true,
+  "hardware_required": false,
+  "sampler": "grid",
+  "n_conditions": 208,
+  "n_objects": 15,
+  "n_trials": 9360,
+  "xml_path": "/home/humanoid/Programs/rh56_controller/h1_mujoco/inspire/inspire_grasp_scene.xml",
+  "object_width_offset_mm": 20.0,
+  "naive_pose_policy": "open-pose",
+  "iterative_step_mm": 10.0,
+  "approach_samples": 24,
+  "closure_samples": 24,
+  "floor_tolerance_mm": 3.0,
+  "contact_tolerance_mm": 2.0,
+  "radius_scale": 1.0,
+  "conditions": [
+    {
+      "condition": "h+0_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+0_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "h+20_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+20_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 20.0
+    },
+    {
+      "condition": "h+40_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+40_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 40.0
+    },
+    {
+      "condition": "h+60_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+60_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 60.0
+    },
+    {
+      "condition": "h+80_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+80_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 80.0
+    },
+    {
+      "condition": "h+100_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+100_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 100.0
+    },
+    {
+      "condition": "h+120_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+120_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 120.0
+    },
+    {
+      "condition": "h+140_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+140_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 140.0
+    },
+    {
+      "condition": "h+160_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+160_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 160.0
+    },
+    {
+      "condition": "h+180_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+180_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 180.0
+    },
+    {
+      "condition": "h+200_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+200_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 200.0
+    },
+    {
+      "condition": "h+220_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+220_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 220.0
+    },
+    {
+      "condition": "h+240_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+240_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 240.0
+    },
+    {
+      "condition": "h+260_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+260_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 260.0
+    },
+    {
+      "condition": "h+280_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+280_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 280.0
+    },
+    {
+      "condition": "h+300_d-150",
+      "standoff_mm": 250.0,
+      "lateral_mm": -150.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d-125",
+      "standoff_mm": 250.0,
+      "lateral_mm": -125.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d-100",
+      "standoff_mm": 250.0,
+      "lateral_mm": -100.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d-75",
+      "standoff_mm": 250.0,
+      "lateral_mm": -75.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d-50",
+      "standoff_mm": 250.0,
+      "lateral_mm": -50.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d-25",
+      "standoff_mm": 250.0,
+      "lateral_mm": -25.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+0",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+25",
+      "standoff_mm": 250.0,
+      "lateral_mm": 25.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+50",
+      "standoff_mm": 250.0,
+      "lateral_mm": 50.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+75",
+      "standoff_mm": 250.0,
+      "lateral_mm": 75.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+100",
+      "standoff_mm": 250.0,
+      "lateral_mm": 100.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+125",
+      "standoff_mm": 250.0,
+      "lateral_mm": 125.0,
+      "height_mm": 300.0
+    },
+    {
+      "condition": "h+300_d+150",
+      "standoff_mm": 250.0,
+      "lateral_mm": 150.0,
+      "height_mm": 300.0
+    }
+  ],
+  "failure_modes": [
+    "table_collision",
+    "premature_object_contact",
+    "terminal_misalignment"
+  ],
+  "notes": "Geometric admissibility of the commanded approach and closure motion against the object proxy and the support plane. Not a grasp-success prediction: no dynamics, friction, or object compliance are modelled."
+}

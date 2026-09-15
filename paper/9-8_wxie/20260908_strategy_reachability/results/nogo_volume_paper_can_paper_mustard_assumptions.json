@@ -1,0 +1,37 @@
+{
+  "generated_utc": "2026-09-09T16:19:22.877436+00:00",
+  "simulation_only": true,
+  "object": "paper_can",
+  "collision_shape": "cylinder",
+  "grasp_mode": "plane5",
+  "contact_policy": "contact-fingers",
+  "yaw_mode": "radial",
+  "clutter": "paper_mustard",
+  "clutter_offset_mm": [
+    0.0,
+    115.0
+  ],
+  "iterative_step_mm": 15.0,
+  "ggx_topk": 10,
+  "n_ggx_candidates": 10,
+  "grid": {
+    "xy_range_mm": [
+      -180.0,
+      180.0
+    ],
+    "xy_step_mm": 30.0,
+    "z_range_mm": [
+      0.0,
+      330.0
+    ],
+    "z_step_mm": 30.0,
+    "n_poses": 2028
+  },
+  "layers": [
+    "naive",
+    "iterative_closure",
+    "thumb_reflex",
+    "ggx_best",
+    "ggx_worst"
+  ]
+}

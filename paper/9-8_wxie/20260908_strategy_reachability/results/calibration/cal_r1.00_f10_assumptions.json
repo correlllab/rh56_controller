@@ -1,0 +1,91 @@
+{
+  "generated_utc": "2026-09-09T17:01:16.040767+00:00",
+  "simulation_only": true,
+  "hardware_required": false,
+  "sampler": "paper-conditions",
+  "n_conditions": 10,
+  "n_objects": 15,
+  "n_trials": 450,
+  "xml_path": "/home/humanoid/Programs/rh56_controller/h1_mujoco/inspire/inspire_grasp_scene.xml",
+  "object_width_offset_mm": 20.0,
+  "naive_pose_policy": "open-pose",
+  "iterative_step_mm": 10.0,
+  "approach_samples": 24,
+  "closure_samples": 24,
+  "floor_tolerance_mm": 10.0,
+  "contact_tolerance_mm": 2.0,
+  "contact_policy": "contact-fingers",
+  "approach_path": "direct",
+  "ggx_candidates": null,
+  "ggx_topk": null,
+  "radius_scale": 1.0,
+  "conditions": [
+    {
+      "condition": "P1_level",
+      "standoff_mm": 250.0,
+      "lateral_mm": 0.0,
+      "height_mm": 0.0
+    },
+    {
+      "condition": "P2_overhead",
+      "standoff_mm": 0.0,
+      "lateral_mm": 0.0,
+      "height_mm": 250.0
+    },
+    {
+      "condition": "L1_d-30",
+      "standoff_mm": 250.0,
+      "lateral_mm": -30.0,
+      "height_mm": 150.0
+    },
+    {
+      "condition": "L1_d-10",
+      "standoff_mm": 250.0,
+      "lateral_mm": -10.0,
+      "height_mm": 150.0
+    },
+    {
+      "condition": "L1_d+10",
+      "standoff_mm": 250.0,
+      "lateral_mm": 10.0,
+      "height_mm": 150.0
+    },
+    {
+      "condition": "L1_d+30",
+      "standoff_mm": 250.0,
+      "lateral_mm": 30.0,
+      "height_mm": 150.0
+    },
+    {
+      "condition": "L2_d-30",
+      "standoff_mm": 250.0,
+      "lateral_mm": -30.0,
+      "height_mm": 250.0
+    },
+    {
+      "condition": "L2_d-10",
+      "standoff_mm": 250.0,
+      "lateral_mm": -10.0,
+      "height_mm": 250.0
+    },
+    {
+      "condition": "L2_d+10",
+      "standoff_mm": 250.0,
+      "lateral_mm": 10.0,
+      "height_mm": 250.0
+    },
+    {
+      "condition": "L2_d+30",
+      "standoff_mm": 250.0,
+      "lateral_mm": 30.0,
+      "height_mm": 250.0
+    }
+  ],
+  "failure_modes": [
+    "table_collision",
+    "premature_object_contact",
+    "terminal_misalignment",
+    "obstacle_collision"
+  ],
+  "notes": "Geometric admissibility of the commanded approach and closure motion against the object proxy and the support plane. Not a grasp-success prediction: no dynamics, friction, or object compliance are modelled."
+}

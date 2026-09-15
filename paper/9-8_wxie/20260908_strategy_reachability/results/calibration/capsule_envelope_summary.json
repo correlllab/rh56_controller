@@ -1,0 +1,91 @@
+{
+  "generated_utc": "2026-09-10T23:03:53.455442+00:00",
+  "simulation_only": true,
+  "hardware_required": false,
+  "purpose": "Measure the capsule proxy's vertical over-approximation against the model's own collision geometry, so the support-plane tolerance is a measured quantity rather than a parameter fitted to hardware success rates.",
+  "xml_path": "/home/humanoid/Programs/rh56_controller/h1_mujoco/inspire/inspire_grasp_scene.xml",
+  "n_objects": 15,
+  "n_conditions": 10,
+  "n_samples": 41250,
+  "decision_band_mm": 25.0,
+  "delta_all": {
+    "n": 41250,
+    "min_mm": 0.3220290366831302,
+    "p05_mm": 1.7771400109149251,
+    "median_mm": 4.201324138934911,
+    "mean_mm": 4.513543484043379,
+    "p95_mm": 6.878489360980206,
+    "max_mm": 6.894519562761298
+  },
+  "delta_visual_all": {
+    "n": 41250,
+    "min_mm": -0.32211270662629854,
+    "p05_mm": -0.31271488424544636,
+    "median_mm": -0.003021288319221549,
+    "mean_mm": -0.026867136938335808,
+    "p95_mm": 0.28659376975354034,
+    "max_mm": 0.37789069806923314
+  },
+  "delta_visual_decision_band": {
+    "n": 22813,
+    "min_mm": -0.32211270662629854,
+    "p05_mm": -0.31394345141534663,
+    "median_mm": -0.10628871423412622,
+    "mean_mm": -0.09884160874185463,
+    "p95_mm": 0.19715714824897201,
+    "max_mm": 0.37789069806923314
+  },
+  "collision_encloses_visual_everywhere": false,
+  "delta_decision_band": {
+    "n": 22813,
+    "min_mm": 0.3220290366831493,
+    "p05_mm": 1.7771400109149234,
+    "median_mm": 3.4298150429049237,
+    "mean_mm": 3.7520628710529933,
+    "p95_mm": 6.791074511937438,
+    "max_mm": 6.894492664954919
+  },
+  "delta_by_strategy_in_band": {
+    "naive": {
+      "n": 3218,
+      "min_mm": 4.138440307335503,
+      "p05_mm": 4.2013241389349165,
+      "median_mm": 5.9278876778686085,
+      "mean_mm": 5.449576829500439,
+      "p95_mm": 6.791074511937438,
+      "max_mm": 6.8927452410770735
+    },
+    "iterative_closure": {
+      "n": 16928,
+      "min_mm": 0.3220290366831632,
+      "p05_mm": 3.0012575108191077,
+      "median_mm": 3.395321748977267,
+      "mean_mm": 3.686110718868903,
+      "p95_mm": 6.808639217542371,
+      "max_mm": 6.894492664954919
+    },
+    "thumb_reflex": {
+      "n": 2667,
+      "min_mm": 0.3220290366831493,
+      "p05_mm": 0.3220290366831493,
+      "median_mm": 3.03307062828132,
+      "mean_mm": 2.122455864636953,
+      "p95_mm": 3.1072997798235242,
+      "max_mm": 6.813882973963701
+    }
+  },
+  "binding_capsule_counts_in_band": {
+    "thumb/thumb_3": 18236,
+    "middle/middle_1": 2196,
+    "index/index_1": 1610,
+    "thumb/thumb_2": 771
+  },
+  "yaw_invariance_max_spread_mm": 0.0,
+  "capsule_encloses_mesh_everywhere": true,
+  "recommended_tolerance_mm": 3.4298150429049237,
+  "bounding_tolerances_mm": [
+    1.7771400109149234,
+    6.791074511937438
+  ],
+  "samples_csv": "capsule_envelope_samples.csv"
+}
