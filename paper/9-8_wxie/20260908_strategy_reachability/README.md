@@ -131,7 +131,14 @@ figure's can GGX panel. The full-grid rerun was stopped. The hand strategies
 read 35.2 / 35.2 / 33.0% on the clipped grid against 34.0 / 34.0 / 32.1% on
 the full one. `ggx_worst`, every one of the 100 executing, is 0% of the region
 on both grids. The k = 10 can strip is kept as
-`figures/20260908-nogo_strip_can_ggx_k10.png` (67.7%).
+`figures/20260908-nogo_strip_can_ggx_k10.png` (67.7%), and
+`figures/20260908-nogo_grid_strawberry_can_split.png` shows both depths in one
+panel, split corner to corner. Cost of the depth: GGX returns its 100 proposals
+in 0.24 s per object (1,000 sampled, top 100 kept, RTX 4070 Ti SUPER;
+`inference_seconds` in `graspgenx_candidates/manifest.json`, first call 0.71 s
+warm-up), and the admissibility check costs 0.20 s per candidate at 24 + 24
+samples on one CPU core in Python, so the median success (20th proposal) spends
+about 4 s in the check and a failed condition about 20 s.
 
 Everything else the draft quotes from this analysis (48.0 / 71.3 / 90.7%;
 41 and 12 iterative and reflex collisions; 13 grazes at or under 1.7 mm; the
@@ -159,7 +166,8 @@ code/
 results/                      per-trial CSVs + assumptions JSON per variant; *_stats.json per strip
 results/calibration/          capsule-envelope samples, tolerance sweeps, ablations (README.md)
 figures/                      PDF (LaTeX) and PNG (doc page); panels/ holds the bare strip panels
-figures/20260908-nogo_grid_strawberry_can.png   the paper figure (Fig. 5 bottom)
+figures/20260908-nogo_grid_strawberry_can.png   the paper figure (Fig. 5 bottom); .pdf alongside
+figures/20260908-nogo_grid_strawberry_can_split.png   variant: GGX panel split k = 10 / k = 100
 20260908-strategy_reachability.html   the doc page
 20260908-strategy_reachability.tex    standalone LaTeX section (does not touch root_wxie.tex)
 ```

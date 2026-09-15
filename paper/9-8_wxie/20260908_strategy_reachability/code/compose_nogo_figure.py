@@ -8,11 +8,21 @@ lettered row per object, the unreachable fraction over each panel, a shared
 reachable/unreachable key, and a scale bar on the first panel of every row. Type
 is set in the paper's serif face so the figure reads as part of the page.
 
+A row may name a second strip; with --split LAYER that layer's panel is then
+drawn as a diagonal split, the second strip's render in the top-left half and
+the row's own in the bottom-right, so one panel shows two search depths of the
+same planner without taking more room than its neighbours.
+
 Usage:
     uv run python compose_nogo_figure.py --panels-dir ../figures/panels \\
         --row A Strawberry 20260908-nogo_strip_strawberry_ggx \\
         --row B Can 20260908-nogo_strip_can_ggx \\
         --out ../figures/20260908-nogo_grid_strawberry_can.png
+    uv run python compose_nogo_figure.py --panels-dir ../figures/panels \\
+        --row A Strawberry 20260908-nogo_strip_strawberry_ggx 20260908-nogo_strip_strawberry_ggx \\
+        --row B Can 20260908-nogo_strip_can_ggx 20260908-nogo_strip_can_ggx_k10 \\
+        --split ggx_best --split-labels "k = 10" "k = 100" \\
+        --out ../figures/20260908-nogo_grid_strawberry_can_split.png --pdf
 """
 
 from __future__ import annotations
@@ -77,6 +87,38 @@ def draw_scale_bar(draw: ImageDraw.ImageDraw, x0: int, y_bottom: int, length_mm:
               fill=(40, 40, 40), font=font)
 
 
+def diagonal_split(top_left: Image.Image, bottom_right: Image.Image,
+                   labels: tuple[str, str], font, rule_px: int) -> Image.Image:
+    """One panel from two renders of the same camera, split corner to corner.
+
+    The divider runs from the top-right corner to the bottom-left, so the
+    top-left half is one render and the bottom-right half the other; both keep
+    the panel's full scale, which is what makes the two volumes comparable to
+    the neighbouring panels. A light rule marks the seam and each half carries
+    its label in the corner it owns.
+    """
+
+    import numpy as np
+
+    w, h = top_left.size
+    xs = np.arange(w)[None, :] / w
+    ys = np.arange(h)[:, None] / h
+    upper = (xs + ys) < 1.0
+    a = np.asarray(top_left.convert("RGB"))
+    b = np.asarray(bottom_right.convert("RGB"))
+    out = Image.fromarray(np.where(upper[:, :, None], a, b).astype(np.uint8))
+    draw = ImageDraw.Draw(out)
+    draw.line([(w - 1, 0), (0, h - 1)], fill=(255, 255, 255), width=rule_px + 2)
+    draw.line([(w - 1, 0), (0, h - 1)], fill=(60, 60, 60), width=rule_px)
+    pad = round(w * 0.03)
+    halo = dict(stroke_width=max(2, rule_px), stroke_fill=(255, 255, 255))
+    draw.text((pad, pad), labels[0], fill=INK, font=font, **halo)
+    tw = text_w(font, labels[1])
+    draw.text((w - pad - tw, h - pad - round(font.size * 1.2)), labels[1],
+              fill=INK, font=font, **halo)
+    return out
+
+
 def write_pdf(sheet: Image.Image, path: Path, dpi: int) -> None:
     """The sheet as a single-page PDF, Flate-compressed rather than JPEG.
 
@@ -103,10 +145,17 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--panels-dir", type=Path, required=True,
                     help="Directory written by render_nogo_volume.py --panels-dir.")
-    ap.add_argument("--row", nargs=3, action="append", metavar=("LETTER", "LABEL", "STEM"),
+    ap.add_argument("--row", nargs="+", action="append", metavar="LETTER LABEL STEM [ALT]",
                     required=True,
-                    help="One row: its letter, the object name to print, and the "
-                         "strip stem whose <stem>_panels.json sits in --panels-dir.")
+                    help="One row: its letter, the object name to print, the strip "
+                         "stem whose <stem>_panels.json sits in --panels-dir, and "
+                         "optionally a second stem drawn in the top-left half of the "
+                         "--split layer's panel.")
+    ap.add_argument("--split", default=None, metavar="LAYER",
+                    help="Layer whose panel is split corner to corner between the row's "
+                         "second stem (top-left) and its first (bottom-right).")
+    ap.add_argument("--split-labels", nargs=2, default=("k = 10", "k = 100"),
+                    metavar=("TOP_LEFT", "BOTTOM_RIGHT"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--scale-bar-mm", type=float, default=100.0,
                     help="Scale bar on the first panel of each row; 0 to omit.")
@@ -118,8 +167,15 @@ def main() -> int:
     ap.add_argument("--dpi", type=int, default=300)
     args = ap.parse_args()
 
-    rows = [(letter, label, *load_row(args.panels_dir, stem))
-            for letter, label, stem in args.row]
+    rows, alts = [], []
+    for spec in args.row:
+        if len(spec) not in (3, 4):
+            raise SystemExit(f"--row takes LETTER LABEL STEM [ALT], got {spec}")
+        letter, label, stem = spec[:3]
+        rows.append((letter, label, *load_row(args.panels_dir, stem)))
+        alts.append(load_row(args.panels_dir, spec[3]) if len(spec) == 4 else None)
+    if args.split and any(a is None for a in alts):
+        raise SystemExit("--split needs a second stem on every --row")
     W, H = rows[0][2]["panel_size"]
     for _, _, meta, _ in rows:
         if meta["panel_size"] != [W, H]:
@@ -143,6 +199,7 @@ def main() -> int:
     label_font = serif(round(W * 0.092))
     key_font = serif(round(W * 0.074))
     bar_font = serif(round(W * 0.062))
+    split_font = serif(round(W * 0.074))
     swatch = round(W * 0.058)
 
     key_h = 0
@@ -197,9 +254,24 @@ def main() -> int:
         if r == 0 and args.legend:
             draw_key(y, letter_h)
         y += letter_h
-        for i, panel in enumerate(meta["panels"]):
-            draw.text((col_x(i) + (W - text_w(note_font, panel["note"])) / 2, y),
-                      panel["note"], fill=INK, font=note_font)
+        alt = alts[r]
+        notes = [p["note"] for p in meta["panels"]]
+        images = list(images)
+        if args.split and alt is not None:
+            alt_meta, alt_images = alt
+            for i, panel in enumerate(meta["panels"]):
+                if panel["layer"] != args.split:
+                    continue
+                j = next(k for k, q in enumerate(alt_meta["panels"])
+                         if q["layer"] == args.split)
+                images[i] = diagonal_split(alt_images[j], images[i], tuple(args.split_labels),
+                                           split_font, max(2, round(W * 0.006)))
+                # The note reads in the order the halves are seen, top-left first.
+                notes[i] = (f"{alt_meta['panels'][j]['locked_fraction']:.0%} \u2192 "
+                            f"{panel['locked_fraction']:.0%} unreachable")
+        for i, note in enumerate(notes):
+            draw.text((col_x(i) + (W - text_w(note_font, note)) / 2, y),
+                      note, fill=INK, font=note_font)
         y += note_h
         for i, img in enumerate(images):
             sheet.paste(img, (col_x(i), y))
@@ -212,9 +284,16 @@ def main() -> int:
     sheet.save(args.out, dpi=(args.dpi, args.dpi))
     if args.pdf:
         write_pdf(sheet, args.out.with_suffix(".pdf"), args.dpi)
-    for letter, label, meta, _ in rows:
-        notes = ", ".join(f"{p['name']} {p['note']}" for p in meta["panels"])
-        print(f"  {letter} {label}: {notes}")
+    for (letter, label, meta, _), alt in zip(rows, alts):
+        parts = []
+        for p in meta["panels"]:
+            if args.split and alt is not None and p["layer"] == args.split:
+                q = next(q for q in alt[0]["panels"] if q["layer"] == args.split)
+                parts.append(f"{p['name']} {q['locked_fraction']:.0%} -> "
+                             f"{p['locked_fraction']:.0%} unreachable")
+            else:
+                parts.append(f"{p['name']} {p['note']}")
+        print(f"  {letter} {label}: {', '.join(parts)}")
     print(f"wrote {args.out}  ({width}x{height})")
     return 0
 

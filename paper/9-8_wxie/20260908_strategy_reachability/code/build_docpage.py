@@ -459,8 +459,28 @@ def main() -> int:
     </figcaption>
   </figure>'''
 
+    def split_figure(png: str) -> str:
+        fig = args.figures / png
+        if not fig.exists():
+            return ""
+        return f'''<figure>
+    <div class="plate"><img src="{data_uri(fig)}" alt="The same grid with the GraspGen-X panels split corner to corner: best of ten proposals in the top-left half, best of 100 in the bottom-right."></div>
+    <figcaption>
+      <b>Variant: the GraspGen-X column split by search depth.</b> Top-left half, best of
+      the first ten ranked proposals; bottom-right half, best of all 100, at the same
+      scale as the neighbouring panels. At the can the depth takes GraspGen-X from 67.7%
+      to 2.8% unreachable; at the strawberry it changes nothing. The proposals are cheap
+      to make, 0.24&nbsp;s per object for 1,000 samples with the top 100 kept on an
+      RTX&nbsp;4070&nbsp;Ti (<code>graspgenx_candidates/manifest.json</code>); the
+      collision check that finds the first executable one costs about 0.2&nbsp;s per
+      candidate in this Python checker, so a median success spends about 4&nbsp;s in it
+      and a condition with no executable proposal about 20&nbsp;s.
+    </figcaption>
+  </figure>'''
+
     strip_figures = "\n".join(filter(None, [
         grid_figure("20260908-nogo_grid_strawberry_can.png"),
+        split_figure("20260908-nogo_grid_strawberry_can_split.png"),
         strip_figure(
             "20260908-nogo_strip_strawberry.png",
             "Strawberry, grasp point 15&nbsp;mm above the table.",
