@@ -1,0 +1,149 @@
+% =====================================================================
+% Edits to paper/9-8_wxie/root-3.tex  --  reachability numbers and Fig. 5
+% 2026-09-15, from paper/9-8_wxie/20260908_strategy_reachability/
+%
+% Six edits. Each block gives the line range in root-3.tex, the text to
+% find (in comments), and the replacement ready to paste. Line numbers refer
+% to the file as opened on 2026-09-15 (716 lines).
+%
+% Source of every number:
+%   results/paper_conditions_meshfloor_trials.csv        naive / iterative / reflex
+%   results/paper_conditions_meshfloor_ggx100_trials.csv GraspGen-X, top 100
+%   results/ggx100/20260908-nogo_strip_{strawberry,can}_ggx_stats.json  Fig. 5 volumes
+% and the derivations are in README.md, "Numbers quoted in the paper".
+%
+% What changes and why:
+%   * GraspGen-X is now scored over its first 100 proposals, which is what
+%     Sec. III.A already says and what the hardware protocol in Sec. IV.D
+%     uses (line 632). The earlier 27.3% was a top-20 run. At top 100 it is
+%     47.3%, level with naive closure. The rank-depth statistic is added
+%     because it is the mechanism: the first executable proposal is the
+%     20th by median (ggx_candidate_rank in the CSV is 0-based).
+%   * Naive support collisions: 76, not 57 (the 57 was a capsule-proxy
+%     10 mm-tolerance run). All 60 whiffs are among the 76.
+%   * Delicate-subset iterative reachability: 66%, not 71% (71.3% is the
+%     full-set value). 50 trials, so 33/50.
+%   * Fig. 5 right panel: the new lettered grid, with GGX at k = 100 and a
+%     caption that names both colours.
+%
+% PENDING (marked below): the two GGX percentages in the Fig. 5 caption and
+% in the volume paragraph are from the k = 10 volume sweeps behind the
+% current figure. The k = 100 sweeps are running (results/ggx100/); this
+% file and the figure PDF are updated when they finish.
+% =====================================================================
+
+
+% ---------------------------------------------------------------------
+% EDIT 1  --  Fig. 5, lines 403-410.  Replace the whole figure* environment.
+%
+% Before pasting, copy the figure:
+%   cp paper/9-8_wxie/20260908_strategy_reachability/figures/20260908-nogo_grid_strawberry_can.pdf \
+%      supplement_figures/Reachability.pdf
+% (The .png of the same name works too; the PDF embeds the raster losslessly.)
+%
+% FIND (line 406):
+%   \includegraphics[width=0.66\linewidth]{supplement_figures/Reachability.png}
+% FIND (line 407):
+%   \caption{\textbf{Left:} We formulate three grasp strategies: ... whereas GGX excludes 68\% of poses.}
+% ---------------------------------------------------------------------
+
+\begin{figure*}[!htb]
+  \centering
+  \includegraphics[width=0.33\linewidth]{img/grasp_strategies_complex.png}
+  \includegraphics[width=0.66\linewidth]{supplement_figures/Reachability.pdf}
+  \caption{\textbf{Left:} We formulate three grasp strategies: iterative (left), reflex (center), and naive (right) closure. In the iterative approach, the hand rotates downward from a pre-grasp pose to reach the desired grasp pose. In the reflex approach, fingers remain open until the thumb makes contact with the object. In the naive approach, the fingers are treated like a parallel jaw gripper prior to closure, leading to ground collisions for small objects. \textbf{Right:} start poses from which each strategy can (green) and cannot (red) execute a collision-free approach and closure, for (A) a strawberry whose grasp point is 15\,mm above the table and (B) a can at 110\,mm, sampled over the 300\,mm quarter-sphere above the grasp point on the approach side. The two solids together are the sampled region and each percentage is the red fraction of it. GraspGen-X (GGX)~\cite{graspgenx2026} is admissible where any of its 100 ranked proposals executes. % PENDING: k=100 volumes
+  At the strawberry, naive closure and GGX admit no start pose, while iterative closure excludes 76.9\% and reflex closure 53.3\%. At the can, the three width-conditioned planners exclude 32--34\% and GGX 68\%. % PENDING: GGX values are from the k=10 sweep
+  }
+  \label{fig:grasp_strategies}
+  \vspace{-1mm}
+\end{figure*}
+
+
+% ---------------------------------------------------------------------
+% EDIT 2  --  Sec. III.A, lines 457-460.  No change to the protocol
+% sentence: "at least one of the first 100 proposals (prescribed default)"
+% is now what was simulated. Leave it.
+% ---------------------------------------------------------------------
+
+
+% ---------------------------------------------------------------------
+% EDIT 3  --  Sec. III.A, lines 462-465.  Replace the paragraph.
+%
+% FIND (line 462):
+%   Across the 150 object--approach conditions, naive, iterative, and
+% through (line 465):
+%   ... Iterative and reflex closure have no whiffs, and produce 41 and 12 support-surface collisions, respectively.
+% ---------------------------------------------------------------------
+
+Across the 150 object--approach conditions, naive, iterative, and
+reflex closure are reachable in 48.0\%, 71.3\%, and 90.7\% of trials.
+GGX produces an executable grasp in 47.3\% of conditions, level with
+naive closure, and none of its successes comes from its top-ranked
+proposal: the first executable candidate is the 20th proposal by median
+(interquartile range 3rd to 24th, at worst the 74th), and 30 of the 71
+successes lie beyond the twentieth proposal. Naive closure additionally produces 60
+misses (``whiffs'') and 76 table collisions due to the unaccounted-for
+coupled-finger motion; every whiff is also a table collision, so the
+two counts overlap rather than add. GGX fails by table collision (72
+conditions) and by premature object contact (62), and admits no
+condition at all for the seven objects whose grasp point is 15\,mm or
+less above the table, which is the same set on which naive closure
+whiffs. Iterative and reflex closure have no whiffs, and produce 41 and
+12 support-surface collisions, respectively.
+
+
+% ---------------------------------------------------------------------
+% EDIT 4  --  Sec. III.A, lines 467-470.  Replace the paragraph.
+%
+% FIND (line 467):
+%   We then generalize the reachability analysis to initial poses within
+% through (line 470):
+%   ... while GGX excludes 68\%.
+% ---------------------------------------------------------------------
+
+We then generalize the reachability analysis to initial poses within
+a 300\,mm-radius quarter-sphere around two objects
+(Fig.~\ref{fig:grasp_strategies}, right). For the strawberry, whose
+grasp point lies 15\,mm above the table, GGX and naive closure do not
+admit any collision-free initial pose. Iterative closure excludes
+76.9\% of the volume and reflex closure 53.3\%. At the 110\,mm-high
+can, the three width-conditioned planners exclude 32--34\% of the
+sampled volume, while GGX excludes 68\%. % PENDING: GGX values are from the k=10 sweep
+
+
+% ---------------------------------------------------------------------
+% EDIT 5  --  Sec. IV.C, line 620.  One number.
+%
+% FIND:
+%   ... favors reflex over iterative closure on this subset (90\% versus 71\% reachability),  hardware performance reverses this order
+% ---------------------------------------------------------------------
+
+The delicate objects expose contact-induced errors uncaptured by the
+simulated geometric model. While simulation favors reflex over
+iterative closure on this subset (90\% versus 66\% reachability, 45 and
+33 of 50 trials), hardware performance reverses this order
+(80\% versus 94\% success). The additional reflex failures on hardware
+are caused by object slip and minor damage during the fast reflex
+closure on irregular geometries, neither of which occurs in the
+pre-contact, simplified-geometry reachability simulation.
+
+
+% ---------------------------------------------------------------------
+% EDIT 6  --  line 696, commented-out discussion paragraph.  Optional; only
+% matters if it is ever uncommented.
+%
+% FIND:
+%   ... the geometric model predicts higher reflex reachability (90% versus 76%), while hardware favors ...
+% REPLACE the parenthetical with:
+%   (90\% versus 66\%)
+% ---------------------------------------------------------------------
+
+
+% ---------------------------------------------------------------------
+% Not changed, checked:
+%   line 77-79  abstract: no numbers.
+%   line 129    contributions: 86.7% hardware, unchanged.
+%   line 606-611  IV.C first paragraph: 48.0 / 71.3 / 90.7 / 82.0 / 86.7 / 10.7, unchanged.
+%   line 616-617  "Thirteen of the 41 simulated iterative table collisions ... 1.7 mm", unchanged.
+%   line 632    hardware GGX protocol keeps the top 100: now matches the simulation.
+% ---------------------------------------------------------------------

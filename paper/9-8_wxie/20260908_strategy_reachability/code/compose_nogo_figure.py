@@ -77,6 +77,27 @@ def draw_scale_bar(draw: ImageDraw.ImageDraw, x0: int, y_bottom: int, length_mm:
               fill=(40, 40, 40), font=font)
 
 
+def write_pdf(sheet: Image.Image, path: Path, dpi: int) -> None:
+    """The sheet as a single-page PDF, Flate-compressed rather than JPEG.
+
+    PIL's PDF writer stores RGB pages as JPEG, which smears the type; matplotlib
+    stores the array losslessly, and the page size is the sheet at ``dpi``.
+    """
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    w_in, h_in = sheet.width / dpi, sheet.height / dpi
+    fig = plt.figure(figsize=(w_in, h_in), dpi=dpi, frameon=False)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_axis_off()
+    ax.imshow(np.asarray(sheet), interpolation="none")
+    fig.savefig(path, dpi=dpi, format="pdf")
+    plt.close(fig)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -91,6 +112,10 @@ def main() -> int:
                     help="Scale bar on the first panel of each row; 0 to omit.")
     ap.add_argument("--legend", action=argparse.BooleanOptionalAction, default=True,
                     help="Reachable/unreachable key, top right.")
+    ap.add_argument("--pdf", action="store_true",
+                    help="Also write <out>.pdf with the raster embedded losslessly at "
+                         "--dpi, for \\includegraphics.")
+    ap.add_argument("--dpi", type=int, default=300)
     args = ap.parse_args()
 
     rows = [(letter, label, *load_row(args.panels_dir, stem))
@@ -181,7 +206,9 @@ def main() -> int:
             y += row_gap
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(args.out, dpi=(300, 300))
+    sheet.save(args.out, dpi=(args.dpi, args.dpi))
+    if args.pdf:
+        write_pdf(sheet, args.out.with_suffix(".pdf"), args.dpi)
     for letter, label, meta, _ in rows:
         notes = ", ".join(f"{p['name']} {p['note']}" for p in meta["panels"])
         print(f"  {letter} {label}: {notes}")

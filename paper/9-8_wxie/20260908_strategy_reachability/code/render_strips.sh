@@ -27,4 +27,4 @@ MUJOCO_GL=egl uv run python render_nogo_volume.py --object paper_can --pin-heigh
 uv run python compose_nogo_figure.py --panels-dir $PANELS \
   --row A Strawberry 20260908-nogo_strip_strawberry_ggx \
   --row B Can 20260908-nogo_strip_can_ggx \
-  --out ../figures/20260908-nogo_grid_strawberry_can.png
+  --out ../figures/20260908-nogo_grid_strawberry_can.png --pdf

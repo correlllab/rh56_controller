@@ -31,6 +31,11 @@ def load(path: Path) -> list[dict]:
         return list(csv.DictReader(handle))
 
 
+def ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def data_uri(path: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
@@ -233,18 +238,25 @@ def main() -> int:
     # --- GraspGen-X section, from the enveloping-contact four-strategy run
     # The four-strategy run under the primary support-plane geometry, falling
     # back to the fitted-tolerance run while the mesh version is still sweeping.
-    ggx_path = args.results / "paper_conditions_meshfloor_ggx_trials.csv"
-    ggx_fallback = args.results / "paper_conditions_ggx_enveloping_trials.csv"
-    ggx_rows = load(ggx_path) if ggx_path.exists() else (
-        load(ggx_fallback) if ggx_fallback.exists() else [])
+    # Scored over the first 100 proposals, as the hardware protocol does; the
+    # top-20 scoring of the same candidates is kept for the comparison sentence.
+    ggx_candidates = [
+        ("paper_conditions_meshfloor_ggx100", "paper_conditions_meshfloor_ggx100"),
+        ("paper_conditions_meshfloor_ggx", "paper_conditions_meshfloor_ggx"),
+        ("paper_conditions_ggx_enveloping", "paper_conditions_calibrated"),
+    ]
+    ggx_rows, ggx_assumptions = [], {}
+    for stem, ap_stem in ggx_candidates:
+        path = args.results / f"{stem}_trials.csv"
+        if path.exists():
+            ggx_rows = load(path)
+            ap_json = args.results / f"{ap_stem}_assumptions.json"
+            ggx_assumptions = json.loads(ap_json.read_text()) if ap_json.exists() else {}
+            break
+    ggx_top20_path = args.results / "paper_conditions_meshfloor_ggx_trials.csv"
+    ggx_top20 = load(ggx_top20_path) if ggx_top20_path.exists() else []
     ggx_strict_path = args.results / "paper_conditions_ggx_trials.csv"
     ggx_strict = load(ggx_strict_path) if ggx_strict_path.exists() else []
-    ggx_assumptions = {}
-    ap_json = (args.results / "paper_conditions_meshfloor_ggx_assumptions.json"
-               if ggx_path.exists()
-               else args.results / "paper_conditions_calibrated_assumptions.json")
-    if ap_json.exists():
-        ggx_assumptions = json.loads(ap_json.read_text())
 
     ggx_table, ggx_narrative, ggx_strict_count, ggx_topk = "", "", "0", "20"
     if ggx_rows and any(r["strategy"] == "graspgen_x" for r in ggx_rows):
@@ -273,11 +285,18 @@ def main() -> int:
                 int(r["admissible"]) for r in ggx_strict if r["strategy"] == "graspgen_x"))
 
         g = [r for r in ggx_rows if r["strategy"] == "graspgen_x"]
-        ranks = [int(r["ggx_candidate_rank"]) for r in g
-                 if int(r.get("ggx_candidate_rank", -1)) >= 0] or [0]
+        ranks = sorted(int(r["ggx_candidate_rank"]) for r in g
+                       if int(r.get("ggx_candidate_rank", -1)) >= 0) or [0]
         admitted = len(ranks)
+        naive_admitted = sum(int(r["admissible"]) for r in ggx_rows
+                             if r["strategy"] == "naive")
+        reflex_admitted = sum(int(r["admissible"]) for r in ggx_rows
+                              if r["strategy"] == "thumb_reflex")
         top_ranked = sum(1 for r in ranks if r == 0)
-        deep = sum(1 for r in ranks if r >= 10)
+        beyond_20 = sum(1 for r in ranks if r >= 20)
+        # ggx_candidate_rank is 0-based; the prose counts proposals from one.
+        q1, med, q3 = (ranks[len(ranks) // 4] + 1, ranks[len(ranks) // 2] + 1,
+                       ranks[(3 * len(ranks)) // 4] + 1)
         by_object = {}
         for row in g:
             by_object.setdefault(row["object"], []).append(int(row["admissible"]))
@@ -285,19 +304,35 @@ def main() -> int:
         heights_by_object = {r["object"]: float(r["grasp_height_mm"]) for r in g}
         tallest_zero = max((heights_by_object[o] for o in zero_objects), default=0.0)
         ggx_delicate = [r for r in g if r["category"] == "delicate"]
-        delicate_rate = (sum(int(r["admissible"]) for r in ggx_delicate)
-                         / max(len(ggx_delicate), 1))
+        delicate_hits = sum(int(r["admissible"]) for r in ggx_delicate)
+        ycb_hits = sum(int(r["admissible"]) for r in g if r["category"] == "ycb_like")
+        if admitted == naive_admitted or abs(admitted - naive_admitted) <= 1:
+            standing = "level with naive closure and below iterative and reflex closure"
+        elif admitted < naive_admitted:
+            standing = "below every hand-designed strategy"
+        else:
+            standing = "above naive closure and below iterative and reflex closure"
+        top20_sentence = ""
+        if ggx_top20:
+            top20_admitted = sum(int(r["admissible"]) for r in ggx_top20
+                                 if r["strategy"] == "graspgen_x")
+            top20_sentence = (f" Scoring the same candidates over the first 20 proposals "
+                              f"only gives {top20_admitted} of 150 ({top20_admitted / 150:.1%}), "
+                              f"which is the number an earlier version of this page "
+                              f"reported.")
         ggx_narrative = (
-            f"GraspGen-X is admissible in {admitted} of 150 trials, below naive closure "
-            f"and less than a third of the reflex rate. The ranking is most "
-            f"of the problem: its top-ranked proposal executes cleanly in only "
-            f"{top_ranked} of the {admitted} trials that succeed at all, the first "
-            f"collision-free candidate sits at rank {int(sorted(ranks)[len(ranks) // 2])} "
-            f"by median, and {deep} of them are found only at rank 10 or deeper in the 20 "
-            f"tested. Object size is the rest of it: GraspGen-X admits nothing at any "
-            f"approach condition for the {len(zero_objects)} objects whose grasp point "
-            f"lies at or below {tallest_zero:.0f}\u2009mm, which includes every object in "
-            f"the delicate set ({delicate_rate:.0%} across those 50 trials)."
+            f"GraspGen-X is admissible in {admitted} of 150 trials ({admitted / 150:.1%}), "
+            f"{standing} ({reflex_admitted} of 150). The ranking is most of the problem: "
+            f"its top-ranked proposal executes cleanly in {top_ranked} of the {admitted} "
+            f"trials that succeed at all, the first collision-free candidate is the "
+            f"{ordinal(med)} proposal by median (interquartile range {ordinal(q1)} to "
+            f"{ordinal(q3)}, at worst the {ordinal(ranks[-1] + 1)}), and {beyond_20} of "
+            f"the {admitted} are found only "
+            f"beyond the 20th.{top20_sentence} Object size is the rest of it: GraspGen-X "
+            f"admits nothing at any approach condition for the {len(zero_objects)} objects "
+            f"whose grasp point lies at or below {tallest_zero:.0f}\u2009mm, the set on "
+            f"which naive closure whiffs, and {delicate_hits} of 50 delicate trials "
+            f"against {ycb_hits} of 100 YCB-like."
         )
 
     # --- no-go volume figures
@@ -322,12 +357,13 @@ def main() -> int:
         # directory; an all-false layer from a run without one is absence of
         # evidence, not a 100% lockout.
         assum_path = args.results / f"nogo_volume_{obj_name}_assumptions.json"
-        ran_ggx = (json.loads(assum_path.read_text()).get("n_ggx_candidates", 0) > 0
-                   if assum_path.exists() else False)
+        vol_assum = json.loads(assum_path.read_text()) if assum_path.exists() else {}
+        ran_ggx = vol_assum.get("n_ggx_candidates", 0) > 0
         if ran_ggx and "ggx_best" in vol:
+            k = vol_assum["n_ggx_candidates"]
             rates += (f"; GraspGen-X {pct('ggx_best')} credited with the best of "
-                      f"its ten ranked candidates, and {pct('ggx_worst')} when every one of "
-                      f"the ten must be collision-free")
+                      f"its {k} ranked candidates, and {pct('ggx_worst')} when every one of "
+                      f"the {k} must be collision-free")
         shells = ("The sets nest, reflex inside iterative inside naive, and are drawn as "
                   "nested translucent solids so the containment is visible; a post marks "
                   "the object, which is a few tens of millimetres across inside a region a "
@@ -357,7 +393,7 @@ def main() -> int:
         parts += [f"{LABELS[k].lower()} closure {st[k]['locked_fraction']:.1%}"
                   for k in order[1:]]
         if "ggx_best" in st:
-            parts.append("GraspGen-X at its best of ten candidates "
+            parts.append(f"GraspGen-X at its best of {vol_topk} candidates "
                          f"{st['ggx_best']['locked_fraction']:.1%}")
         rates = ", ".join(parts)
         split = ("Red is the set of start poses from which the strategy cannot execute "
@@ -369,6 +405,12 @@ def main() -> int:
       <b>{lede}</b> {rates}. {split} {tail}
     </figcaption>
   </figure>'''
+
+    # The GraspGen-X k of the volume sweeps behind the strips and the grid.
+    vol_topk = 10
+    vol_ap = args.results / "nogo_volume_paper_strawberry_assumptions.json"
+    if vol_ap.exists():
+        vol_topk = json.loads(vol_ap.read_text()).get("n_ggx_candidates", vol_topk) or vol_topk
 
     def grid_figure(png: str) -> str:
         # The paper figure: both objects in one lettered grid with the strategy
@@ -388,7 +430,7 @@ def main() -> int:
     <div class="plate"><img src="{data_uri(fig)}" alt="Two rows of four panels: start-pose volumes for iterative, reflex, naive and GraspGen-X closure at the strawberry (A) and the can (B), unreachable poses red and reachable ones green."></div>
     <figcaption>
       <b>Fig. 5 (bottom) as it goes into the paper.</b> One column per strategy,
-      GraspGen-X at its best of ten ranked candidates, for (A) the strawberry,
+      GraspGen-X at its best of {vol_topk} ranked candidates, for (A) the strawberry,
       grasp point 15&nbsp;mm above the table, and (B) the can, 110&nbsp;mm. Red is the
       set of start poses from which the strategy cannot execute and green the rest of
       the sampled quarter ball, so the two together are the region each percentage is
@@ -522,6 +564,7 @@ def main() -> int:
         "FIG_B": data_uri(args.figures / "20260908-fig_b_failure_modes_mesh.png"),
         "TABLE_ABLATION": "\n".join(abl_rows),
         "VOLUME_FIGURES": volume_figures,
+        "GGX_VOL_TOPK": str(vol_topk),
         "STRIP_FIGURES": strip_figures,
         "STRIP_FIGURES_GGX": strip_figures_ggx,
         "VIDEOS": "\n".join(

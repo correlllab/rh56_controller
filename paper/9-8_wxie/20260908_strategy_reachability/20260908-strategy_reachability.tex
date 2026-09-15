@@ -174,8 +174,9 @@ has the shape of the wrist-fixed strategies: approach the proposed pose with the
 hand open, then interpolate the descriptor's closure with the wrist held still.
 We run the released model with the official Inspire-hand descriptor over the same
 15 object proxies, producing 100 ranked candidates each, and test candidates in
-descending confidence order; a start pose is admissible when any of the top 20
-executes cleanly, and a pose with no clean candidate is a planning failure. Its
+descending confidence order; a start pose is admissible when any of the 100
+executes cleanly, and a pose with no clean candidate is a planning failure, which
+is the hardware protocol of Sec.~\ref{sec:vision_evaluation}. Its
 terminal check cannot be the antipodal-midpoint test, which presumes a precision
 pinch, so we use the descriptor's own declared capture volume and ask whether the
 proposal engages the object on its terms.
@@ -195,7 +196,7 @@ proposal engages the object on its terms.
     Naive       & 72/150 (48.0\%)  & 76 & 10 & 60 \\
     Iterative   & 107/150 (71.3\%) & 41 & 10 &  0 \\
     Reflex      & 136/150 (90.7\%) & 12 &  5 &  0 \\
-    GraspGen-X  & 41/150 (27.3\%)          & 91 & 92 & 32 \\
+    GraspGen-X  & 71/150 (47.3\%)  & 72 & 62 & 30 \\
     \midrule
     \multicolumn{2}{l}{Hardware success, 150 trials each} \\
     Naive / Iterative / Reflex & \multicolumn{4}{c}{48.0\% / 82.0\% / 86.7\%} \\
@@ -203,21 +204,29 @@ proposal engages the object on its terms.
   \end{tabular}
 \end{table}
 
-GraspGen-X is admissible in 27.3\% of trials, below every hand-designed strategy.
-The ranking accounts for much of this: its top-ranked proposal executes cleanly in
-none of the 41 trials that succeed at all, the first collision-free candidate sits
-at rank 3 by median, and 12 of the 41 are found only at rank 10 or deeper in the 20
-tested. Object coverage accounts for the rest: the generator admits no approach
-condition at all for 9 of the 15 objects, including every object in the delicate
-set (0.0\% across those 50 trials against 41.0\% on the YCB-like subset).
+GraspGen-X is admissible in 47.3\% of trials, level with naive closure and below
+iterative and reflex closure. The ranking accounts for much of this: its
+top-ranked proposal executes cleanly in none of the 71 trials that succeed at
+all, the first collision-free candidate is the 20th proposal by median
+(interquartile range 3rd to 24th, at worst the 74th), and 30 of the 71 are found
+only beyond the 20th. Scoring the same run over the first 20 proposals, as an
+earlier version of this analysis did, gives 27.3\%. Object coverage accounts for
+the rest: the generator admits no approach condition at all for the seven objects
+whose grasp point is at or below \SI{15}{\milli\metre}, the set on which naive
+closure whiffs, and at least 3 of 10 for every object at or above
+\SI{29}{\milli\metre} (19 of 50 delicate trials against 52 of 100 YCB-like). It
+is also the strategy that admits most trials at the adversarial level-with-object
+condition, 5 of 15 against 1 for reflex closure, because a 6-DoF proposal can
+approach from the side where a width-conditioned pose cannot.
 
 This is a statement about the interface rather than about the generator's grasp
 quality. GraspGen-X is given an object mesh and no support surface, so it
 proposes poses from every direction including from beneath the table, and nothing
 in its confidence ordering prefers a pose the arm can reach on a tabletop. A
 collision check over a deep candidate list recovers part of the gap, and the
-depth required is the practical cost: trusting the ranking without such a check
-would leave most of these grasps unexecutable.
+depth required is the practical cost: the first 20 proposals recover 27.3\% and
+the first 100 recover 47.3\%, and trusting the ranking without such a check
+would leave every one of these grasps unexecutable.
 
 \subsection{Limits}
 \label{sec:nogo_limits_v2}

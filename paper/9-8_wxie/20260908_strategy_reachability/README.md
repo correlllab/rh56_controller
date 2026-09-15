@@ -16,17 +16,21 @@ the simulation analysis promised in the author response
 
 Primary configuration: support plane checked against the hand's collision
 geometry with no clearance tolerance, object contact against the 13-capsule
-proxy, planned contact fingers allowed to touch the object. Per-trial rows in
-`results/paper_conditions_meshfloor_ggx_trials.csv` (600 rows = 4 strategies x
-15 objects x 10 approach conditions); the three-strategy subset is
-`results/paper_conditions_meshfloor_trials.csv`.
+proxy, planned contact fingers allowed to touch the object, GraspGen-X scored
+over its first 100 ranked proposals as in the hardware protocol. Per-trial rows
+in `results/paper_conditions_meshfloor_ggx100_trials.csv` (600 rows = 4
+strategies x 15 objects x 10 approach conditions); the three-strategy subset is
+`results/paper_conditions_meshfloor_trials.csv`, and
+`results/paper_conditions_meshfloor_ggx_trials.csv` is the same run scored over
+the first 20 proposals.
 
 | Strategy | Admissible | Support collision | Premature contact | Terminal miss |
 |---|---|---|---|---|
 | Naive | 72/150 (48.0%) | 76 | 10 | 60 |
 | Iterative | 107/150 (71.3%) | 41 | 10 | 0 |
 | Reflex | **136/150 (90.7%)** | 12 | 5 | 0 |
-| GraspGen-X, best of top 20 | 41/150 (27.3%) | 91 | 92 | 32 |
+| GraspGen-X, first of 100 proposals that executes | 71/150 (47.3%) | 72 | 62 | 30 |
+| GraspGen-X, first 20 proposals only | 41/150 (27.3%) | 91 | 92 | 32 |
 | Hardware success, 150 trials each | 48.0% / 82.0% / 86.7% | | | |
 
 The failure-mode columns count trials showing each mode and a trial can show
@@ -40,7 +44,8 @@ ycb_like = 10 x 10):
 | Naive | 18/50 (36.0%) | 54/100 (54.0%) |
 | Iterative | 33/50 (66.0%) | 74/100 (74.0%) |
 | Reflex | 45/50 (90.0%) | 91/100 (91.0%) |
-| GraspGen-X | 0/50 (0.0%) | 41/100 (41.0%) |
+| GraspGen-X (100 proposals) | 19/50 (38.0%) | 52/100 (52.0%) |
+| GraspGen-X (20 proposals) | 0/50 (0.0%) | 41/100 (41.0%) |
 
 Naive closure admits nothing for the six objects whose grasp point is at or
 below 15 mm above the table and carries a median 17.4 mm terminal contact
@@ -99,18 +104,25 @@ additionally records 60 terminal misses ('whiffs') and 76 support-surface
 collisions, with every whiff also a collision, due to the unaccounted-for
 coupled-finger motion."
 
-**GraspGen-X is tested over its top 20 ranked candidates, not 100.** The draft
-says a condition is reachable when "at least one of the first 100 proposals"
-executes; the run stores 100 candidates per object but tests 20
-(`ggx_topk: 20` in `results/paper_conditions_meshfloor_ggx_assumptions.json`;
-`ggx_candidates_tested` never exceeds 20 in the CSV). The first clean candidate
-sits at rank 3 by median and rank 19 at the deepest. The quarter-ball volume
-sweeps behind Fig. 5 use the top 10 (`ggx_topk: 10` in
-`results/nogo_volume_paper_{strawberry,can}_assumptions.json`). Either change
-the sentence to "first 20" (and "best of 10" in the Fig. 5 caption) or rerun
-with `--ggx-topk 100`; the 27.3% is a lower bound on the top-100 rate.
+**GraspGen-X reachability is 47.3% over the first 100 proposals, not 27.3%.**
+The draft says a condition is reachable when "at least one of the first 100
+proposals" executes, and the hardware protocol (Sec. IV.D) keeps the top 100,
+but the run behind 27.3% tested only 20 (`ggx_topk: 20` in
+`results/paper_conditions_meshfloor_ggx_assumptions.json`). Rerun at
+`--ggx-topk 100` on 2026-09-15 (`paper_conditions_meshfloor_ggx100`): 71/150 =
+47.3%, level with naive closure; the three hand-designed strategies are
+unchanged. The first executable proposal is the 20th by median (interquartile
+range 3rd to 24th, worst 74th; `ggx_candidate_rank` in the CSV is 0-based) and
+30 of the 71 successes lie beyond the 20th, which is why the top-20 score is so
+much lower. GGX still admits nothing for the seven objects whose grasp point is
+at or below 15 mm (big screwdriver, charger, nut, pen, raspberry, small
+screwdriver, strawberry), the set on which naive closure whiffs. The
+quarter-ball volume sweeps behind Fig. 5 were run at the top 10
+(`ggx_topk: 10` in `results/nogo_volume_paper_{strawberry,can}_assumptions.json`);
+the top-100 sweeps are in `results/ggx100/` and the figure is rendered from
+them.
 
-Everything else the draft quotes from this analysis (48.0 / 71.3 / 90.7 / 27.3%;
+Everything else the draft quotes from this analysis (48.0 / 71.3 / 90.7%;
 41 and 12 iterative and reflex collisions; 13 grazes at or under 1.7 mm; the
 10.7-point iterative residual; the quarter-ball exclusions 76.9 / 53.3 / 100 /
 100% at the strawberry and 34.0 / 32.1 / 34.0 / 67.7% at the can) matches the
@@ -202,11 +214,22 @@ $GGXPY tools/run_graspgenx_paper_object_inference.py \
     --mesh-dir artifacts/paper_15_object_grasp_success/proxy_meshes \
     --out artifacts/paper_15_object_grasp_success/graspgenx_candidates
 
-# four-strategy sweep and the 3-D no-go volume
+# four-strategy sweep, primary configuration (20 min; --ggx-topk 20 for the
+# earlier paper_conditions_meshfloor_ggx run)
 uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions \
-    --contact-policy contact-fingers \
+    --contact-policy contact-fingers --floor-model mesh --floor-tolerance-mm 0 \
     --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
-    --tag paper_conditions_ggx_enveloping --out $R/results
+    --ggx-topk 100 --tag paper_conditions_meshfloor_ggx100 --out $R/results
+
+# the 3-D no-go volumes behind Fig. 5 (about 3 h per object at --ggx-topk 100;
+# the two objects run side by side)
+for OBJ in paper_strawberry paper_can; do
+  uv run python $R/code/run_nogo_volume.py --object $OBJ --region quarter-ball \
+      --full-grid --floor-model mesh --floor-tolerance-mm 0 \
+      --contact-policy contact-fingers \
+      --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
+      --ggx-topk 100 --out $R/results/ggx100 &
+done; wait
 uv run python $R/code/run_nogo_volume.py --object paper_nut \
     --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
     --verify-monotonic 6 --out $R/results   # ~40 min
