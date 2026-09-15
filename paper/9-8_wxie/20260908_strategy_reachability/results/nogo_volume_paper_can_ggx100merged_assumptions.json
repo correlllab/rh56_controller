@@ -1,0 +1,77 @@
+{
+  "generated_utc": "2026-09-15T16:03:07.874693+00:00",
+  "simulation_only": true,
+  "object": "paper_can",
+  "collision_shape": "cylinder",
+  "grasp_mode": "plane5",
+  "grasp_height_mm": 109.99999999999999,
+  "contact_policy": "contact-fingers",
+  "yaw_mode": "fixed",
+  "region": "quarter-ball",
+  "region_radius_mm": 300.0,
+  "full_grid": true,
+  "clutter": null,
+  "clutter_offset_mm": null,
+  "iterative_step_mm": 15.0,
+  "ggx_topk": 100,
+  "n_ggx_candidates": 100,
+  "grid": {
+    "xy_range_mm": [
+      -300.0,
+      300.0
+    ],
+    "xy_step_mm": 30.0,
+    "z_range_mm": [
+      110.0,
+      410.0
+    ],
+    "z_step_mm": 30.0,
+    "n_poses": 1206,
+    "n_cells": 4851
+  },
+  "layers": [
+    "naive",
+    "iterative_closure",
+    "thumb_reflex",
+    "ggx_best",
+    "ggx_worst"
+  ],
+  "merged_from": {
+    "full_grid": "../results/nogo_volume_paper_can.npz",
+    "partial_grid": "../results/ggx100/nogo_volume_paper_can.npz",
+    "layers_from_partial": [
+      "ggx_best",
+      "ggx_worst"
+    ],
+    "partial_grid_extent": {
+      "xy_range_mm": [
+        -240.0,
+        240.0
+      ],
+      "xy_step_mm": 30.0,
+      "z_range_mm": [
+        0.0,
+        330.0
+      ],
+      "z_step_mm": 30.0,
+      "n_poses": 995,
+      "n_cells": 3468
+    },
+    "cells_outside_partial_drawn_reachable": true,
+    "snap_mm": 15.0
+  },
+  "merge_report": {
+    "ggx_best": {
+      "unreachable_in_covered": 34,
+      "covered_cells": 995,
+      "assumed_reachable_outside": 211,
+      "locked_fraction": 0.028192371475953566
+    },
+    "ggx_worst": {
+      "unreachable_in_covered": 995,
+      "covered_cells": 995,
+      "assumed_reachable_outside": 0,
+      "locked_fraction": 1.0
+    }
+  }
+}

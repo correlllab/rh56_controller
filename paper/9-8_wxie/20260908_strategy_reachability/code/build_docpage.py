@@ -382,9 +382,10 @@ def main() -> int:
     # the proposal pose itself (code/ggx_start_independent_check.py), so no start
     # pose rescues any of them and the all-unreachable panel is exact at any k.
     def vol_k(obj: str) -> int:
-        ap = args.results / f"nogo_volume_paper_{obj}_assumptions.json"
-        if ap.exists():
-            return json.loads(ap.read_text()).get("n_ggx_candidates", 0) or 0
+        for stem in (f"nogo_volume_paper_{obj}_ggx100merged", f"nogo_volume_paper_{obj}"):
+            ap = args.results / f"{stem}_assumptions.json"
+            if ap.exists():
+                return json.loads(ap.read_text()).get("n_ggx_candidates", 0) or 0
         return 0
     vol_topk = max(vol_k("can"), vol_k("strawberry"), 10)
 
@@ -448,9 +449,11 @@ def main() -> int:
       unreachable, reflex {pct("strawberry", "thumb_reflex")}, naive and GraspGen-X all of it;
       at the can the three hand-designed strategies leave {pct("can", "iterative_closure")},
       {pct("can", "thumb_reflex")} and {pct("can", "naive")} against {pct("can", "ggx_best")} for
-      GraspGen-X at ten proposals; at 100 proposals GraspGen-X leaves about 3% of the
-      can region unreachable (<code>results/ggx100/</code>, a grid clipped to 995 of the
-      1206 poses) and all of the strawberry region. Built by
+      GraspGen-X, a pocket low and close to the can; at ten proposals it was 67.7%. The
+      can's GraspGen-X layer is the k&nbsp;=&nbsp;100 sweep run on the runner's default
+      extents (995 of the 1206 poses, <code>results/ggx100/</code>) written onto the full
+      quarter ball with the 211 cells outside that extent drawn reachable
+      (<code>merge_ggx_volume.py</code>). Built by
       <code>code/render_strips.sh</code> from the bare strip
       panels; the strips below are the same renders with one object per row.
     </figcaption>
@@ -484,12 +487,15 @@ def main() -> int:
             "pose the arm can execute from."),
         strip_figure(
             "20260908-nogo_strip_can_ggx.png",
-            "The same can strip with a GraspGen-X panel appended.",
-            "The GGX volume is twice the closure volumes and a different shape: it holds "
-            "between 65% and 71% at every sampled height instead of thinning out with "
-            "distance from the table, because what it rules out is a restriction on "
-            "approach direction rather than on clearance. Of the 169 sampled columns, 95 "
-            "admit no candidate at any height and 54 admit one at every height."),
+            "The same can strip with a GraspGen-X panel appended, 100 proposals searched.",
+            "What GGX loses at the can is a pocket low and close to the object, and the "
+            "collision check over the ranked list does the work: at ten proposals the same "
+            "panel was 67.7% unreachable, a volume twice the closure volumes that held "
+            "between 65% and 71% at every sampled height because it was a restriction on "
+            "approach direction rather than on clearance "
+            "(<code>figures/20260908-nogo_strip_can_ggx_k10.png</code>). The layer is the "
+            "k&nbsp;=&nbsp;100 sweep on the runner's default extents written onto the full "
+            "quarter ball, the cells outside that extent drawn reachable."),
     ]))
 
     volume_figures = "\n".join(filter(None, [

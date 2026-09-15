@@ -12,7 +12,7 @@
     "never_admissible_fraction": 0.6462585034013606
   },
   "ggx_best": {
-    "locked_fraction": 0.6774461028192371,
-    "never_admissible_fraction": 0.8321995464852607
+    "locked_fraction": 0.028192371475953566,
+    "never_admissible_fraction": 0.0
   }
 }

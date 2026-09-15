@@ -19,7 +19,16 @@ MUJOCO_GL=egl uv run python render_nogo_volume.py --object paper_strawberry --pi
 MUJOCO_GL=egl uv run python render_nogo_volume.py --object paper_can --pin-height-mm 190 \
   --layers iterative_closure thumb_reflex naive \
   --out ../figures/20260908-nogo_strip_can.png $COMMON
+# The can's GraspGen-X layer is the k = 100 sweep (results/ggx100/, run on the
+# runner's default extents) written onto the full quarter-ball grid with the
+# cells outside its extent drawn reachable; merge_ggx_volume.py records this in
+# the *_assumptions.json. The other three layers are the full-grid sweep.
+uv run python merge_ggx_volume.py --object paper_can \
+  --full ../results/nogo_volume_paper_can.npz \
+  --partial ../results/ggx100/nogo_volume_paper_can.npz \
+  --out ../results/nogo_volume_paper_can_ggx100merged.npz
 MUJOCO_GL=egl uv run python render_nogo_volume.py --object paper_can --pin-height-mm 190 \
+  --tag paper_can_ggx100merged \
   --layers iterative_closure thumb_reflex naive ggx_best --panels-dir $PANELS \
   --out ../figures/20260908-nogo_strip_can_ggx.png $COMMON
 

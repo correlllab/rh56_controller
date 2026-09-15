@@ -119,14 +119,19 @@ at or below 15 mm (big screwdriver, charger, nut, pen, raspberry, small
 screwdriver, strawberry), the set on which naive closure whiffs. The
 quarter-ball volume sweeps behind Fig. 5 were run at the top 10
 (`ggx_topk: 10` in `results/nogo_volume_paper_{strawberry,can}_assumptions.json`);
-the figure keeps them (the caption says best of 10). At 100 proposals the
-strawberry region stays entirely unreachable, since
-`code/ggx_start_independent_check.py` shows all 100 proposals collide with the
-table at the proposal pose itself, and the can region goes from 67.7% to 3.4%
-unreachable (`results/ggx100/nogo_volume_paper_can.npz`, a grid clipped to 995
-of the 1206 poses; the hand strategies read 35.2 / 35.2 / 33.0% on it against
-34.0 / 34.0 / 32.1% on the full grid). `ggx_worst`, every one of the 100
-executing, is 0% of the region on both grids.
+the figure now shows 100. Strawberry: the k = 10 sweep is drawn, exact at
+any k, since `code/ggx_start_independent_check.py` shows all 100 proposals
+collide with the table at the proposal pose itself. Can: the k = 100 sweep
+(`results/ggx100/nogo_volume_paper_can.npz`) was run on the runner's default
+extents, 995 of the 1206 poses, and gives 34 unreachable cells (3.4%), all low
+and close to the can; `code/merge_ggx_volume.py` writes them onto the full
+quarter ball with the 211 cells outside that extent drawn reachable
+(`results/nogo_volume_paper_can_ggx100merged.npz`, 2.8%), and that is the
+figure's can GGX panel. The full-grid rerun was stopped. The hand strategies
+read 35.2 / 35.2 / 33.0% on the clipped grid against 34.0 / 34.0 / 32.1% on
+the full one. `ggx_worst`, every one of the 100 executing, is 0% of the region
+on both grids. The k = 10 can strip is kept as
+`figures/20260908-nogo_strip_can_ggx_k10.png` (67.7%).
 
 Everything else the draft quotes from this analysis (48.0 / 71.3 / 90.7%;
 41 and 12 iterative and reflex collisions; 13 grazes at or under 1.7 mm; the
@@ -245,7 +250,9 @@ done
 #       --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates
 # Can: 41 of 100 survive. results/ggx100/nogo_volume_paper_can.npz is a k = 100
 # sweep on the runner's default grid (xy +-240 mm, z 0-330 mm: 995 of the 1206
-# poses), GGX 3.4% unreachable; the full-grid rerun was stopped.
+# poses), GGX 3.4% unreachable; the full-grid rerun was stopped, and
+# render_strips.sh merges this onto the full grid (merge_ggx_volume.py) for the
+# figure's can GGX panel.
 uv run python $R/code/run_nogo_volume.py --object paper_nut \
     --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
     --verify-monotonic 6 --out $R/results   # ~40 min

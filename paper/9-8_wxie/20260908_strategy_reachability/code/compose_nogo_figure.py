@@ -111,7 +111,7 @@ def main() -> int:
     ap.add_argument("--scale-bar-mm", type=float, default=100.0,
                     help="Scale bar on the first panel of each row; 0 to omit.")
     ap.add_argument("--legend", action=argparse.BooleanOptionalAction, default=True,
-                    help="Reachable/unreachable key, top right.")
+                    help="Reachable/unreachable key, right-aligned on the first row's label line.")
     ap.add_argument("--pdf", action="store_true",
                     help="Also write <out>.pdf with the raster embedded losslessly at "
                          "--dpi, for \\includegraphics.")
@@ -145,7 +145,7 @@ def main() -> int:
     bar_font = serif(round(W * 0.062))
     swatch = round(W * 0.058)
 
-    key_h = round(key_font.size * 1.35) if args.legend else 0
+    key_h = 0
     head_h = round(head_font.size * 1.30)
     letter_h = round(letter_font.size * 1.25)
     note_h = round(note_font.size * 1.30)
@@ -160,10 +160,11 @@ def main() -> int:
     def col_x(i: int) -> int:
         return margin + i * (W + gutter)
 
-    y = margin
-    if args.legend:
-        # Reachable first, as the panels are read: the green shell is the sampled
-        # region and the red solid the part of it the strategy loses.
+    def draw_key(y_top: int, line_h: int) -> None:
+        # Right-aligned on the first row's label line, where there is room
+        # beside "A Strawberry", rather than on a line of its own. Reachable
+        # first, as the panels are read: the green shell is the sampled region
+        # and the red solid the part of it the strategy loses.
         colours = rows[0][2].get("colours", {})
         entries = [(colours.get("reachable", (0.145, 0.635, 0.322)), "Reachable"),
                    (colours.get("unreachable", (0.788, 0.114, 0.110)), "Unreachable")]
@@ -171,15 +172,15 @@ def main() -> int:
         total = sum(swatch + round(swatch * 0.45) + text_w(key_font, t) for _, t in entries) \
             + gap * (len(entries) - 1)
         x = width - margin - round(total)
-        mid = y + key_h // 2
+        mid = y_top + line_h // 2
         for rgb, text in entries:
             draw.rectangle([x, mid - swatch // 2, x + swatch, mid + swatch // 2],
                            fill=rgb255(rgb))
             x += swatch + round(swatch * 0.45)
             draw.text((x, mid - round(key_font.size * 0.62)), text, fill=INK, font=key_font)
             x += round(text_w(key_font, text)) + gap
-        y += key_h
 
+    y = margin
     for i, name in enumerate(names):
         draw.text((col_x(i) + (W - text_w(head_font, name)) / 2, y), name,
                   fill=INK, font=head_font)
@@ -193,6 +194,8 @@ def main() -> int:
         # difference in their ascent.
         draw.text((x, y + (letter_font.size - label_font.size)), label, fill=INK,
                   font=label_font)
+        if r == 0 and args.legend:
+            draw_key(y, letter_h)
         y += letter_h
         for i, panel in enumerate(meta["panels"]):
             draw.text((col_x(i) + (W - text_w(note_font, panel["note"])) / 2, y),

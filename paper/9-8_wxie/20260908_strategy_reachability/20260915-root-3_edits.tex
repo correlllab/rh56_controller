@@ -9,8 +9,8 @@
 % Source of every number:
 %   results/paper_conditions_meshfloor_trials.csv        naive / iterative / reflex
 %   results/paper_conditions_meshfloor_ggx100_trials.csv GraspGen-X, top 100
-%   results/20260908-nogo_strip_{strawberry,can}_ggx_stats.json  Fig. 5 volumes (GGX k = 10)
-%   results/ggx100/nogo_volume_paper_can.npz                    GGX k = 100 can volume
+%   results/20260908-nogo_strip_{strawberry,can}_ggx_stats.json  Fig. 5 volumes
+%   results/nogo_volume_paper_can_ggx100merged_assumptions.json  how the can's GGX layer was built
 % and the derivations are in README.md, "Numbers quoted in the paper".
 %
 % What changes and why:
@@ -24,14 +24,15 @@
 %     10 mm-tolerance run). All 60 whiffs are among the 76.
 %   * Delicate-subset iterative reachability: 66%, not 71% (71.3% is the
 %     full-set value). 50 trials, so 33/50.
-%   * Fig. 5 right panel: the new lettered grid. Its GGX column is the
-%     best-of-10 sweep, and the caption says so; one sentence gives the
-%     k = 100 volume result: the strawberry region stays entirely
-%     unreachable (all 100 proposals put the hand into the table at the
-%     proposal pose itself, code/ggx_start_independent_check.py) and the can
-%     region goes from 68% to about 3% unreachable (k = 100 sweep on a grid
-%     clipped to 995 of the 1206 poses, results/ggx100/; the full-grid rerun
-%     was stopped).
+%   * Fig. 5 right panel: the new lettered grid, GGX at 100 proposals in
+%     both rows. Strawberry: the k = 10 sweep is drawn, exact at any k because
+%     all 100 proposals put the hand into the table at the proposal pose
+%     itself (code/ggx_start_independent_check.py). Can: the k = 100 sweep
+%     was run on the runner's default extents (995 of the 1206 poses); its
+%     34 unreachable cells, all low and close to the can, are written onto
+%     the full quarter ball and the 211 cells outside its extent are drawn
+%     reachable (code/merge_ggx_volume.py), giving 2.8%. At ten proposals
+%     the can figure was 67.7%.
 % =====================================================================
 
 
@@ -53,7 +54,7 @@
   \centering
   \includegraphics[width=0.33\linewidth]{img/grasp_strategies_complex.png}
   \includegraphics[width=0.66\linewidth]{supplement_figures/Reachability.pdf}
-  \caption{\textbf{Left:} We formulate three grasp strategies: iterative (left), reflex (center), and naive (right) closure. In the iterative approach, the hand rotates downward from a pre-grasp pose to reach the desired grasp pose. In the reflex approach, fingers remain open until the thumb makes contact with the object. In the naive approach, the fingers are treated like a parallel jaw gripper prior to closure, leading to ground collisions for small objects. \textbf{Right:} start poses from which each strategy can (green) and cannot (red) execute a collision-free approach and closure, for (A) a strawberry whose grasp point is 15\,mm above the table and (B) a can at 110\,mm, sampled over the 300\,mm quarter-sphere above the grasp point on the approach side. The two solids together are the sampled region and each percentage is the red fraction of it. GraspGen-X (GGX)~\cite{graspgenx2026} is admissible where any of its first ten ranked proposals executes. At the strawberry, naive closure and GGX admit no start pose, while iterative closure excludes 76.9\% and reflex closure 53.3\%. At the can, the three width-conditioned planners exclude 32--34\% and GGX 68\%; searching all 100 proposals leaves the strawberry region unreachable and about 3\% of the can region.}
+  \caption{\textbf{Left:} We formulate three grasp strategies: iterative (left), reflex (center), and naive (right) closure. In the iterative approach, the hand rotates downward from a pre-grasp pose to reach the desired grasp pose. In the reflex approach, fingers remain open until the thumb makes contact with the object. In the naive approach, the fingers are treated like a parallel jaw gripper prior to closure, leading to ground collisions for small objects. \textbf{Right:} start poses from which each strategy can (green) and cannot (red) execute a collision-free approach and closure, for (A) a strawberry whose grasp point is 15\,mm above the table and (B) a can at 110\,mm, sampled over the 300\,mm quarter-sphere above the grasp point on the approach side. The two solids together are the sampled region and each percentage is the red fraction of it. GraspGen-X (GGX)~\cite{graspgenx2026} is admissible where any of its 100 ranked proposals executes. At the strawberry, naive closure and GGX admit no start pose, while iterative closure excludes 76.9\% and reflex closure 53.3\%. At the can, the three width-conditioned planners exclude 32--34\% and GGX 3\%, against 68\% when only its first ten proposals are searched.}
   \label{fig:grasp_strategies}
   \vspace{-1mm}
 \end{figure*}
@@ -103,18 +104,17 @@ whiffs. Iterative and reflex closure have no whiffs, and produce 41 and
 
 We then generalize the reachability analysis to initial poses within
 a 300\,mm-radius quarter-sphere around two objects
-(Fig.~\ref{fig:grasp_strategies}, right), crediting GGX with the best
-of its first ten proposals. For the strawberry, whose grasp point lies
-15\,mm above the table, GGX and naive closure do not admit any
-collision-free initial pose: every one of GGX's 100 proposals places
-the hand in the table at the proposed pose itself, which no initial
-pose can change. Iterative closure excludes 76.9\% of the volume and
-reflex closure 53.3\%. At the 110\,mm-high can, the three
+(Fig.~\ref{fig:grasp_strategies}, right). For the strawberry, whose
+grasp point lies 15\,mm above the table, GGX and naive closure do not
+admit any collision-free initial pose: every one of GGX's 100 proposals
+places the hand in the table at the proposed pose itself, which no
+initial pose can change. Iterative closure excludes 76.9\% of the
+volume and reflex closure 53.3\%. At the 110\,mm-high can, the three
 width-conditioned planners exclude 32--34\% of the sampled volume,
-while GGX excludes 68\% at ten proposals and about 3\% when all 100
-are searched. The depth of that search is the cost: the 100-proposal
-rate is reached only by collision-checking candidates the ranking
-places twentieth and deeper.
+while GGX excludes 3\% when all 100 proposals are searched and 68\%
+when only the first ten are. The depth of that search is the cost: the
+100-proposal rate is reached only by collision-checking candidates the
+ranking places twentieth and deeper.
 
 
 % ---------------------------------------------------------------------

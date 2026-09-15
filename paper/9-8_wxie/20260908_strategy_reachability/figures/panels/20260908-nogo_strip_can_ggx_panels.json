@@ -43,9 +43,9 @@
     {
       "layer": "ggx_best",
       "name": "GraspGen-X",
-      "note": "best of k, 68% unreachable",
+      "note": "best of k, 3% unreachable",
       "file": "20260908-nogo_strip_can_ggx_ggx_best.png",
-      "locked_fraction": 0.6774461028192371
+      "locked_fraction": 0.028192371475953566
     }
   ]
 }

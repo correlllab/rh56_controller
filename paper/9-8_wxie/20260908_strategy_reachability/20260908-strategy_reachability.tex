@@ -95,7 +95,7 @@ undecimated visual meshes; the two agree to a median of
   naive approach the fingers are treated like a parallel jaw gripper prior to
   closure, leading to ground collisions for small objects.
   \textbf{Bottom:} start poses each strategy can and cannot execute from, one
-  column per strategy with GraspGen-X at its best of 10 ranked candidates, for
+  column per strategy with GraspGen-X at its best of 100 ranked proposals, for
   (A) the strawberry, grasp point \SI{15}{\milli\metre} above the table, and
   (B) the can, \SI{110}{\milli\metre}. The sampled region is the quarter ball
   of radius \SI{300}{\milli\metre} above the grasp point and on the approach
@@ -107,11 +107,12 @@ undecimated visual meshes; the two agree to a median of
   of the region unreachable, iterative closure 76.9\%, and naive closure and
   GraspGen-X all of it. At the can the support surface is never the binding
   constraint and the three hand-designed sets nearly coincide, 34.0\%, 32.1\%
-  and 34.0\%, while GraspGen-X leaves 67.7\% unreachable at every sampled
-  height, a restriction on approach direction rather than on clearance.
-  Searching all 100 proposals leaves the strawberry region unreachable, since
-  every proposal places the hand in the table at the proposed pose itself, and
-  about 3\% of the can region.
+  and 34.0\%, while GraspGen-X leaves 2.8\% unreachable, a pocket low and
+  close to the can; searching only its first ten proposals leaves 67.7\%
+  unreachable at every sampled height, a restriction on approach direction
+  rather than on clearance. At the strawberry every one of the 100 proposals
+  places the hand in the table at the proposed pose itself, so no start pose
+  is admissible at any search depth.
   Surfaces are the half level of the \SI{30}{\milli\metre} sweep grid, refined
   and low-passed, so the smoothness is presentational and the boundary is
   resolved to \SI{30}{\milli\metre}.}
