@@ -377,8 +377,20 @@ def main() -> int:
     </figcaption>
   </figure>'''
 
+    # The GraspGen-X k of the volume sweep behind each object's strips. The
+    # strawberry keeps its k = 10 sweep: every one of its 100 proposals fails at
+    # the proposal pose itself (code/ggx_start_independent_check.py), so no start
+    # pose rescues any of them and the all-unreachable panel is exact at any k.
+    def vol_k(obj: str) -> int:
+        ap = args.results / f"nogo_volume_paper_{obj}_assumptions.json"
+        if ap.exists():
+            return json.loads(ap.read_text()).get("n_ggx_candidates", 0) or 0
+        return 0
+    vol_topk = max(vol_k("can"), vol_k("strawberry"), 10)
+
     def strip_figure(png: str, lede: str, tail: str) -> str:
         fig = args.figures / png
+        obj = "strawberry" if "strawberry" in png else "can"
         stats_path = args.results / f"{fig.stem}_stats.json"
         if not (stats_path.exists() and fig.exists()):
             return ""
@@ -393,7 +405,7 @@ def main() -> int:
         parts += [f"{LABELS[k].lower()} closure {st[k]['locked_fraction']:.1%}"
                   for k in order[1:]]
         if "ggx_best" in st:
-            parts.append(f"GraspGen-X at its best of {vol_topk} candidates "
+            parts.append(f"GraspGen-X at its best of {vol_k(obj)} candidates "
                          f"{st['ggx_best']['locked_fraction']:.1%}")
         rates = ", ".join(parts)
         split = ("Red is the set of start poses from which the strategy cannot execute "
@@ -405,12 +417,6 @@ def main() -> int:
       <b>{lede}</b> {rates}. {split} {tail}
     </figcaption>
   </figure>'''
-
-    # The GraspGen-X k of the volume sweeps behind the strips and the grid.
-    vol_topk = 10
-    vol_ap = args.results / "nogo_volume_paper_strawberry_assumptions.json"
-    if vol_ap.exists():
-        vol_topk = json.loads(vol_ap.read_text()).get("n_ggx_candidates", vol_topk) or vol_topk
 
     def grid_figure(png: str) -> str:
         # The paper figure: both objects in one lettered grid with the strategy
@@ -430,15 +436,22 @@ def main() -> int:
     <div class="plate"><img src="{data_uri(fig)}" alt="Two rows of four panels: start-pose volumes for iterative, reflex, naive and GraspGen-X closure at the strawberry (A) and the can (B), unreachable poses red and reachable ones green."></div>
     <figcaption>
       <b>Fig. 5 (bottom) as it goes into the paper.</b> One column per strategy,
-      GraspGen-X at its best of {vol_topk} ranked candidates, for (A) the strawberry,
-      grasp point 15&nbsp;mm above the table, and (B) the can, 110&nbsp;mm. Red is the
+      GraspGen-X at its best of {vol_k("can")} ranked proposals, for (A) the strawberry,
+      grasp point 15&nbsp;mm above the table, and (B) the can, 110&nbsp;mm. The strawberry
+      row is drawn from its {vol_k("strawberry")}-proposal sweep: every one of the 100
+      proposals puts the hand into the table at the proposal pose itself
+      (<code>ggx_start_independent_check.py</code>), which no start pose changes, so the
+      all-unreachable panel holds at any depth. Red is the
       set of start poses from which the strategy cannot execute and green the rest of
       the sampled quarter ball, so the two together are the region each percentage is
       a fraction of. At the strawberry iterative closure leaves {pct("strawberry", "iterative_closure")}
       unreachable, reflex {pct("strawberry", "thumb_reflex")}, naive and GraspGen-X all of it;
       at the can the three hand-designed strategies leave {pct("can", "iterative_closure")},
       {pct("can", "thumb_reflex")} and {pct("can", "naive")} against {pct("can", "ggx_best")} for
-      GraspGen-X. Built by <code>code/render_strips.sh</code> from the bare strip
+      GraspGen-X at ten proposals; at 100 proposals GraspGen-X leaves about 3% of the
+      can region unreachable (<code>results/ggx100/</code>, a grid clipped to 995 of the
+      1206 poses) and all of the strawberry region. Built by
+      <code>code/render_strips.sh</code> from the bare strip
       panels; the strips below are the same renders with one object per row.
     </figcaption>
   </figure>'''

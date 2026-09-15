@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--iterative-step-mm", type=float, default=15.0)
     ap.add_argument("--ggx-candidates", type=Path, default=None)
     ap.add_argument("--ggx-topk", type=int, default=10)
+    ap.add_argument("--ggx-prune-start-independent", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="Before the sweep, run each GraspGen-X proposal with a zero-length "
+                         "approach and drop the ones that fail: a failure at the proposal's "
+                         "own pre-grasp pose or during closure does not depend on the start, "
+                         "so no start pose can rescue it. Exact; only the cost changes.")
     ap.add_argument(
         "--yaw-mode",
         choices=["fixed", "radial"],
@@ -219,22 +225,32 @@ def main() -> int:
             obstacle_centers=obstacle_centers or None,
         ).admissible
 
+    ggx_sweep = list(ggx_plans)
+    ggx_pruned = 0
+    if ggx_plans and args.ggx_prune_start_independent:
+        ggx_sweep = [plan for plan in ggx_plans
+                     if check(plan, plan.waypoints[0].base_position)]
+        ggx_pruned = len(ggx_plans) - len(ggx_sweep)
+        print(f"  GraspGen-X: {ggx_pruned} of {len(ggx_plans)} proposals fail from every "
+              f"start pose; sweeping the other {len(ggx_sweep)}", flush=True)
+
     def ggx_outcomes(start_base) -> tuple[bool, bool]:
         """(any candidate admissible, every candidate admissible).
 
         Stops as soon as both are decided, which is usually after two
-        candidates.
+        candidates. A proposal pruned as start-independent counts against
+        "every candidate" from every start.
         """
 
         saw_true = saw_false = False
-        for plan in ggx_plans:
+        for plan in ggx_sweep:
             if check(plan, start_base):
                 saw_true = True
             else:
                 saw_false = True
             if saw_true and saw_false:
                 break
-        return saw_true, not saw_false
+        return saw_true, (not saw_false) and ggx_pruned == 0
 
     # The failures are driven by clearance, so admissibility is monotone in
     # height: once a column works it keeps working higher up.  Scanning each
@@ -290,7 +306,7 @@ def main() -> int:
                         dense[name][i, j, k] = check(column_plans[name], start)
                     if ggx_plans:
                         best, worst = ggx_outcomes(start)
-                        evaluations += len(ggx_plans)
+                        evaluations += len(ggx_sweep)
                         dense["ggx_best"][i, j, k] = best
                         dense["ggx_worst"][i, j, k] = worst
             print(f"  column row {i + 1}/{len(xs)}  ({evaluations} evaluations)", flush=True)
@@ -301,7 +317,7 @@ def main() -> int:
         grids = dense
         return _write(args, obj, xs, ys, zs, grasp_target, aabb_center, yaw,
                       yaw_used, grids, floors, sampled, obstacles,
-                      obstacle_centers, ggx_plans)
+                      obstacle_centers, ggx_plans, ggx_pruned)
 
     for i, x in enumerate(xs):
         for j, y in enumerate(ys):
@@ -328,7 +344,7 @@ def main() -> int:
                         pending.discard(name)
                 if ggx_plans and ({"ggx_best", "ggx_worst"} & pending):
                     best, worst = ggx_outcomes(start)
-                    evaluations += len(ggx_plans)
+                    evaluations += len(ggx_sweep)
                     if best and "ggx_best" in pending:
                         floors["ggx_best"][i, j] = z
                         pending.discard("ggx_best")
@@ -367,11 +383,12 @@ def main() -> int:
 
     return _write(args, obj, xs, ys, zs, grasp_target, aabb_center, yaw,
                   yaw_used, grids, floors, sampled, obstacles,
-                  obstacle_centers, ggx_plans)
+                  obstacle_centers, ggx_plans, ggx_pruned)
 
 
 def _write(args, obj, xs, ys, zs, grasp_target, aabb_center, yaw, yaw_used,
-           grids, floors, sampled, obstacles, obstacle_centers, ggx_plans) -> int:
+           grids, floors, sampled, obstacles, obstacle_centers, ggx_plans,
+           ggx_pruned: int = 0) -> int:
     """Write the volume archive and its assumptions record.
 
     Shared by both sweep paths so the column scan and the full grid emit
@@ -413,6 +430,7 @@ def _write(args, obj, xs, ys, zs, grasp_target, aabb_center, yaw, yaw_used,
         "iterative_step_mm": args.iterative_step_mm,
         "ggx_topk": args.ggx_topk if ggx_plans else None,
         "n_ggx_candidates": len(ggx_plans),
+        "ggx_start_independent_failures": ggx_pruned if ggx_plans else None,
         "floor_model": args.floor_model,
         "floor_tolerance_mm": args.floor_tolerance_mm,
         "contact_tolerance_mm": args.contact_tolerance_mm,

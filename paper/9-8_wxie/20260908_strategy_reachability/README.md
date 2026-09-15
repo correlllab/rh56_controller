@@ -119,8 +119,14 @@ at or below 15 mm (big screwdriver, charger, nut, pen, raspberry, small
 screwdriver, strawberry), the set on which naive closure whiffs. The
 quarter-ball volume sweeps behind Fig. 5 were run at the top 10
 (`ggx_topk: 10` in `results/nogo_volume_paper_{strawberry,can}_assumptions.json`);
-the top-100 sweeps are in `results/ggx100/` and the figure is rendered from
-them.
+the figure keeps them (the caption says best of 10). At 100 proposals the
+strawberry region stays entirely unreachable, since
+`code/ggx_start_independent_check.py` shows all 100 proposals collide with the
+table at the proposal pose itself, and the can region goes from 67.7% to 3.4%
+unreachable (`results/ggx100/nogo_volume_paper_can.npz`, a grid clipped to 995
+of the 1206 poses; the hand strategies read 35.2 / 35.2 / 33.0% on it against
+34.0 / 34.0 / 32.1% on the full grid). `ggx_worst`, every one of the 100
+executing, is 0% of the region on both grids.
 
 Everything else the draft quotes from this analysis (48.0 / 71.3 / 90.7%;
 41 and 12 iterative and reflex collisions; 13 grazes at or under 1.7 mm; the
@@ -221,15 +227,25 @@ uv run python $R/code/run_reachability_sweep.py --sampler paper-conditions \
     --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
     --ggx-topk 100 --tag paper_conditions_meshfloor_ggx100 --out $R/results
 
-# the 3-D no-go volumes behind Fig. 5 (about 3 h per object at --ggx-topk 100;
-# the two objects run side by side)
-for OBJ in paper_strawberry paper_can; do
-  uv run python $R/code/run_nogo_volume.py --object $OBJ --region quarter-ball \
-      --full-grid --floor-model mesh --floor-tolerance-mm 0 \
-      --contact-policy contact-fingers \
+# the 3-D no-go volumes behind Fig. 5, GraspGen-X at its best of 10 proposals.
+# The grid must span the whole quarter ball: xy +-300 mm and z from the grasp
+# point to 300 mm above it (the runner's defaults clip it).
+for OBJ_Z in "paper_strawberry 15 315" "paper_can 110 410"; do set -- $OBJ_Z
+  uv run python $R/code/run_nogo_volume.py --object $1 --region quarter-ball \
+      --full-grid --xy-range-mm -300 300 --z-range-mm $2 $3 \
+      --floor-model mesh --floor-tolerance-mm 0 --contact-policy contact-fingers \
       --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
-      --ggx-topk 100 --out $R/results/ggx100 &
-done; wait
+      --ggx-topk 10 --out $R/results
+done
+# GraspGen-X at 100 proposals. The runner now prunes proposals that fail with a
+# zero-length approach before sweeping (exact: a failure at the proposal pose
+# or during closure does not depend on the start). Strawberry: 0 of 100
+# survive, so the k = 10 sweep already is the k = 100 answer; check with
+#   uv run python $R/code/ggx_start_independent_check.py --object paper_strawberry \
+#       --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates
+# Can: 41 of 100 survive. results/ggx100/nogo_volume_paper_can.npz is a k = 100
+# sweep on the runner's default grid (xy +-240 mm, z 0-330 mm: 995 of the 1206
+# poses), GGX 3.4% unreachable; the full-grid rerun was stopped.
 uv run python $R/code/run_nogo_volume.py --object paper_nut \
     --ggx-candidates artifacts/paper_15_object_grasp_success/graspgenx_candidates \
     --verify-monotonic 6 --out $R/results   # ~40 min
