@@ -1,0 +1,10 @@
+# Confirmed 2026-09-13: P1 is 250 mm toward the arm from the object grasp point.
+# Rigid paper-to-base mapping: y- -> y+, x+ -> x-. No candidate-specific rotation.
+schema: rh56_object_relative_starts_config/v1
+frame: object_grasp_center_base_axes
+paper_to_base_yaw_deg: 180.0
+# Retain the common hand orientation; new default wrist-flip seed matches scan.
+# Equivalent winding is intentional: do not normalize each joint to +/-pi.
+tcp_rotvec: [0.027002741290183145, 2.3779540707813736, -1.9814186112393966]
+seed_q: [0.28989651569124114, -1.707357781300345, 1.89999951502219,
+         0.4349530689779528, 0.31845978068450703, -3.6986628321662134]

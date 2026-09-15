@@ -97,7 +97,17 @@ class GraspVizCore:
         ros_publish_hz: float = 20.0,
         ros_send_hand_cmd: bool = False,
         rerun_viz: bool = False,
+        vision_target=None,
+        hand_write_only: bool = False,
     ) -> None:
+        if vision_target is not None:
+            if h12_mode or real_h12 or h12_ros:
+                raise ValueError("Vision target is in UR base coordinates, not H1-2 coordinates")
+            if send_real or ros_send_hand_cmd:
+                raise ValueError("Load vision targets with automatic hand sending disabled")
+            robot_mode = True
+        self._vision_target = vision_target
+        self._hand_write_only = hand_write_only
         _log.info("Initialising FK model...")
         self.fk      = InspireHandFK(xml_path=xml_path, rebuild=rebuild)
         self.closure = ClosureGeometry(self.fk)
@@ -145,6 +155,16 @@ class GraspVizCore:
         # Preserve legacy viewer/experiment behavior unless a caller explicitly
         # requests the physical midpoint between thumb and opposing fingers.
         self._grasp_center_policy = "contact-centroid"
+        if vision_target is not None:
+            width = vision_target.planner_width_m
+            if not self._width_range[0] <= width <= self._width_range[1]:
+                raise ValueError(f"Vision planner width {width} is outside {self._width_range}")
+            self._width_m = self._width_target_m = width
+            self._width_target_edited = True
+            self._grasp_x, self._grasp_y, self._grasp_z = vision_target.center_base_m
+            self._plane_rz = math.radians(vision_target.yaw_deg)
+            self._grasp_center_policy = vision_target.center_policy
+            _log.info("Loaded vision target: %s", vision_target.metadata())
         self._robot_only_mode = False
 
         self._wrist3_pos: Optional[np.ndarray] = None
@@ -316,6 +336,7 @@ class GraspVizCore:
                 fk=self.fk,
                 status_cb=lambda s: self._status_queue.put(s),
                 force_cb=lambda f: self._status_queue.put(f"forces: {f}"),
+                hand_write_only=self._hand_write_only,
             )
             _log.info("GraspExecutor ready.")
         except Exception as exc:
@@ -524,6 +545,8 @@ class GraspVizCore:
         if self._hand is None:
             return
         try:
+            if self._hand_write_only:
+                return
             angles = self._hand.angle_read()
             ctrl_min = np.array([self.fk.ctrl_min[a] for a in _ACTUATOR_ORDER])
             ctrl_max = np.array([self.fk.ctrl_max[a] for a in _ACTUATOR_ORDER])
@@ -585,7 +608,8 @@ class GraspVizCore:
         if r is None:
             return None
 
-        wtips = r.world_tips(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz)
+        wtips = r.world_tips(self._grasp_z, self._plane_rx, self._plane_ry, self._plane_rz,
+                             center_policy=self._grasp_center_policy)
         ctrl = [
             float(r.ctrl_values.get("pinky", 0.0)),
             float(r.ctrl_values.get("ring", 0.0)),

@@ -114,9 +114,11 @@ class GraspExecutor:
         fk,
         status_cb: Optional[Callable] = None,
         force_cb:  Optional[Callable] = None,
+        hand_write_only: bool = False,
     ):
         self._arm     = arm
         self._hand    = hand
+        self._hand_write_only = hand_write_only
         self._fk      = fk
         self._status  = status_cb or (lambda s: print(f"[GraspExec] {s}"))
         self._forcecb = force_cb  or (lambda f: None)
@@ -153,6 +155,7 @@ class GraspExecutor:
         logger=None,
     ):
         """Start a Naive grasp in a background thread."""
+        self._validate_force_mode(force_N)
         self._start(self._run_naive, world_T_hand, force_N, move_arm,
                     active_fingers, logger)
 
@@ -167,6 +170,7 @@ class GraspExecutor:
         logger=None,
     ):
         """Start a Plan grasp in a background thread."""
+        self._validate_force_mode(force_N)
         self._start(
             self._run_plan,
             closure_result, world_T_hand, force_N, step_mm, move_arm,
@@ -186,6 +190,7 @@ class GraspExecutor:
         waypoints: list of (world_T_hand: np.ndarray, closure_result) pairs,
                    ordered from approach width down to final grip width.
         """
+        self._validate_force_mode(force_N)
         self._start(self._run_plan_waypoints, waypoints, force_N, move_arm,
                     active_fingers, logger)
 
@@ -199,6 +204,7 @@ class GraspExecutor:
         logger=None,
     ):
         """Start a Thumb Reflex grasp in a background thread."""
+        self._validate_force_mode(force_N)
         self._start(
             self._run_thumb_reflex,
             closure_result, world_T_hand, force_N, move_arm,
@@ -217,6 +223,15 @@ class GraspExecutor:
             target=fn, args=args, daemon=True, name="grasp-exec",
         )
         self._thread.start()
+
+    def _validate_force_mode(self, force_N):
+        if self._hand_write_only and force_N != 0.0:
+            raise ValueError("Write-only hand requires Force (N) = 0; feedback force control is unavailable")
+
+    def _read_hand(self, method):
+        if self._hand is None or self._hand_write_only:
+            return None
+        return getattr(self._hand, method)()
 
     # ------------------------------------------------------------------
     # Angle conversion helper
@@ -304,8 +319,8 @@ class GraspExecutor:
             )
             if logger is not None:
                 joint_q = self._arm.get_joint_angles() if self._arm else None
-                fa = self._hand.angle_read() if self._hand else None
-                ff = self._hand.force_act()   if self._hand else None
+                fa = self._read_hand("angle_read")
+                ff = self._read_hand("force_act")
                 logger.log_waypoint(
                     step_i=0, n_steps=1,
                     desired_T=world_T_hand, actual_T=actual_T,
@@ -422,8 +437,8 @@ class GraspExecutor:
                 )
                 if logger is not None:
                     joint_q = self._arm.get_joint_angles() if self._arm else None
-                    fa = self._hand.angle_read() if self._hand else None
-                    ff = self._hand.force_act()   if self._hand else None
+                    fa = self._read_hand("angle_read")
+                    ff = self._read_hand("force_act")
                     logger.log_waypoint(
                         step_i=i, n_steps=n,
                         desired_T=wp_T, actual_T=actual_T,
@@ -511,8 +526,8 @@ class GraspExecutor:
             )
             if logger is not None:
                 joint_q = self._arm.get_joint_angles() if self._arm else None
-                fa = self._hand.angle_read() if self._hand else None
-                ff = self._hand.force_act()   if self._hand else None
+                fa = self._read_hand("angle_read")
+                ff = self._read_hand("force_act")
                 logger.log_waypoint(
                     step_i=0, n_steps=len(waypoints),
                     desired_T=approach_T, actual_T=actual_T,
@@ -547,8 +562,8 @@ class GraspExecutor:
                 )
                 if logger is not None:
                     joint_q = self._arm.get_joint_angles() if self._arm else None
-                    fa = self._hand.angle_read() if self._hand else None
-                    ff = self._hand.force_act()   if self._hand else None
+                    fa = self._read_hand("angle_read")
+                    ff = self._read_hand("force_act")
                     logger.log_waypoint(
                         step_i=i + 1, n_steps=len(waypoints),
                         desired_T=wp_T, actual_T=actual_T,
@@ -628,8 +643,8 @@ class GraspExecutor:
             )
             if logger is not None:
                 joint_q = self._arm.get_joint_angles() if self._arm else None
-                fa = self._hand.angle_read() if self._hand else None
-                ff = self._hand.force_act()   if self._hand else None
+                fa = self._read_hand("angle_read")
+                ff = self._read_hand("force_act")
                 logger.log_waypoint(
                     step_i=0, n_steps=1,
                     desired_T=world_T_hand, actual_T=actual_T,

@@ -203,13 +203,13 @@ class GraspVizUI(GraspVizCore):
         r += 1
 
         r = self._add_slider_row(outer, r, "Plane Rx (°):",
-                                 -180.0, 180.0, 0.0, 1.0,
+                                 -180.0, 180.0, np.degrees(self._plane_rx), 1.0,
                                  "_var_rx", "_sl_rx", "_ent_rx", self._on_plane_rx)
         r = self._add_slider_row(outer, r, "Plane Ry (°):",
-                                 -180.0, 180.0, 0.0, 1.0,
+                                 -180.0, 180.0, np.degrees(self._plane_ry), 1.0,
                                  "_var_ry", "_sl_ry", "_ent_ry", self._on_plane_ry)
         r = self._add_slider_row(outer, r, "Plane Rz (°):",
-                                 -180.0, 180.0, 0.0, 1.0,
+                                 -180.0, 180.0, np.degrees(self._plane_rz), 1.0,
                                  "_var_rz", "_sl_rz", "_ent_rz", self._on_plane_rz)
 
         if self._h12_mode:
@@ -1593,6 +1593,9 @@ class GraspVizUI(GraspVizCore):
             step_mm = float(self._ent_step.get().strip()  or "10")
         except ValueError:
             force_N, step_mm = 0.0, 10.0
+        if self._hand_write_only and force_N != 0.0:
+            self._update_status("Write-only hand: set Force (N) to 0 before executing.")
+            return
         approach_text = self._ent_approach.get().strip()
         try:
             approach_m = float(approach_text) / 1000.0 if approach_text else None
@@ -1636,6 +1639,10 @@ class GraspVizUI(GraspVizCore):
             name=log_name,
         )
         self._update_status(f"Log: {logger.path}")
+        logger.log("input_context", hand_write_only=self._hand_write_only,
+                   grasp_center_policy=self._grasp_center_policy,
+                   vision_target=(self._vision_target.metadata()
+                                  if self._vision_target is not None else None))
 
         self._send_real = True
         self._grasp_hand_locked = True   # prevent slider recompute from opening the hand
@@ -1703,8 +1710,10 @@ class GraspVizUI(GraspVizCore):
             self._canvas.draw_idle()
             return
 
-        wtips = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz)
-        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz)
+        wtips = r.world_tips(gz, self._plane_rx, self._plane_ry, self._plane_rz,
+                             center_policy=self._grasp_center_policy)
+        wbase = r.world_base(gz, self._plane_rx, self._plane_ry, self._plane_rz,
+                             center_policy=self._grasp_center_policy)
 
         # Fingertip dots
         for fname, pos in wtips.items():

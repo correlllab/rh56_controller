@@ -1,0 +1,61 @@
+# Saved trial_04 iterative cube preset, operator-confirmed pickup on 2026-09-09.
+# Supervised, setup-specific; NOT collision certification. Do not edit for GGX.
+# Paths are relative to the repository root; local artifacts must be retained.
+schema: rh56_vision_pick_cycle_config/v1
+ur_ip: 192.168.0.4
+hand_port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+camera_serial: '836612071918'
+calibration: artifacts/ur5_external_camera_calibration_replay/observed_20260904_first/camera_calibration.yaml
+desk_plane: artifacts/ur5_external_camera_calibration_real/multi_height_validation_20260904/current_check/desk_plane_analysis/desk_plane_validation.yaml
+local_alignment: artifacts/hand_mount_index_calibration/two_finger_local_01/report.json
+alignment_validation: artifacts/hand_mount_index_calibration/pose3_frozen_validation_01/report.json
+# Record this separately after manually positioning the arm clear of the camera.
+start_pose: artifacts/vision_pick_start/start_pose.json
+
+object_width_mm: 40
+object_height_mm: 40
+grasp_depth_mm: 10
+yaw_deg: 90
+# Trial_04 pickup confirmed by operator: "Yes this is perfect!".
+# [UR-base X, UR-base Y], horizontal only; separate from the total-gap width margin.
+# Empirical placement bias for this setup/orientation, NOT a new calibration.
+grasp_xy_offset_base_mm: [0, -5]
+# Approximate two-point air measurements: internal60 -> gap50, internal55 -> gap45.
+# User reported margin1/force100 held the cube loosely; requested margin2/force1000.
+# This predicts internal48 -> gap38; that narrower/high-force response is NOT measured.
+width_offset_mm: 10
+closure_margin_mm: 2  # Total gap reduction, NOT per finger; permitted trial range 0..2.
+desk_z_mm: 34
+speed_profile: planner
+hand_force_raw: 1000  # Explicitly requested; execution still needs --confirm-high-force.
+open_settle_s: 1.0   # Explicit open-loop assumption, not hand readback.
+close_settle_s: 0.5  # Extra wait before lift; internal Plan timing is unchanged.
+stationary_wait_grace_s: 3.0  # Timeout = required stable dwell + grace; no motion retry.
+lift_mm: 50
+
+# Review these bounds and all swept paths before enabling hardware execution.
+# TCP height is NOT fingertip clearance. Low-entry retreat needs explicit scene confirmation.
+min_open_tcp_z_mm: 300
+tcp_bounds_mm: [[-450, -800, 180], [50, -150, 600]]
+target_bounds_mm: [[-300, -750, 60], [-100, -500, 120]]
+# User-approved automatic return to the saved scan pose: measured ~281 mm.
+# 300 mm is a bounded lab route cap, not collision certification or arbitrary recovery.
+max_reposition_mm: 300
+# Direct scan -> original Plan approach, with no added hover waypoint.
+# User-requested removal of the arbitrary scan -> approach distance cap (2026-09-09).
+# Explicit null: still check workspace, rotation, controller safety and sampled IK.
+# Return-to-scan, closure and lift limits stay unchanged. No path/waypoint changes.
+max_scan_to_approach_mm: null
+max_plan_segment_mm: 50
+max_rotation_deg: 60
+
+# Single BLUE cube top. Move the blue thumb brace out of this ROI at scan pose.
+roi: [250, 50, 1150, 680]
+hsv_lower: [85, 80, 50]
+hsv_upper: [125, 255, 255]
+erosion_px: 5
+frames: 3
+max_height_error_mm: 5
+max_center_spread_mm: 3
+max_depth_mad_mm: 3
+max_capture_age_s: 20

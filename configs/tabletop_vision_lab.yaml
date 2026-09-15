@@ -1,0 +1,10 @@
+# Perception ONLY. Not accepted by the robot pick-cycle config loader.
+schema: rh56_tabletop_vision_config/v1
+camera_serial: '836612071918'
+calibration: artifacts/ur5_external_camera_calibration_replay/observed_20260904_first/camera_calibration.yaml
+desk_plane: artifacts/ur5_external_camera_calibration_real/multi_height_validation_20260904/current_check/desk_plane_analysis/desk_plane_validation.yaml
+desk_z_mm: 34
+# Pixel rectangle inside the mat, reviewed against empty_20260909_01 RGB.
+# Leaves margins from mat edges and surrounding fixtures; NOT robot reachability.
+# Background/depth quality and truncation checks still apply within this region.
+roi: [320, 60, 1100, 620]

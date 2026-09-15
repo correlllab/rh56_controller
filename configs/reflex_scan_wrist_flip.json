@@ -1,0 +1,16 @@
+{
+  "schema": "rh56_vision_pick_start/v1",
+  "ur_ip": "192.168.0.4",
+  "pose_source": "nominal_wrist_flip_preset",
+  "time_s": 0.0,
+  "tcp": [-0.22666866372611474, -0.2630852635211856, 0.34335732659138435, 0.020350865521721842, 2.380660548006015, -1.9752828313114015],
+  "q": [0.28989651569124114, -1.707357781300345, 1.89999951502219, 0.4349530689779528, 0.31845978068450703, -3.6986628321662134],
+  "clearance_verified": false,
+  "routes_verified": false,
+  "assumptions": [
+    "Nominal IK preset, not measured robot telemetry or motion approval.",
+    "Same desired scan TCP as the original recorded pose; new wrist branch and continuous joint winding.",
+    "First transition requires existing controller preflight, Enter and operator cable inspection.",
+    "Camera occlusion and cable clearance are not certified by the rigid model."
+  ]
+}

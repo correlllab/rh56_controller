@@ -1,0 +1,35 @@
+{
+  "schema": "rh56_iterative_cube_baseline/v1",
+  "baseline_id": "trial_04_base_y_minus5_margin2_force1000",
+  "execution_policy_revision": {
+    "date": "2026-09-09",
+    "operator_requested": "Remove arbitrary scan-to-Plan-approach distance cap",
+    "max_scan_to_approach_mm": null,
+    "scope": "Only approach length gating changed; original Plan and other motion checks unchanged",
+    "validation": "Offline regression; revised policy has not been hardware-validated"
+  },
+  "config": "configs/ur5_iterative_cube_lab.yaml",
+  "reference_trial": "artifacts/vision_pick_cycle/trial_04/summary.json",
+  "operator_observation": "artifacts/vision_pick_cycle/trial_04/operator_observation.json",
+  "preview_capture": "artifacts/vision_pick_cycle/trial_04/capture_00",
+  "sha256": {
+    "configs/ur5_iterative_cube_lab.yaml": "20692abc64a18653b8471e0393ea9cc3a49207fedcfb32e607a829bd4197b053",
+    "artifacts/ur5_external_camera_calibration_replay/observed_20260904_first/camera_calibration.yaml": "0720c3dca551faabdc2b5cd6afc85db2d73fef0e442cf4e64c22cccf3853e0d9",
+    "artifacts/ur5_external_camera_calibration_real/multi_height_validation_20260904/current_check/desk_plane_analysis/desk_plane_validation.yaml": "3ffff1bcd4e58324f2b4cfea9ae2103e47a9d61debb53d263e3a4c14975df1a5",
+    "artifacts/hand_mount_index_calibration/two_finger_local_01/report.json": "857c3d7a83ff9f3b728f8256416dc5627a8b9cb8633f64206b70fc02dd66e9f2",
+    "artifacts/hand_mount_index_calibration/pose3_frozen_validation_01/report.json": "b3234cb85be64d0614cc4fe85eb32dcaa6878fe4e3b1606fc41d488f903c03c8",
+    "artifacts/vision_pick_start/start_pose.json": "a4cd2922ef1f394a81252c1e37d05b5db7b13d8a8c98257fad5bd344ad44f6f7",
+    "tools/run_vision_pick_cycle.py": "d97cebff167947f1dfafde4975f9619c48e4de16b3f47e97cba4d1643489decf",
+    "tools/run_vision_plan_trial.py": "8a2af1f6f59c988c39678e66fcda5a7a246796f01f56ea0a52c2fe3f364f0f1d",
+    "rh56_controller/vision_grasp_target.py": "20666c0c5bfd7f6c3ebfdf5ab74d71ea3a45fd8122030441d95d607cb68a47b7",
+    "rh56_controller/grasp_viz_core.py": "9338732d72611ccc6a5d5ee3c6d5949b22a8795b7f9f94ee5d5fd7bb4f5860f1",
+    "rh56_controller/grasp_executor.py": "5e744e779ca31b49fe52c9ab8d15c4b9a2737705dfc3e09bb731ca041dd1061f",
+    "rh56_controller/ur5_bridge.py": "18a8542ef2ab382d23e3dea61c6b55b7f15e0a55528a2e993de5a33ef9ccedf1",
+    "rh56_controller/rh56_hand.py": "de4060ffcd0294aa493eba3f8ca0ba47976842528b2cbaa1c9142a7dbaaec48e"
+  },
+  "limitations": [
+    "Selected source and calibration/start/config fingerprints; not a complete dependency lock or backup.",
+    "Physical alignment, collision clearance and object support require operator checks.",
+    "Local artifacts are Git-ignored; copy them separately when moving computers."
+  ]
+}

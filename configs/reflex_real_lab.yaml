@@ -1,0 +1,57 @@
+# Reflex ten-start profile; copied from GGX lab setup on 2026-09-13.
+# User requested faster arm motion: 2x speed, unchanged acceleration/hand settings.
+# Applies to approach, lift, and reset; does not alter GGX or iterative defaults.
+schema: rh56_ggx_real_config/v1
+ur_ip: 192.168.0.4
+hand_port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+hand_id: 1
+joint_speed_rad_s: 0.20
+joint_accel_rad_s2: 0.20
+# Linear speed 20 mm/s (previously 10 mm/s).
+cartesian_speed_m_s: 0.02
+cartesian_accel_m_s2: 0.02
+# Reset inherits the same arm profile; acceleration remains unchanged.
+# Operator-requested raw settings, not measured speed/force units.
+# Both reset opening and grasp require --allow-high-force + their Enter gates.
+hand_speed_raw: 1000
+hand_force_raw: 1000
+# The GGX candidate video remains; omit the two additional CB3 videos only.
+# Numerical CB3/controller/path checks remain mandatory.
+preview_videos: false
+# Reduce controller round trips: remote safety/FK at first/middle/last samples.
+# Keep every Cartesian IK query, local geometry sample and live motion monitor.
+# Use dense for diagnostic per-sample remote safety/FK checks.
+controller_preflight_mode: keypoints
+# Explicit open-loop timing assumptions, not measured completion feedback.
+open_settle_s: 2.0
+close_duration_s: 3.0
+close_settle_s: 1.0
+# GGX has arbitrary wrist orientations, unlike the original cube demo.
+# Derive a loose, finite bound from the unchanged CB3 URDF, keep TCP z>=0;
+# reachability, full arm/hand desk checks and controller checks remain mandatory.
+# This is not a claim that everything inside the envelope is reachable/safe.
+workspace_policy: urdf-envelope
+tcp_bounds_mm: null
+min_open_tcp_z_mm: 300
+# Maximum nominal URDF vs calibrated controller FK mismatch; fail, do not retune.
+model_position_tolerance_mm: 5
+model_rotation_tolerance_deg: 1
+scene_center_tolerance_mm: 3
+scene_yaw_tolerance_deg: 3
+scene_dimension_tolerance_mm: 5
+max_scene_age_s: 20
+# Verify the approved target's appearance + valid depth at fixed pixels;
+# do not require a fragmented depth image to yield one connected component again.
+scene_check_mode: reference-rgbd
+# Edge and envelope are mutually exclusive; neither set means infinite desk.
+desk_edge_y_m: null
+# Operator confirmed 2026-09-10: tabletop <=550x500 mm and this object's
+# center <=100 mm from tabletop center. Add 10 mm reference uncertainty.
+# Fixed UR-base reference from the approved scene: DO NOT follow future objects.
+# A yaw-independent circumscribed prism encloses all rectangles within bounds.
+desk_envelope:
+  center_base_xy_m: [-0.22982383728027345, -0.6525315551757812]
+  sides_upper_mm: [550, 500]
+  center_offset_upper_mm: 100
+  reference_margin_mm: 10
+  confirmed: true

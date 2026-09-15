@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Kinematic GGX preflight for UR5e + RH56 desk clearance.
+"""Kinematic GGX preflight for UR5e + RH56 desk and approach-object clearance.
 
 This tool is deliberately simulation-only.  It converts confidence-sorted
 GraspGen-X Inspire-hand poses into the checked-in UR5e + RH56 MuJoCo model,
 solves arm IK, samples the complete start/pre-grasp/grasp/close/lift path, and
 rejects any candidate that brings a robot collision geom too close to the
-adjustable desk plane.
+adjustable desk plane. Robot-object contact also rejects start, transit and
+approach samples; object contact during closure/lift is not a rejection gate.
 
 The result is a fast screen for human review, not a real-robot safety
 certificate.  Nothing in this module imports or calls the hardware bridge.
@@ -19,9 +20,10 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import mujoco
@@ -71,6 +73,10 @@ HAND_JOINTS = (
 )
 EEFF_LOCAL_M = np.array([0.070, 0.016, 0.155], dtype=float)
 DEFAULT_START_Q_DEG = (0.0, -90.0, 90.0, -90.0, 0.0, 0.0)
+OBJECT_GATE_PHASES = frozenset({"start", "start_to_pregrasp", "approach"})
+OBJECT_GATE_REVISION = "robot_object_before_closure/v2"
+# Geometry arithmetic tolerance, not a physical clearance allowance.
+SEPARATION_ROUNDOFF_M = 1e-7
 GGX_OPEN_CTRL = {
     "pinky": 0.0,
     "ring": 0.0,
@@ -98,6 +104,10 @@ class TrajectorySample:
     min_desk_clearance_m: float = math.inf
     nearest_geom: str = ""
     desk_collision: bool = False
+    object_clearance_m: float | None = None
+    nearest_object_geom: str = ""
+    object_collision: bool = False
+    object_distance_corrections: int = 0
 
 
 @dataclass
@@ -113,6 +123,10 @@ class CandidateResult:
     nearest_geom: str
     first_collision_phase: str
     samples_checked: int
+    min_object_clearance_mm: float | None = None
+    first_object_collision_phase: str = ""
+    nearest_object_geom: str = ""
+    object_distance_corrections: int = 0
 
 
 CONFIG_PATH_KEYS = {"graspgenx_yaml", "xml", "out"}
@@ -188,8 +202,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Screen GraspGen-X candidates with UR5e+RH56 IK and an adjustable "
-            "MuJoCo desk plane before human review. Simulation only."
+            "Screen GraspGen-X candidates with UR5e+RH56 IK, desk clearance "
+            "and pre-closure robot-object contact checks. Simulation only."
         )
     )
     parser.add_argument(
@@ -201,6 +215,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--graspgenx-yaml", type=Path)
+    parser.add_argument(
+        "--candidate-frame", choices=("object", "ur-base"), default="object",
+        help="Pose frame: legacy object-centered/base-aligned, or absolute UR base.",
+    )
     parser.add_argument("--xml", type=Path, default=DEFAULT_XML)
     parser.add_argument(
         "--out",
@@ -221,13 +239,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--object-x-m", type=float, default=0.0)
     parser.add_argument("--object-y-m", type=float, default=-0.50)
+    parser.add_argument("--object-yaw-deg", type=float, default=0.0,
+                        help="Rotate only the object proxy about base Z, not candidate poses.")
     parser.add_argument(
         "--object-size-mm",
         type=float,
         nargs=3,
         default=[40.0, 40.0, 40.0],
         metavar=("X", "Y", "Z"),
-        help="Visual-only object proxy dimensions; Z also sets its center height.",
+        help="Collision proxy dimensions; Z also sets its center height.",
     )
     parser.add_argument(
         "--object-shape",
@@ -292,6 +312,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Play the highest-confidence PASS in an interactive MuJoCo viewer.",
     )
+    parser.add_argument(
+        "--rejected-video", action=argparse.BooleanOptionalAction, default=True,
+        help="With --video, also render a diagnostic rejected candidate if none pass. "
+             "Interactive review disables this unused video; all checks/reports remain.",
+    )
     parser.add_argument("--video-width", type=int, default=720)
     parser.add_argument("--video-height", type=int, default=540)
     parser.add_argument("--fps", type=int, default=24)
@@ -312,6 +337,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise FileNotFoundError(args.graspgenx_yaml)
     if args.desk_clearance_mm < 0.0:
         raise ValueError("--desk-clearance-mm cannot be negative")
+    if not math.isfinite(args.object_yaw_deg):
+        raise ValueError("--object-yaw-deg must be finite")
     if any(value <= 0.0 for value in args.object_size_mm):
         raise ValueError("--object-size-mm values must be positive")
     if args.standoff_mm < 0.0 or args.lift_mm < 0.0:
@@ -395,6 +422,17 @@ def _lerp_ctrl(alpha: float) -> dict[str, float]:
     }
 
 
+def candidate_for_object_origin(
+    candidate: GraspGenXCandidate, frame: str, object_center: np.ndarray,
+) -> GraspGenXCandidate:
+    """Rebase absolute poses for the legacy translation-only conversion API."""
+    if frame == "object":
+        return candidate
+    if frame != "ur-base":
+        raise ValueError(f"Unknown candidate frame: {frame}")
+    return replace(candidate, position=candidate.position - object_center)
+
+
 def build_model(
     xml_path: Path,
     *,
@@ -402,8 +440,9 @@ def build_model(
     object_center: np.ndarray,
     object_size_m: np.ndarray,
     object_shape: str,
+    object_yaw_deg: float = 0.0,
 ) -> mujoco.MjModel:
-    """Build the checked-in robot plus an adjustable desk and visual object."""
+    """Build the checked-in robot plus an adjustable desk and fixed object proxy."""
 
     spec = mujoco.MjSpec.from_file(str(xml_path))
     floor = spec.geom("floor")
@@ -411,7 +450,11 @@ def build_model(
         raise ValueError(f"Model has no geom named 'floor': {xml_path}")
     floor.pos[2] = float(table_height_m)
 
-    body = spec.worldbody.add_body(name="preflight_object", pos=object_center.tolist())
+    half_yaw = math.radians(object_yaw_deg) / 2.0
+    body = spec.worldbody.add_body(
+        name="preflight_object", pos=object_center.tolist(),
+        quat=[math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)],
+    )
     geom_kwargs: dict[str, object] = {
         "name": "preflight_object_visual",
         "rgba": [0.92, 0.18, 0.08, 0.75],
@@ -755,9 +798,125 @@ def desk_clearance(
                 model, data, desk_id, geom_id, distance_cap_m, fromto
             )
         )
+        if not math.isfinite(distance):
+            raise ValueError('Non-finite robot-desk distance')
+        # Finite desks are convex boxes/meshes and can exhibit the same exact-zero
+        # query bug as the object proxy. Plane checks are unchanged. Only a
+        # positive geometric separation proof without real contact may correct it.
+        if distance == 0.0 and model.geom_type[desk_id] in (
+                mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_MESH):
+            contact_exists = any(
+                c.dist <= 1e-9 and {int(c.geom1), int(c.geom2)} == {desk_id, geom_id}
+                for c in data.contact)
+            if not contact_exists:
+                distance = max(distance, certified_separation(model, data, desk_id, geom_id, True))
         if distance < minimum:
             minimum = distance
             nearest = _geom_label(model, geom_id)
+    return minimum, nearest
+
+
+def _world_convex_vertices(model: mujoco.MjModel, data: mujoco.MjData,
+                           geom_id: int) -> np.ndarray | None:
+    """Exact vertices for boxes/mesh convex hulls in MuJoCo's compiled geom frame.
+
+    Other shapes deliberately have no certificate; an enclosing or sampled
+    surface must not be mistaken for an exact convex collision representation.
+    """
+    if model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_BOX:
+        corners = np.array([(x, y, z) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)])
+        local = corners * model.geom_size[geom_id]
+    elif model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH:
+        mesh_id = int(model.geom_dataid[geom_id])
+        address = int(model.mesh_vertadr[mesh_id])
+        count = int(model.mesh_vertnum[mesh_id])
+        local = np.asarray(model.mesh_vert[address:address + count], dtype=float)
+    else:
+        return None
+    return local @ data.geom_xmat[geom_id].reshape(3, 3).T + data.geom_xpos[geom_id]
+
+
+def certified_separation(model: mujoco.MjModel, data: mujoco.MjData,
+                         first: int, second: int, include_first_face_normals: bool = False) -> float:
+    """Positive value proves separation; zero means UNKNOWN, never collision-free.
+
+    Projection interval gaps along world and local geom axes lower-bound the
+    true Euclidean surface gap. This is not a full SAT or distance solver.
+    Subtract roundoff conservatively. Never use mj_geomDistance's witness points
+    as independent evidence: those can also be wrong on the exact-zero bug.
+    """
+    a = _world_convex_vertices(model, data, first)
+    b = _world_convex_vertices(model, data, second)
+    if a is None or b is None or not len(a) or not len(b):
+        return 0.0
+    axes = np.concatenate([np.eye(3), data.geom_xmat[first].reshape(3, 3),
+                           data.geom_xmat[second].reshape(3, 3)], axis=1)
+    if include_first_face_normals and model.geom_type[first] == mujoco.mjtGeom.mjGEOM_MESH:
+        # A many-sided desk has useful separating directions beyond its three
+        # geom axes. Every positive projection gap remains a proof, not an
+        # estimated distance; adding axes cannot hide actual overlap.
+        from scipy.spatial import ConvexHull, QhullError
+        try:
+            axes = np.concatenate([axes, ConvexHull(a).equations[:, :3].T], axis=1)
+        except QhullError:
+            pass  # No certificate from faces; retain the original axes.
+    axes /= np.linalg.norm(axes, axis=0)
+    projected_a, projected_b = a @ axes, b @ axes
+    gap = float(np.max(np.maximum(projected_a.min(axis=0) - projected_b.max(axis=0),
+                                  projected_b.min(axis=0) - projected_a.max(axis=0))))
+    return max(0.0, gap - SEPARATION_ROUNDOFF_M) if math.isfinite(gap) else 0.0
+
+
+def certified_object_separation(model: mujoco.MjModel, data: mujoco.MjData,
+                                first: int, second: int) -> float:
+    """Resolve missing mesh-face directions only when the basic proof fails.
+
+    Uses the same vertices and roundoff as the original certificate. This is
+    still a lower bound, not a complete collision solver. Callers must preserve
+    negative query distances and contact records before requesting this proof.
+    """
+    gap = certified_separation(model, data, first, second)
+    if gap > 1e-9:
+        return gap  # Preserve existing positive certificate values.
+    for mesh, other in ((first, second), (second, first)):
+        if model.geom_type[mesh] == mujoco.mjtGeom.mjGEOM_MESH:
+            gap = max(gap, certified_separation(model, data, mesh, other, True))
+    return gap
+
+
+def object_clearance(model: mujoco.MjModel, data: mujoco.MjData,
+                     corrections: list[str] | None = None) -> tuple[float, str]:
+    """Minimum signed query distance, or conservative certified separation bound."""
+    object_id = model.geom("preflight_object_visual").id
+    object_body = int(model.geom_bodyid[object_id])
+    minimum, nearest = math.inf, ""
+    fromto = np.empty(6)
+    for geom_id in range(model.ngeom):
+        if int(model.geom_bodyid[geom_id]) in (0, object_body):
+            continue  # Exclude the desk/world and the object itself, not arm/fixtures.
+        if not (model.geom_contype[geom_id] or model.geom_conaffinity[geom_id]):
+            continue
+        distance = float(mujoco.mj_geomDistance(model, data, object_id, geom_id, 0.5, fromto))
+        if not math.isfinite(distance):
+            raise ValueError("Non-finite robot-object distance")
+        if distance == 0.0:
+            # MuJoCo can return exactly zero for clearly separated convex pairs.
+            # Only fix that failure class; do not weaken negative-distance gates.
+            contact_exists = any(
+                contact.dist <= 1e-9 and
+                {int(contact.geom1), int(contact.geom2)} == {object_id, geom_id}
+                for contact in data.contact
+            )
+            if not contact_exists:
+                gap = certified_object_separation(model, data, object_id, geom_id)
+                if gap > 1e-9:
+                    distance = gap
+                    if corrections is not None:
+                        corrections.append(_geom_label(model, geom_id))
+        if distance < minimum:
+            minimum, nearest = distance, _geom_label(model, geom_id)
+    if not math.isfinite(minimum):
+        raise ValueError("No active robot collision geometry for object check")
     return minimum, nearest
 
 
@@ -779,6 +938,17 @@ def check_trajectory(
         sample.min_desk_clearance_m = clearance
         sample.nearest_geom = nearest
         sample.desk_collision = clearance < required_clearance_m - 1e-9
+        sample.object_clearance_m = None
+        sample.nearest_object_geom = ""
+        sample.object_collision = False
+        sample.object_distance_corrections = 0
+        if sample.phase in OBJECT_GATE_PHASES:
+            corrections: list[str] = []
+            sample.object_clearance_m, sample.nearest_object_geom = object_clearance(model, data, corrections)
+            sample.object_distance_corrections = len(corrections)
+            # Numerical epsilon only, not an empirical safety margin. Touching
+            # or penetrating the proxy before closure rejects the trajectory.
+            sample.object_collision = sample.object_clearance_m <= 1e-9
         if clearance < overall_minimum:
             overall_minimum = clearance
             overall_nearest = nearest
@@ -819,10 +989,15 @@ def evaluate_candidate(
         samples,
         required_clearance_m=args.desk_clearance_mm / 1000.0,
     )
+    object_samples = [s for s in samples if s.object_clearance_m is not None]
+    nearest_object = min(object_samples, key=lambda s: s.object_clearance_m, default=None)
+    object_collision_phase = next((s.phase for s in samples if s.object_collision), "")
     if plan_reason:
         reason = plan_reason
     elif collision_phase:
         reason = "desk_clearance"
+    elif object_collision_phase:
+        reason = "object_collision_before_closure"
     else:
         reason = "pass"
     result = CandidateResult(
@@ -837,8 +1012,33 @@ def evaluate_candidate(
         nearest_geom=nearest,
         first_collision_phase=collision_phase,
         samples_checked=len(samples),
+        min_object_clearance_mm=(nearest_object.object_clearance_m * 1000
+                                 if nearest_object is not None else None),
+        first_object_collision_phase=object_collision_phase,
+        nearest_object_geom=nearest_object.nearest_object_geom if nearest_object is not None else "",
+        object_distance_corrections=sum(s.object_distance_corrections for s in samples),
     )
     return result, samples
+
+
+def manual_object_review_eligible(result, samples, args):
+    """Display-only fallback; never an automatic pass or motion authorization."""
+    values = [result.ik_position_error_mm, result.ik_orientation_error_deg,
+              result.min_desk_clearance_mm]
+    if (result.passed or result.reason != 'object_collision_before_closure'
+            or any(v is None or not math.isfinite(v) for v in values)
+            or result.ik_position_error_mm > args.ik_position_tol_mm
+            or result.ik_orientation_error_deg > args.ik_orientation_tol_deg
+            or result.min_desk_clearance_mm < args.desk_clearance_mm - 1e-6
+            or result.first_collision_phase or len(samples) < 3):
+        return False
+    if any(s.desk_collision or not math.isfinite(s.min_desk_clearance_m)
+           or s.min_desk_clearance_m * 1000 < args.desk_clearance_mm - 1e-6 for s in samples):
+        return False
+    # Do not display an IK-truncated path merely because its prefix is clear.
+    return (samples[0].phase == 'start'
+            and all(any(s.phase == phase and abs(s.phase_alpha - 1.) < 1e-9 for s in samples)
+                    for phase in ('start_to_pregrasp', 'approach')))
 
 
 def _trajectory_rows(model: mujoco.MjModel, samples: list[TrajectorySample]) -> list[dict[str, object]]:
@@ -853,6 +1053,11 @@ def _trajectory_rows(model: mujoco.MjModel, samples: list[TrajectorySample]) -> 
             "min_desk_clearance_mm": sample.min_desk_clearance_m * 1000.0,
             "nearest_geom": sample.nearest_geom,
             "desk_collision": int(sample.desk_collision),
+            "object_clearance_mm": (sample.object_clearance_m * 1000
+                                    if sample.object_clearance_m is not None else None),
+            "object_collision": int(sample.object_collision),
+            "nearest_object_geom": sample.nearest_object_geom,
+            "object_distance_corrections": sample.object_distance_corrections,
         }
         for name, address in zip(ARM_JOINTS, arm_addresses, strict=True):
             row[f"{name}_rad"] = float(sample.qpos[address])
@@ -896,14 +1101,25 @@ def annotate_review_frame(
     current_mm = sample.min_desk_clearance_m * 1000.0
     running_mm = running_min_clearance_m * 1000.0
     nearest = sample.nearest_geom or "n/a"
-    now_state = "COLLISION" if sample.desk_collision else "CLEAR"
-    final_state = "PASS" if result.passed else "REJECT"
+    now_state = "COLLISION" if sample.desk_collision or sample.object_collision else "CLEAR"
+    manual = result.reason == 'manual_object_collision_review'
+    geometry_only = result.reason.startswith('GEOMETRY ONLY')
+    if geometry_only and sample.object_collision and not sample.desk_collision:
+        now_state = 'TARGET PROXY UNCERTAIN'
+    final_state = ("GEOMETRY REVIEW - TRAVEL UNCHECKED" if geometry_only else
+                   "MANUAL REVIEW ONLY" if manual else ("PRECHECK PASS" if result.passed else "REJECT"))
+    object_state = (f"object gap/bound {sample.object_clearance_m * 1000:.1f} mm"
+                    if sample.object_clearance_m is not None else "object contact: NOT CHECKED in this phase")
     lines = [
         f"GGX rank {result.rank} | confidence {result.confidence:.3f}",
         f"phase {sample.phase} | closure {sample.closure_alpha:.2f}",
         f"desk clearance {current_mm:.1f} mm | min so far {running_mm:.1f} mm",
         f"nearest robot geom: {nearest}",
+        object_state,
         f"current gate: {now_state} | final automatic result: {final_state}",
+        ("Actual start/trial route requires separate checks; NO motion approval" if geometry_only else
+         "Object collision unresolved; NOT approved for real motion" if manual else
+         "No closure quality / dynamic pickup / self-collision validation"),
     ]
 
     image = Image.fromarray(np.asarray(frame, dtype=np.uint8), mode="RGB")
@@ -916,7 +1132,7 @@ def annotate_review_frame(
     boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
     line_height = max(box[3] - box[1] for box in boxes) + 3
     panel_height = 7 + line_height * len(lines)
-    if sample.desk_collision:
+    if sample.desk_collision or sample.object_collision:
         panel_color = (125, 18, 18)
     elif result.passed:
         panel_color = (18, 90, 48)
@@ -1006,10 +1222,40 @@ def play_viewer(
             time.sleep(1.0 / args.fps)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def _scene_signature(args: argparse.Namespace) -> str:
+    # Only output/selection/display options may vary within a loaded scene.
+    ignored = {"out", "candidate_rank", "max_candidates", "review_passes", "video",
+               "viewer", "rejected_video", "video_width", "video_height", "fps",
+               "camera_azimuth", "camera_elevation", "camera_distance"}
+    return json.dumps({key: str(value) if isinstance(value, Path) else value
+                      for key, value in vars(args).items() if key not in ignored}, sort_keys=True)
+
+
+@dataclass
+class PreflightScene:
+    """One fixed offline scene; each evaluation still starts from fresh q/data."""
+    model: mujoco.MjModel
+    start_qpos: np.ndarray
+    candidates: list[GraspGenXCandidate]
+    object_center: np.ndarray
+    signature: str
+    dependencies: dict[str, str]
+
+    def verify(self, args: argparse.Namespace) -> None:
+        if self.signature != _scene_signature(args):
+            raise ValueError("Cached preflight scene arguments changed; load a new scene")
+        for name, expected in self.dependencies.items():
+            if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected:
+                raise ValueError(f"Cached preflight scene input changed: {name}")
+
+
+def load_scene(args: argparse.Namespace) -> PreflightScene:
+    """Load model and confidence-sorted candidates once, without evaluating any."""
     _validate_args(args)
-    args.out.mkdir(parents=True, exist_ok=True)
+    paths = [args.xml, args.graspgenx_yaml, Path(__file__)]
+    if args.config is not None:
+        paths.append(args.config)
+    dependencies = {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
     object_size_m = np.asarray(args.object_size_mm, dtype=float) / 1000.0
     object_center = np.array(
@@ -1026,9 +1272,31 @@ def main(argv: list[str] | None = None) -> int:
         object_center=object_center,
         object_size_m=object_size_m,
         object_shape=args.object_shape,
+        object_yaw_deg=args.object_yaw_deg,
     )
     start_qpos = initial_qpos(model, np.radians(np.asarray(args.start_q_deg, dtype=float)))
     candidates = load_isaac_grasp_yaml(args.graspgenx_yaml)
+    start_qpos.setflags(write=False)
+    scene = PreflightScene(model, start_qpos, candidates, object_center,
+                           _scene_signature(args), dependencies)
+    scene.verify(args)
+    return scene
+
+
+def main(argv: list[str] | None = None, *, scene: PreflightScene | None = None,
+         evaluated: list | None = None) -> int:
+    started = time.monotonic()
+    args = parse_args(argv)
+    _validate_args(args)
+    reused = scene is not None
+    if scene is None:
+        scene = load_scene(args)
+    scene.verify(args)
+    model, start_qpos = scene.model, scene.start_qpos
+    candidates, object_center = scene.candidates, scene.object_center
+    args.out.mkdir(parents=True, exist_ok=True)
+    timings = dict(scene_setup_s=time.monotonic() - started, model_reused=reused,
+                   evaluation_s=0., render_s=0., rendered_videos=0)
     if args.candidate_rank is not None:
         if args.candidate_rank >= len(candidates):
             raise ValueError("--candidate-rank is outside the candidate list")
@@ -1040,11 +1308,19 @@ def main(argv: list[str] | None = None) -> int:
     passing: list[tuple[CandidateResult, list[TrajectorySample]]] = []
     best_failed: tuple[CandidateResult, list[TrajectorySample]] | None = None
     for rank in ranks:
+        evaluation_started = time.monotonic()
         result, samples = evaluate_candidate(
-            model, start_qpos, candidates[rank], rank, args, object_center
+            model, start_qpos,
+            candidate_for_object_origin(candidates[rank], args.candidate_frame, object_center),
+            rank, args, object_center
         )
+        timings['evaluation_s'] += time.monotonic() - evaluation_started
         candidate_results.append(result)
-        state = "PASS" if result.passed else "reject"
+        if evaluated is not None:
+            # Optional in-process review consumer. No extra solve/check, and
+            # original pass/fail results and report files remain unchanged.
+            evaluated.append((result, samples))
+        state = "PRECHECK PASS" if result.passed else "reject"
         print(
             f"[{state}] rank={rank:02d} {result.name} score={result.confidence:.3f} "
             f"reason={result.reason} min_desk={result.min_desk_clearance_mm:.1f} mm"
@@ -1055,7 +1331,7 @@ def main(argv: list[str] | None = None) -> int:
             if len(passing) >= required_passes:
                 break
         if (
-            result.reason == "desk_clearance"
+            result.reason in {"desk_clearance", "object_collision_before_closure"}
             and (
                 best_failed is None
                 or result.min_desk_clearance_mm > best_failed[0].min_desk_clearance_mm
@@ -1087,6 +1363,17 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "schema": "rh56_ggx_ur5_table_preflight/v1",
         "simulation_only": True,
+        "object_collision_gate": {
+            "revision": OBJECT_GATE_REVISION,
+            "phases": sorted(OBJECT_GATE_PHASES),
+            "reject_distance_le_m": 1e-9,
+            "closure_and_lift_checked": False,
+            "continuous_collision_detection": False,
+            "zero_distance_fallback": "positive box/mesh vertex separation certificate, no actual contact",
+            "certificate_roundoff_m": SEPARATION_ROUNDOFF_M,
+            "distance_semantics": "signed query or conservative lower bound, not always exact distance",
+        },
+        "object_distance_corrections": sum(r.object_distance_corrections for r in candidate_results),
         "passed": bool(passing),
         "human_review_required": True,
         "automatic_pass_ranks": [result.rank for result, _samples in passing],
@@ -1112,16 +1399,22 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
         "table_height_m": args.table_height_m,
+        "candidate_frame": args.candidate_frame,
+        "object_yaw_deg": args.object_yaw_deg,
         "desk_clearance_mm": args.desk_clearance_mm,
         "object_center_m": object_center.tolist(),
         "object_size_mm": [float(value) for value in args.object_size_mm],
         "start_q_deg": [float(value) for value in args.start_q_deg],
         "assumptions": [
+            "UR-base candidates are rebased by translation only; object yaw affects only the proxy.",
+            "The object is fixed: this is a kinematic screen, not a dynamic grasp/lift success test.",
             "Desk is an infinite horizontal plane at table_height_m.",
             "The shoulder_link fixture contact with the desk is ignored.",
-            "Only robot-to-desk clearance is an automatic collision gate.",
-            "The fixed primitive object proxy is used only to stop closure after opposing contact.",
-            "Object and self-collision are not automatic pass/fail gates in this simplified tool.",
+            "Robot-to-desk clearance is checked throughout the sampled path.",
+            "Robot-object contact rejects start, start_to_pregrasp and approach samples only.",
+            "The fixed primitive proxy supports approach checks and contact-limited closure animation.",
+            "Closure/lift object contact, grasp quality and self-collision are not pass/fail gates.",
+            "Collision checks are sampled, not continuous; primitive proxy geometry is approximate.",
             "IK and sampled MuJoCo geometry are a human-review aid, not a hardware safety certificate.",
             "No hardware module is imported and no command is sent to UR5 or RH56.",
         ],
@@ -1129,6 +1422,8 @@ def main(argv: list[str] | None = None) -> int:
             key: str(value) if isinstance(value, Path) else value
             for key, value in vars(args).items()
         },
+        "timings": timings,
+        "video_policy": {"rejected_video": args.rejected_video, "convenience_video": "copy_not_rerender"},
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     _write_csv(
@@ -1148,6 +1443,12 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
 
+    def render(path, samples, result):
+        render_started = time.monotonic()
+        write_video(path, model, samples, result, args, object_center)
+        timings['render_s'] += time.monotonic() - render_started
+        timings['rendered_videos'] += 1
+
     if passing:
         for result, samples in passing:
             suffix = f"rank_{result.rank:03d}"
@@ -1157,47 +1458,27 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.video:
                 os.environ.setdefault("MUJOCO_GL", "egl")
-                write_video(
-                    args.out / f"review_{suffix}.mp4",
-                    model,
-                    samples,
-                    result,
-                    args,
-                    object_center,
-                )
+                render(args.out / f"review_{suffix}.mp4", samples, result)
         # Stable convenience names always point to the highest-confidence
         # automatically feasible candidate. Human review may veto it.
-        _write_csv(
-            args.out / "trajectory.csv",
-            _trajectory_rows(model, passing[0][1]),
-        )
+        suffix = f"rank_{passing[0][0].rank:03d}"
+        shutil.copyfile(args.out / f"trajectory_{suffix}.csv", args.out / "trajectory.csv")
         if args.video:
-            write_video(
-                args.out / "review.mp4",
-                model,
-                passing[0][1],
-                passing[0][0],
-                args,
-                object_center,
-            )
+            shutil.copyfile(args.out / f"review_{suffix}.mp4", args.out / "review.mp4")
         if args.viewer:
             play_viewer(model, passing[0][1], args, object_center)
     elif review_result is not None:
         result, samples = review_result
         _write_csv(args.out / "trajectory.csv", _trajectory_rows(model, samples))
-        if args.video:
+        if args.video and args.rejected_video:
             os.environ.setdefault("MUJOCO_GL", "egl")
-            write_video(
-                args.out / "review.mp4",
-                model,
-                samples,
-                result,
-                args,
-                object_center,
-            )
+            render(args.out / "review.mp4", samples, result)
         if args.viewer:
             play_viewer(model, samples, args, object_center)
 
+    scene.verify(args)
+    timings['total_s'] = time.monotonic() - started
+    (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if not passing:
         detail = (
             f" Closest rejected candidate was rank {review_result[0].rank}."

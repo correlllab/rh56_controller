@@ -31,17 +31,24 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Fixed TCP ↔ hand-base body transform
-# (constants duplicated from grasp_viz.py — kept here to avoid circular import)
+# Fixed RTDE TCP/flange ↔ hand-base body transform
 #
-# _T_HAND_IN_TCP  :  hand_base expressed in TCP (wrist3) frame
-# _T_TCP_IN_HAND  :  TCP (wrist3) expressed in hand_base frame  (inverse)
+# _T_HAND_IN_TCP  :  hand_base expressed in the zero-offset RTDE TCP frame
+# _T_TCP_IN_HAND  :  zero-offset RTDE TCP expressed in hand_base (inverse)
+#
+# ur5_inspire.xml places hand_base 156.0 mm from the UR5e wrist_3_link
+# origin.  That model-space distance includes the UR5e d6 distance from the
+# wrist_3 joint origin to the tool flange (99.6 mm).  RTDE with a zero TCP
+# offset already reports the flange frame, so applying all 156.0 mm here
+# double-counts d6.  The physical flange-to-hand fixture is therefore:
+#
+#     156.0 mm - 99.6 mm = 56.4 mm
+#
+# A 2026-09-04 fixed-camera RGB-D check independently estimated 54.46 mm from
+# the four open fingertips; 56.4 mm is retained as the model-derived nominal.
 # ---------------------------------------------------------------------------
-# _WRIST3_TO_HAND_POS  = np.array([0.0, 0.156, 0.0])
-_WRIST3_TO_HAND_POS  = np.array([0.0, 0.0, 0.156])
-# _WRIST3_TO_HAND_POS  = np.array([-0.070, -0.016, 0.155])
-# _WRIST3_TO_HAND_QUAT = np.array([-0.5, 0.5, -0.5, -0.5])
-_WRIST3_TO_HAND_QUAT = np.array([0.7071068, 0, 0, 0.7071068])
+_TCP_TO_HAND_POS = np.array([0.0, 0.0, 0.0564])
+_TCP_TO_HAND_QUAT = np.array([0.7071068, 0.0, 0.0, 0.7071068])
 
 
 def _quat_wxyz_to_R(w: float, x: float, y: float, z: float) -> np.ndarray:
@@ -61,7 +68,7 @@ def _build_T(pos: np.ndarray, quat_wxyz: np.ndarray) -> np.ndarray:
     return T
 
 
-_T_HAND_IN_TCP = _build_T(_WRIST3_TO_HAND_POS, _WRIST3_TO_HAND_QUAT)
+_T_HAND_IN_TCP = _build_T(_TCP_TO_HAND_POS, _TCP_TO_HAND_QUAT)
 _T_TCP_IN_HAND = np.linalg.inv(_T_HAND_IN_TCP)
 
 

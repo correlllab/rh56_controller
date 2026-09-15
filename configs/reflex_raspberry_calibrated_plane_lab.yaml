@@ -1,0 +1,39 @@
+# Separate operator-requested raspberry repeat: 10 mm depth is specified by CLI.
+# Use the existing fitted desk normal + measured 34 mm base-origin anchor.
+# Do NOT lower the plane by a guessed offset. Preserve the finite XY envelope.
+# Zero extra margin still rejects contact, overlap and non-finite distances.
+# No claim of calibrated physical clearance; old profiles/results unchanged.
+schema: rh56_ggx_real_config/v1
+ur_ip: 192.168.0.4
+hand_port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+hand_id: 1
+joint_speed_rad_s: 0.20
+joint_accel_rad_s2: 0.20
+cartesian_speed_m_s: 0.02
+cartesian_accel_m_s2: 0.02
+hand_speed_raw: 1000
+hand_force_raw: 1000
+reflex_desk_clearance_mm: 0
+reflex_desk_surface: calibrated-plane
+preview_videos: false
+controller_preflight_mode: keypoints
+open_settle_s: 2.0
+close_duration_s: 3.0
+close_settle_s: 1.0
+workspace_policy: urdf-envelope
+tcp_bounds_mm: null
+min_open_tcp_z_mm: 300
+model_position_tolerance_mm: 5
+model_rotation_tolerance_deg: 1
+scene_center_tolerance_mm: 3
+scene_yaw_tolerance_deg: 3
+scene_dimension_tolerance_mm: 5
+max_scene_age_s: 20
+scene_check_mode: reference-rgbd
+desk_edge_y_m: null
+desk_envelope:
+  center_base_xy_m: [-0.22982383728027345, -0.6525315551757812]
+  sides_upper_mm: [550, 500]
+  center_offset_upper_mm: 100
+  reference_margin_mm: 10
+  confirmed: true

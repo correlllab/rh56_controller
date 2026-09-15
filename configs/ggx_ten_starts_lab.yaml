@@ -1,0 +1,11 @@
+# One setup-wide constellation. No object position, dimensions or GGX rank here.
+schema: rh56_ggx_fixed_starts_config/v1
+frame: ur_base
+# P1 is the lowest point. Other points keep the historical y- offsets.
+p1_tcp_xy_mm: [-230.0, -480.0]
+thumb_clearance_mm: 25.0
+# Fixed scan-pose orientation/branch, computed from existing nominal CB3 FK.
+# Never substitute a candidate-dependent orientation here.
+tcp_rotvec: [0.027002741290183145, 2.3779540707813736, -1.9814186112393966]
+seed_q: [0.2840805947780609, -1.8313415847220362, 2.421302318572998,
+         3.1709938049316406, -0.3149912993060511, -0.5482876936541956]

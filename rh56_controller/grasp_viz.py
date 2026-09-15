@@ -37,12 +37,16 @@ import sys
 
 from .grasp_geometry import _DEFAULT_XML
 from .grasp_viz_ui import GraspVizUI
+from .vision_grasp_target import add_vision_target_arguments, vision_target_from_args
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Inspire RH56 Grasp Geometry Visualizer"
     )
+    add_vision_target_arguments(parser)
+    parser.add_argument("--hand-write-only", action="store_true",
+                        help="Disable executor hand telemetry and feedback force phases; retain Plan timing")
     parser.add_argument("--xml", default=_DEFAULT_XML,
                         help="Path to inspire_right.xml")
     parser.add_argument("--rebuild", action="store_true",
@@ -86,6 +90,10 @@ def main():
     # ros2 launch injects extra CLI tokens (e.g. --ros-args ...).
     # Ignore unknown args so this non-rclpy app still works under launch.
     args, _unknown = parser.parse_known_args()
+    try:
+        vision_target = vision_target_from_args(args)
+    except (ValueError, KeyError, OSError, TypeError) as exc:
+        parser.error(str(exc))
 
     _handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
     if args.log_file:
@@ -120,6 +128,8 @@ def main():
         ros_publish_hz=args.ros_publish_hz,
         ros_send_hand_cmd=args.ros_send_hand_cmd,
         rerun_viz=args.rerun,
+        vision_target=vision_target,
+        hand_write_only=args.hand_write_only,
     )
     viz.run()
 
