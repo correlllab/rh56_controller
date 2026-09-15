@@ -65,9 +65,10 @@
 
 
 % ---------------------------------------------------------------------
-% EDIT 1b  --  ALTERNATIVE to EDIT 1: the GraspGen-X column split corner to
-% corner, ten proposals in the top-left half and 100 in the bottom-right, so
-% the panel shows what the search depth buys without taking more room.
+% EDIT 1b  --  ALTERNATIVE to EDIT 1: the GraspGen-X column holds two
+% complete volumes at reduced scale, ten proposals top-left and 100
+% bottom-right, so the panel shows what the search depth buys without
+% taking more room than its neighbours.
 %   cp paper/9-8_wxie/20260908_strategy_reachability/figures/20260908-nogo_grid_strawberry_can_split.pdf \
 %      supplement_figures/Reachability.pdf
 % Use this caption with it instead of EDIT 1's.
@@ -77,7 +78,7 @@
   \centering
   \includegraphics[width=0.33\linewidth]{img/grasp_strategies_complex.png}
   \includegraphics[width=0.66\linewidth]{supplement_figures/Reachability.pdf}
-  \caption{\textbf{Left:} We formulate three grasp strategies: iterative (left), reflex (center), and naive (right) closure. In the iterative approach, the hand rotates downward from a pre-grasp pose to reach the desired grasp pose. In the reflex approach, fingers remain open until the thumb makes contact with the object. In the naive approach, the fingers are treated like a parallel jaw gripper prior to closure, leading to ground collisions for small objects. \textbf{Right:} start poses from which each strategy can (green) and cannot (red) execute a collision-free approach and closure, for (A) a strawberry whose grasp point is 15\,mm above the table and (B) a can at 110\,mm, sampled over the 300\,mm quarter-sphere above the grasp point on the approach side. The two solids together are the sampled region and each percentage is the red fraction of it. The GraspGen-X (GGX)~\cite{graspgenx2026} panels are split corner to corner: the top-left half credits GGX with the best of its first ten ranked proposals ($k=10$) and the bottom-right half with the best of all 100 ($k=100$). At the strawberry, naive closure and GGX admit no start pose at either depth, while iterative closure excludes 76.9\% and reflex closure 53.3\%. At the can, the three width-conditioned planners exclude 32--34\%; GGX excludes 68\% at ten proposals and 3\% at 100, a pocket low and close to the can. Generating the 100 proposals takes 0.24\,s per object on an RTX~4070~Ti; checking them costs about 0.2\,s each.}
+  \caption{\textbf{Left:} We formulate three grasp strategies: iterative (left), reflex (center), and naive (right) closure. In the iterative approach, the hand rotates downward from a pre-grasp pose to reach the desired grasp pose. In the reflex approach, fingers remain open until the thumb makes contact with the object. In the naive approach, the fingers are treated like a parallel jaw gripper prior to closure, leading to ground collisions for small objects. \textbf{Right:} start poses from which each strategy can (green) and cannot (red) execute a collision-free approach and closure, for (A) a strawberry whose grasp point is 15\,mm above the table and (B) a can at 110\,mm, sampled over the 300\,mm quarter-sphere above the grasp point on the approach side. The two solids together are the sampled region and each percentage is the red fraction of it. The GraspGen-X (GGX)~\cite{graspgenx2026} panels hold two volumes at reduced scale: top-left, GGX credited with the best of its first ten ranked proposals ($k=10$); bottom-right, the best of all 100 ($k=100$). At the strawberry, naive closure and GGX admit no start pose at either depth, while iterative closure excludes 76.9\% and reflex closure 53.3\%. At the can, the three width-conditioned planners exclude 32--34\%; GGX excludes 68\% at ten proposals and 3\% at 100, a pocket low and close to the can. Generating the 100 proposals takes 0.24\,s per object on an RTX~4070~Ti; checking them costs about 0.2\,s each.}
   \label{fig:grasp_strategies}
   \vspace{-1mm}
 \end{figure*}

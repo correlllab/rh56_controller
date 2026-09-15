@@ -132,8 +132,8 @@ read 35.2 / 35.2 / 33.0% on the clipped grid against 34.0 / 34.0 / 32.1% on
 the full one. `ggx_worst`, every one of the 100 executing, is 0% of the region
 on both grids. The k = 10 can strip is kept as
 `figures/20260908-nogo_strip_can_ggx_k10.png` (67.7%), and
-`figures/20260908-nogo_grid_strawberry_can_split.png` shows both depths in one
-panel, split corner to corner. Cost of the depth: GGX returns its 100 proposals
+`figures/20260908-nogo_grid_strawberry_can_split.png` shows both depths as two
+reduced volumes in one panel, k = 10 top-left and k = 100 bottom-right. Cost of the depth: GGX returns its 100 proposals
 in 0.24 s per object (1,000 sampled, top 100 kept, RTX 4070 Ti SUPER;
 `inference_seconds` in `graspgenx_candidates/manifest.json`, first call 0.71 s
 warm-up), and the admissibility check costs 0.20 s per candidate at 24 + 24

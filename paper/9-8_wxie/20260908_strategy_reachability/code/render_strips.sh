@@ -43,8 +43,8 @@ uv run python compose_nogo_figure.py --panels-dir $PANELS \
   --row B Can 20260908-nogo_strip_can_ggx \
   --out ../figures/20260908-nogo_grid_strawberry_can.png --pdf
 
-# Variant: the GraspGen-X panel split corner to corner, k = 10 top-left and
-# k = 100 bottom-right.
+# Variant: two complete volumes in the GraspGen-X panel, k = 10 top-left and
+# k = 100 bottom-right at reduced scale.
 uv run python compose_nogo_figure.py --panels-dir $PANELS \
   --row A Strawberry 20260908-nogo_strip_strawberry_ggx 20260908-nogo_strip_strawberry_ggx \
   --row B Can 20260908-nogo_strip_can_ggx 20260908-nogo_strip_can_ggx_k10 \

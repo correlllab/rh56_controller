@@ -464,11 +464,11 @@ def main() -> int:
         if not fig.exists():
             return ""
         return f'''<figure>
-    <div class="plate"><img src="{data_uri(fig)}" alt="The same grid with the GraspGen-X panels split corner to corner: best of ten proposals in the top-left half, best of 100 in the bottom-right."></div>
+    <div class="plate"><img src="{data_uri(fig)}" alt="The same grid with two volumes in each GraspGen-X panel: best of ten proposals top-left, best of 100 bottom-right."></div>
     <figcaption>
-      <b>Variant: the GraspGen-X column split by search depth.</b> Top-left half, best of
-      the first ten ranked proposals; bottom-right half, best of all 100, at the same
-      scale as the neighbouring panels. At the can the depth takes GraspGen-X from 67.7%
+      <b>Variant: the GraspGen-X column split by search depth.</b> Two complete volumes
+      per panel at 64% scale: top-left, best of the first ten ranked proposals;
+      bottom-right, best of all 100. At the can the depth takes GraspGen-X from 67.7%
       to 2.8% unreachable; at the strawberry it changes nothing. The proposals are cheap
       to make, 0.24&nbsp;s per object for 1,000 samples with the top 100 kept on an
       RTX&nbsp;4070&nbsp;Ti (<code>graspgenx_candidates/manifest.json</code>); the

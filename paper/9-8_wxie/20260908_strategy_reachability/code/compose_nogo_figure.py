@@ -8,10 +8,10 @@ lettered row per object, the unreachable fraction over each panel, a shared
 reachable/unreachable key, and a scale bar on the first panel of every row. Type
 is set in the paper's serif face so the figure reads as part of the page.
 
-A row may name a second strip; with --split LAYER that layer's panel is then
-drawn as a diagonal split, the second strip's render in the top-left half and
-the row's own in the bottom-right, so one panel shows two search depths of the
-same planner without taking more room than its neighbours.
+A row may name a second strip; with --split LAYER that layer's panel then
+holds two complete renders, the second strip's reduced and set top-left and the
+row's own bottom-right, so one panel shows two search depths of the same
+planner without taking more room than its neighbours.
 
 Usage:
     uv run python compose_nogo_figure.py --panels-dir ../figures/panels \\
@@ -87,35 +87,42 @@ def draw_scale_bar(draw: ImageDraw.ImageDraw, x0: int, y_bottom: int, length_mm:
               fill=(40, 40, 40), font=font)
 
 
-def diagonal_split(top_left: Image.Image, bottom_right: Image.Image,
-                   labels: tuple[str, str], font, rule_px: int) -> Image.Image:
-    """One panel from two renders of the same camera, split corner to corner.
+def staggered_pair(top_left: Image.Image, bottom_right: Image.Image,
+                   labels: tuple[str, str], font, scale: float, rule_px: int) -> Image.Image:
+    """Two complete renders of the same camera in one panel, staggered.
 
-    The divider runs from the top-right corner to the bottom-left, so the
-    top-left half is one render and the bottom-right half the other; both keep
-    the panel's full scale, which is what makes the two volumes comparable to
-    the neighbouring panels. A light rule marks the seam and each half carries
-    its label in the corner it owns.
+    Each render is reduced to ``scale`` of the panel and set in its own corner,
+    the first top-left and the second bottom-right, so both volumes are whole
+    and as large as the footprint allows. The white ground of a render is made
+    transparent before pasting, so where the two overlap the later one covers
+    only with its drawn content. Each carries its label in the corner it owns.
     """
 
     import numpy as np
 
     w, h = top_left.size
-    xs = np.arange(w)[None, :] / w
-    ys = np.arange(h)[:, None] / h
-    upper = (xs + ys) < 1.0
-    a = np.asarray(top_left.convert("RGB"))
-    b = np.asarray(bottom_right.convert("RGB"))
-    out = Image.fromarray(np.where(upper[:, :, None], a, b).astype(np.uint8))
+    sw, sh = round(w * scale), round(h * scale)
+    out = Image.new("RGB", (w, h), (255, 255, 255))
+
+    def cutout(img: Image.Image) -> Image.Image:
+        small = img.convert("RGB").resize((sw, sh), Image.LANCZOS)
+        arr = np.asarray(small)
+        alpha = np.where(arr.min(axis=2) < 246, 255, 0).astype(np.uint8)
+        rgba = np.dstack([arr, alpha])
+        return Image.fromarray(rgba, "RGBA")
+
+    a, b = cutout(top_left), cutout(bottom_right)
+    out.paste(a, (0, 0), a)
+    out.paste(b, (w - sw, h - sh), b)
     draw = ImageDraw.Draw(out)
-    draw.line([(w - 1, 0), (0, h - 1)], fill=(255, 255, 255), width=rule_px + 2)
-    draw.line([(w - 1, 0), (0, h - 1)], fill=(60, 60, 60), width=rule_px)
-    pad = round(w * 0.03)
+    pad = round(w * 0.025)
     halo = dict(stroke_width=max(2, rule_px), stroke_fill=(255, 255, 255))
     draw.text((pad, pad), labels[0], fill=INK, font=font, **halo)
+    # The domes are rounded, so each render's outer top corner is empty: the
+    # first label sits in the panel's top-left corner and the second in the
+    # top-right corner of the lower render, clear of the object and its shadow.
     tw = text_w(font, labels[1])
-    draw.text((w - pad - tw, h - pad - round(font.size * 1.2)), labels[1],
-              fill=INK, font=font, **halo)
+    draw.text((w - pad - tw, h - sh + pad), labels[1], fill=INK, font=font, **halo)
     return out
 
 
@@ -152,8 +159,10 @@ def main() -> int:
                          "optionally a second stem drawn in the top-left half of the "
                          "--split layer's panel.")
     ap.add_argument("--split", default=None, metavar="LAYER",
-                    help="Layer whose panel is split corner to corner between the row's "
-                         "second stem (top-left) and its first (bottom-right).")
+                    help="Layer whose panel holds two staggered renders: the row's "
+                         "second stem top-left and its first bottom-right.")
+    ap.add_argument("--split-scale", type=float, default=0.64,
+                    help="Size of each staggered render as a fraction of the panel.")
     ap.add_argument("--split-labels", nargs=2, default=("k = 10", "k = 100"),
                     metavar=("TOP_LEFT", "BOTTOM_RIGHT"))
     ap.add_argument("--out", type=Path, required=True)
@@ -264,8 +273,9 @@ def main() -> int:
                     continue
                 j = next(k for k, q in enumerate(alt_meta["panels"])
                          if q["layer"] == args.split)
-                images[i] = diagonal_split(alt_images[j], images[i], tuple(args.split_labels),
-                                           split_font, max(2, round(W * 0.006)))
+                images[i] = staggered_pair(alt_images[j], images[i], tuple(args.split_labels),
+                                           split_font, args.split_scale,
+                                           max(2, round(W * 0.006)))
                 # The note reads in the order the halves are seen, top-left first.
                 notes[i] = (f"{alt_meta['panels'][j]['locked_fraction']:.0%} \u2192 "
                             f"{panel['locked_fraction']:.0%} unreachable")
